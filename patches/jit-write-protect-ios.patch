@@ -25,15 +25,39 @@ index 0ff5b7435ec..3787cb38d28 100644
  
  PALIMPORT
 diff --git a/src/coreclr/pal/src/map/virtual.cpp b/src/coreclr/pal/src/map/virtual.cpp
-index caf5388b1b3..14e842ce6fd 100644
+index caf5388b1b3..1a1418c6b57 100644
 --- a/src/coreclr/pal/src/map/virtual.cpp
 +++ b/src/coreclr/pal/src/map/virtual.cpp
-@@ -1279,7 +1279,7 @@ ExitVirtualProtect:
+@@ -1279,7 +1279,22 @@ ExitVirtualProtect:
      return bRetVal;
  }
  
 -#if defined(HOST_OSX) && defined(HOST_ARM64)
 +#if (defined(HOST_OSX) || defined(HOST_IOS) || defined(HOST_TVOS) || defined(HOST_MACCATALYST)) && defined(HOST_ARM64)
++#if !defined(HOST_OSX)
++// The iOS SDK marks pthread_jit_write_protect_np as unavailable, but the
++// symbol exists in libsystem_pthread.dylib (iOS 14+); JIT apps on iOS resolve
++// it dynamically. Only reached by JIT builds with the JIT grant active.
++#include <dlfcn.h>
++static void port17_jit_write_protect(int enabled)
++{
++    static void (*fn)(int) = (void (*)(int))dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
++    if (fn != NULL)
++    {
++        fn(enabled);
++    }
++}
++#define pthread_jit_write_protect_np port17_jit_write_protect
++#endif
  PALAPI VOID PAL_JitWriteProtect(bool writeEnable)
  {
      thread_local int enabledCount = 0;
+@@ -1299,7 +1314,7 @@ PALAPI VOID PAL_JitWriteProtect(bool writeEnable)
+         _ASSERTE(enabledCount >= 0);
+     }
+ }
+-#endif // HOST_OSX && HOST_ARM64
++#endif // Apple arm64 JIT write protection
+ 
+ #if HAVE_VM_ALLOCATE
+ //---------------------------------------------------------------------------------------
