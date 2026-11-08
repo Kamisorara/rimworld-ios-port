@@ -190,7 +190,9 @@ int run_probe(const char *bundle_dir)
     // 正式属性组（对照安卓版 host.c 与官方 ios 运行时包布局）：
     // libSystem.Native 等类库原生 dylib 在 bundle 根目录，原生搜索目录指向那里，
     // 类库按名字 dlopen 失败后会用这里给的路径按全路径重试。
-    const char *keys[7] = {
+    // EnableWriteXorExecute=0：iOS 上 pthread_jit_write_protect_np 对 dlsym 不可见，
+    // W^X 翻页开关无从生效 → 关掉 W^X，JIT 走直连 RWX 单一映射（attach 授权下可映射、可写、可执行）。
+    const char *keys[8] = {
         "TRUSTED_PLATFORM_ASSEMBLIES",
         "APP_PATHS",
         "APP_NI_PATHS",
@@ -198,16 +200,17 @@ int run_probe(const char *bundle_dir)
         "APP_CONTEXT_BASE_DIRECTORY",
         "RUNTIME_IDENTIFIER",
         "STARTUP_HOOKS",
+        "System.Runtime.EnableWriteXorExecute",
     };
-    const char *values[7] = {tpa, managed_dir, managed_dir, (char *)bundle_dir,
-                             (char *)bundle_dir, "ios-arm64", ""};
+    const char *values[8] = {tpa, managed_dir, managed_dir, (char *)bundle_dir,
+                             (char *)bundle_dir, "ios-arm64", "", "0"};
 
     host_log("初始化 CoreCLR…");
     void *host = NULL;
     unsigned int domain = 0;
     // exePath 契约 = 原生宿主可执行文件路径（hostpolicy 传 host_path，不是托管 dll）
     char *host_exec = path_join(bundle_dir, "Port17Probe");
-    int hr = init(host_exec, "Port17Probe", 7, keys, values, &host, &domain);
+    int hr = init(host_exec, "Port17Probe", 8, keys, values, &host, &domain);
     if (hr != 0) {
         char buf[64];
         snprintf(buf, sizeof(buf), "coreclr_initialize 失败：0x%08x", hr);
