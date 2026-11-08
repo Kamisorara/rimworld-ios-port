@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/errno.h>
+#include <sys/stat.h>
 
 // mach_vm_region_recurse 的头文件 mach/mach_vm.h 在 iOS SDK 里被 #error 挡住；
 // 用 vm_region_64 + VM_REGION_BASIC_INFO_64——CoreCLR PAL 的 map/virtual.cpp 在
@@ -109,8 +110,9 @@ int run_probe(const char *bundle_dir)
 {
     char *managed_dir = path_join(bundle_dir, "managed");
     char *dylib_path = path_join(bundle_dir, "libcoreclr.dylib");
+    char *hello_path = path_join(managed_dir, "Hello.dll");
 
-    void *clr = dlopen(dylib_path, RTLD_NOW);
+    void *clr = dlopen(dylib_path, RTLD_NOW | RTLD_GLOBAL);
     if (clr == NULL) {
         host_log(dlerror());
         return -1;
@@ -129,18 +131,79 @@ int run_probe(const char *bundle_dir)
         host_log("managed 目录不可读");
         return -3;
     }
-    const char *keys[3] = {"TRUSTED_PLATFORM_ASSEMBLIES", "APP_PATHS",
-                           "APP_NI_PATHS"};
-    const char *values[3] = {tpa, managed_dir, managed_dir};
 
-    host_log("初始化 CoreCLR…");
+    // 诊断：把关键事实打到屏幕上
+    {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "TPA 长度 %zu，首 80 字符：%.80s",
+                 strlen(tpa), tpa);
+        host_log(buf);
+        struct stat st;
+        snprintf(buf, sizeof(buf), "CoreLib dll：%s",
+                 stat(path_join(managed_dir, "System.Private.CoreLib.dll"), &st) == 0
+                     ? "存在" : "缺失");
+        host_log(buf);
+        snprintf(buf, sizeof(buf), "CoreLib 原生 dylib：%s",
+                 stat(path_join(bundle_dir, "System.Private.CoreLib.dylib"), &st) == 0
+                     ? "存在" : "缺失");
+        host_log(buf);
+    }
+
+    // 一次跑一组初始化变体（真机上 0x80070002 = FILE_NOT_FOUND 的来源定位）：
+    // A 基线；B exePath 用程序集文件路径（安卓版 host.c 的做法）；C 再叠安卓版的关键属性；
+    // D 再叠全球化 Invariant（Apple mobile 是 hybrid globalization，文化数据缺失也可能是
+    // FILE_NOT_FOUND 的来源）。
     void *host = NULL;
     unsigned int domain = 0;
-    int hr = init(bundle_dir, "Port17Probe", 3, keys, values, &host, &domain);
-    if (hr != 0) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "coreclr_initialize 失败：0x%08x", hr);
+    int hr = -1;
+
+    const char *keysA[3] = {"TRUSTED_PLATFORM_ASSEMBLIES", "APP_PATHS",
+                            "APP_NI_PATHS"};
+    const char *valuesA[3] = {tpa, managed_dir, managed_dir};
+
+    const char *keysC[5] = {"TRUSTED_PLATFORM_ASSEMBLIES", "APP_PATHS",
+                            "APP_NI_PATHS", "NATIVE_DLL_SEARCH_DIRECTORIES",
+                            "APP_CONTEXT_BASE_DIRECTORY"};
+    const char *valuesC[5] = {tpa, managed_dir, managed_dir, (char *)bundle_dir,
+                              (char *)bundle_dir};
+
+    const char *keysD[7] = {"TRUSTED_PLATFORM_ASSEMBLIES", "APP_PATHS",
+                            "APP_NI_PATHS", "NATIVE_DLL_SEARCH_DIRECTORIES",
+                            "APP_CONTEXT_BASE_DIRECTORY",
+                            "System.Globalization.Invariant",
+                            "System.Globalization.PredefinedCulturesOnly"};
+    const char *valuesD[7] = {tpa, managed_dir, managed_dir, (char *)bundle_dir,
+                              (char *)bundle_dir, "true", "false"};
+
+    struct {
+        const char *name;
+        const char *exe;
+        const char **keys;
+        const char **values;
+        int count;
+    } variants[] = {
+        {"A 基线（目录作 exePath）", bundle_dir, keysA, valuesA, 3},
+        {"B exePath=程序集文件", hello_path, keysA, valuesA, 3},
+        {"C +搜索目录/基目录", hello_path, keysC, valuesC, 5},
+        {"D +全球化 Invariant", hello_path, keysD, valuesD, 7},
+    };
+
+    for (size_t i = 0; i < sizeof(variants) / sizeof(variants[0]); i++) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "尝试 %s…", variants[i].name);
         host_log(buf);
+        hr = init(variants[i].exe, "Port17Probe", variants[i].count,
+                  variants[i].keys, variants[i].values, &host, &domain);
+        if (hr == 0) {
+            host_log("→ 该变体成功");
+            break;
+        }
+        snprintf(buf, sizeof(buf), "→ 失败：0x%08x", hr);
+        host_log(buf);
+        host = NULL;
+    }
+    if (hr != 0) {
+        host_log("所有初始化变体都失败");
         return -4;
     }
     host_log("CoreCLR 就绪");
