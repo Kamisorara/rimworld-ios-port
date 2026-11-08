@@ -10,9 +10,84 @@ on:
       - 'probe/app/**'
       - 'probe/hello/**'
       - 'probe/debug/**'
+      - 'scripts/build-runtime.sh'
+      - 'scripts/collect-runtime.sh'
+      - 'patches/**'
+      - 'runtime-pin.txt'
       - '.github/workflows/mac-debug.yml'
 
 jobs:
+  # 模拟器复现：同一 pin + 同一补丁编出的 iossimulator 版自建 runtime，
+  # 在 mac 宿主上原生运行（无签名、JIT 自由），lldb 全开——
+  # 真机黑盒问题的主调试环（官方 osx 包只是对照组，跑的不是我们改过的 runtime）。
+  sim-repro:
+    runs-on: macos-15
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 计算 pin 与缓存键
+        id: key
+        run: |
+          PIN="$(head -n1 runtime-pin.txt | tr -d '[:space:]')"
+          echo "pin=$PIN" >> "$GITHUB_OUTPUT"
+          echo "key=runtime-sim-arm64-$PIN-c1" >> "$GITHUB_OUTPUT"
+
+      - name: 查缓存
+        id: cache
+        uses: actions/cache@v4
+        with:
+          key: ${{ steps.key.outputs.key }}
+          path: runtime-out-sim
+          lookup-only: true
+
+      - name: 清理磁盘
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -rf /usr/local/lib/android ~/Library/Android || true
+          df -h /
+
+      - name: 构建 simulator 版 CoreCLR + BCL（JIT，带补丁）
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          ./scripts/build-runtime.sh --sim
+          ./scripts/collect-runtime.sh --sim
+
+      - name: 保存缓存
+        if: steps.cache.outputs.cache-hit != 'true' && success()
+        uses: actions/cache/save@v4
+        with:
+          key: ${{ steps.key.outputs.key }}
+          path: runtime-out-sim
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 组装并运行（lldb 全开）
+        run: |
+          dotnet build probe/hello/hello.csproj -c Release -o probe/build/hello-out
+          mkdir -p bundle-sim
+          cp runtime-out-sim/*.dylib bundle-sim/
+          cp runtime-out-sim/managed/*.dll bundle-sim/
+          cp probe/build/hello-out/Hello.dll bundle-sim/
+          cp probe/build/hello-out/Hello.runtimeconfig.json bundle-sim/
+          ls bundle-sim | wc -l
+          # 模拟器目标的二进制在 mac 宿主上原生可跑
+          xcrun -sdk iphonesimulator clang -arch arm64 \
+            -target arm64-apple-ios15.0-simulator \
+            -Wl,-rpath,@executable_path \
+            -I probe/app \
+            probe/debug/debug-main.c probe/app/host.c \
+            -o macprobe-sim
+          set +e
+          ./macprobe-sim "$PWD/bundle-sim"
+          echo "直接运行 exit=$?"
+          lldb -b -o run \
+            -k "thread backtrace all" -k "register read pc x0 x1" -k "quit" \
+            ./macprobe-sim "$PWD/bundle-sim" 2>&1 | tail -60
+          exit 0
+
   debug:
     runs-on: macos-15
     timeout-minutes: 15

@@ -8,6 +8,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PIN="$(head -n1 "$ROOT/runtime-pin.txt" | tr -d '[:space:]')"
 SRC="$ROOT/runtime-src"
+CLROS="ios"
+OUTDIR_NOTE=""
+if [ "${1:-}" = "--sim" ]; then
+    CLROS="iossimulator"   # 模拟器目标：二进制可直接在 macOS 宿主上原生跑（调试用）
+    OUTDIR_NOTE="（simulator）"
+fi
 
 echo "runtime pin: $PIN"
 
@@ -38,8 +44,8 @@ done
 # if(FEATURE_INTERPRETER) 会把它当真值 → 解释器与 JIT 同时静态链入 libcoreclr.dylib，
 # getJit/jitStartup 等 8 个符号重复。显式定义为 0（JIT 变体不需要解释器）绕过该组合
 # （静态链接 + 动态代码，微软 CI 不构建的矩阵格）。
-./build.sh clr+libs -os ios -arch arm64 -c Release \
+./build.sh clr+libs -os "$CLROS" -arch arm64 -c Release \
     --dynamiccodecompiled true \
     -cmakeargs "-DFEATURE_INTERPRETER=0"
 
-echo "构建完成：$(find artifacts/bin/coreclr -maxdepth 1 -type d -iname '*ios*arm64*release*')"
+echo "构建完成 $OUTDIR_NOTE：$(find artifacts/bin/coreclr -maxdepth 1 -type d -iname '*ios*arm64*release*')"

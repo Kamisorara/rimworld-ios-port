@@ -11,6 +11,7 @@ set -uo pipefail   # 不用 -e：单段失败不应毁掉整个收集
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/runtime-src"
 OUT="$ROOT/runtime-out"
+if [ "${1:-}" = "--sim" ]; then OUT="$ROOT/runtime-out-sim"; fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT/managed"
