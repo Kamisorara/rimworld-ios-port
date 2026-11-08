@@ -48,4 +48,4 @@ done
     --dynamiccodecompiled true \
     -cmakeargs "-DFEATURE_INTERPRETER=0"
 
-echo "构建完成 $OUTDIR_NOTE：$(find artifacts/bin/coreclr -maxdepth 1 -type d -iname '*ios*arm64*release*')"
+echo "build done ${OUTDIR_NOTE}: $(find artifacts/bin/coreclr -maxdepth 1 -type d -iname '*ios*arm64*release*')"

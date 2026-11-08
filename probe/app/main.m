@@ -1,6 +1,7 @@
 // M1 探针的 UIKit 壳：全屏日志视图 + “重新运行”按钮。
 // 这是 M2 正式宿主的种子——触摸原始事件、软键盘桥都会长在这个结构上。
 #import <UIKit/UIKit.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -159,17 +160,19 @@ static void run_probe_on_bg(void)
 
 @end
 
-// 崩溃信号尽力打点（fprintf 非严格 async-signal-safe，诊断够用）。
-// 没有任何信号行而进程消失 = SIGKILL（jetsam/看门狗），打不出来。
+// 崩溃信号：落一行打点后交还系统默认处理——iOS 会写完整崩溃报告（.ips，
+// 含调用栈），Settings → 隐私与安全性 → 分析与改进 → 分析数据 里可取。
+// 没有任何信号行而进程消失 = SIGKILL（jetsam/看门狗），同样会有 JetsamEvent 报告。
 static void crash_handler(int sig)
 {
     char buf[96];
     snprintf(buf, sizeof(buf),
-             "收到信号 %d（SIGSEGV=11, SIGBUS=10, SIGABRT=6, SIGTRAP=5, SIGILL=4）",
+             "收到信号 %d（SIGSEGV=11, SIGBUS=10, SIGABRT=6, SIGTRAP=5, SIGILL=4），转系统写崩溃报告",
              sig);
     NSString *line = [NSString stringWithUTF8String:buf];
     boot_log(line);
-    _exit(100 + sig);
+    signal(sig, SIG_DFL);
+    raise(sig);
 }
 
 int main(int argc, char *argv[])
