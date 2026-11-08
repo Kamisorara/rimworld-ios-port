@@ -41,6 +41,13 @@ jobs:
           path: runtime-out-sim
           lookup-only: true
 
+      - name: 恢复缓存
+        if: steps.cache.outputs.cache-hit == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          key: ${{ steps.key.outputs.key }}
+          path: runtime-out-sim
+
       - name: 清理磁盘
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
