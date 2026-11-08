@@ -17,6 +17,22 @@ fi
 cd "$SRC"
 git checkout --detach "$PIN"
 
+# 应用本仓库的 runtime 补丁（patches/*.patch，对 pin 生成；已应用则跳过）
+for p in "$ROOT"/patches/*.patch; do
+    [ -e "$p" ] || continue
+    if git apply --check "$p" 2>/dev/null; then
+        git apply "$p"
+        echo "已应用补丁 $(basename "$p")"
+    else
+        if git apply --reverse --check "$p" 2>/dev/null; then
+            echo "补丁 $(basename "$p") 已在（跳过）"
+        else
+            echo "::error::补丁 $(basename "$p") 无法应用（pin 源码不匹配？）"
+            exit 1
+        fi
+    fi
+done
+
 # -DFEATURE_INTERPRETER=0：Apple mobile 强制静态链接，而 FEATURE_INTERPRETER 的默认值是个
 # configure 期未求值的生成器表达式字符串（$<IF:$<CONFIG:Debug,Checked>,1,0>），链接清单处的
 # if(FEATURE_INTERPRETER) 会把它当真值 → 解释器与 JIT 同时静态链入 libcoreclr.dylib，

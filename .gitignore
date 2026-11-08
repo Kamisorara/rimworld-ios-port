@@ -4,5 +4,6 @@ runtime-out/
 artifacts/
 obj/
 bin/
+test_work/
 *.ipa
 .DS_Store
