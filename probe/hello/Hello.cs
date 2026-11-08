@@ -30,7 +30,24 @@ internal static class Hello
         }
     }
 
-    private static void Log(string s) => HostLog(s);
+    private static void Log(string s)
+    {
+        // 文件通道始终写（mac 调试时 HELLO_OUT 指定路径；iOS 上写沙盒 Documents）；
+        // host_log 通道尽量走（iOS 上 = 主程序包的可执行文件），失败不影响探针。
+        try
+        {
+            var outPath = Environment.GetEnvironmentVariable("HELLO_OUT");
+            if (string.IsNullOrEmpty(outPath))
+            {
+                var docs = Environment.GetFolderPath(
+                    Environment.SpecialFolder.MyDocuments);
+                outPath = System.IO.Path.Combine(docs, "hello.log");
+            }
+            System.IO.File.AppendAllText(outPath, s + Environment.NewLine);
+        }
+        catch { /* 文件通道失败不阻塞探针 */ }
+        try { HostLog(s); } catch { /* 桌面端 __Internal 语义不同，忽略 */ }
+    }
 
     // 发出 double Sum(int n)：r=0; for(i=0;i<n;i++) r+=i*0.5; return r
     // JIT 下 1000 万次迭代约几十毫秒；解释器下通常数秒到数十秒。

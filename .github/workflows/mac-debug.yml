@@ -66,6 +66,10 @@ jobs:
         if: always()
         run: |
           lldb -b \
-            -o "settings set target.process.stop-on-exec false" \
-            -o run -o "bt 25" -o quit \
-            ./macprobe "$PWD/bundle10" flat 2>&1 | tail -40 || true
+            -o "run" \
+            -k "thread backtrace all" \
+            -k "register read x0 x1 pc" \
+            -k "quit" \
+            ./macprobe "$PWD/bundle10" flat 2>&1 || true
+          echo "---- hello.log（探针进度）----"
+          cat bundle10/hello.log 2>/dev/null || echo "（无）"
