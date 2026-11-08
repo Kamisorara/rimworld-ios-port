@@ -15,7 +15,12 @@ static void boot_log(NSString *line)
 {
     NSString *path = [NSHomeDirectory()
         stringByAppendingPathComponent:@"Documents/port17-ui.log"];
-    NSString *out = [NSString stringWithFormat:@"%@\n", line];
+    // 时间戳：区分会话、度量“运行一段时间才死”的时间量
+    NSDate *now = [NSDate date];
+    NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
+    fmt.dateFormat = @"HH:mm:ss.SSS";
+    NSString *out = [NSString stringWithFormat:@"[%@] %@\n",
+                            [fmt stringFromDate:now], line];
     FILE *f = fopen(path.fileSystemRepresentation, "a");
     if (f != NULL) {
         fputs(out.UTF8String, f);
@@ -158,8 +163,10 @@ static void run_probe_on_bg(void)
 // 没有任何信号行而进程消失 = SIGKILL（jetsam/看门狗），打不出来。
 static void crash_handler(int sig)
 {
-    char buf[48];
-    snprintf(buf, sizeof(buf), "收到信号 %d（SIGSEGV=11, SIGBUS=10, SIGABRT=6, SIGTRAP=5）", sig);
+    char buf[96];
+    snprintf(buf, sizeof(buf),
+             "收到信号 %d（SIGSEGV=11, SIGBUS=10, SIGABRT=6, SIGTRAP=5, SIGILL=4）",
+             sig);
     NSString *line = [NSString stringWithUTF8String:buf];
     boot_log(line);
     _exit(100 + sig);
@@ -168,7 +175,11 @@ static void crash_handler(int sig)
 int main(int argc, char *argv[])
 {
     @autoreleasepool {
-        boot_log(@"==== main 进入 ====");
+        boot_log(@"==== main 进入（新会话）====");
+        // stderr 尽早重定向：CoreCLR 报错从最早一刻起就能落文件
+        NSString *errPath = [NSHomeDirectory()
+            stringByAppendingPathComponent:@"Documents/coreclr-stderr.log"];
+        freopen(errPath.fileSystemRepresentation, "w", stderr);
         signal(SIGSEGV, crash_handler);
         signal(SIGBUS, crash_handler);
         signal(SIGABRT, crash_handler);

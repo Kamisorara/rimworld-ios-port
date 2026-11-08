@@ -6,8 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dlfcn.h>
 #include <sys/errno.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 
 // mach_vm_region_recurse 的头文件 mach/mach_vm.h 在 iOS SDK 里被 #error 挡住；
 // 用 vm_region_64 + VM_REGION_BASIC_INFO_64——CoreCLR PAL 的 map/virtual.cpp 在
@@ -154,6 +156,34 @@ int run_probe(const char *bundle_dir)
         snprintf(buf, sizeof(buf), "CoreLib 原生 dylib：%s",
                  stat(path_join(bundle_dir, "System.Private.CoreLib.dylib"), &st) == 0
                      ? "存在" : "缺失");
+        host_log(buf);
+
+        // JIT 授权状态探测（与 runtime doublemapping.cpp 同款判定）：
+        // RWX 可映射 = 调试器 attach 授权生效；仅 MAP_JIT 可映射 = 有动态代码授权；
+        // 都不行 = 本次运行没有 JIT 授权（StikDebug 未开或未生效）。
+        void *rwx = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+                         MAP_ANON | MAP_PRIVATE, -1, 0);
+        if (rwx != MAP_FAILED) {
+            host_log("授权探测：RWX 映射成功（attach 授权生效）");
+            munmap(rwx, 4096);
+        } else {
+            snprintf(buf, sizeof(buf), "授权探测：RWX 被拒（errno=%d）", errno);
+            host_log(buf);
+            void *mj = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+                            MAP_ANON | MAP_PRIVATE | MAP_JIT, -1, 0);
+            if (mj != MAP_FAILED) {
+                host_log("授权探测：MAP_JIT 映射成功（有动态代码授权）");
+                munmap(mj, 4096);
+            } else {
+                snprintf(buf, sizeof(buf),
+                         "授权探测：MAP_JIT 也被拒（errno=%d）——本次运行无 JIT 授权",
+                         errno);
+                host_log(buf);
+            }
+        }
+        void *wprot = dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
+        snprintf(buf, sizeof(buf), "写保护开关符号：%s",
+                 wprot != NULL ? "找到" : "未找到（补丁需改弱引用声明）");
         host_log(buf);
     }
 

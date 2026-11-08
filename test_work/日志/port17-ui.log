@@ -18,3 +18,62 @@ TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Applicati
 CoreLib dll：存在
 CoreLib 原生 dylib：存在
 初始化 CoreCLR…
+==== main 进入 ====
+UIApplicationMain 开始
+viewDidLoad
+viewDidAppear
+==== Port17 iOS 探针 ====
+注意：不经过 StikDebug 开 JIT，JIT 探针应报“疑似解释器”
+TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
+CoreLib dll：存在
+CoreLib 原生 dylib：存在
+初始化 CoreCLR…
+==== main 进入 ====
+UIApplicationMain 开始
+viewDidLoad
+viewDidAppear
+==== Port17 iOS 探针 ====
+JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉
+创建 probe 线程
+probe 线程启动（16MB 栈）
+TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
+CoreLib dll：存在
+CoreLib 原生 dylib：存在
+初始化 CoreCLR…
+==== main 进入 ====
+UIApplicationMain 开始
+viewDidLoad
+viewDidAppear
+==== Port17 iOS 探针 ====
+JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉
+创建 probe 线程
+probe 线程启动（16MB 栈）
+TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
+CoreLib dll：存在
+CoreLib 原生 dylib：存在
+初始化 CoreCLR…
+收到信号 10（SIGSEGV=11, SIGBUS=10, SIGABR
+==== main 进入 ====
+UIApplicationMain 开始
+viewDidLoad
+viewDidAppear
+==== Port17 iOS 探针 ====
+JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉
+创建 probe 线程
+probe 线程启动（16MB 栈）
+TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
+CoreLib dll：存在
+CoreLib 原生 dylib：存在
+初始化 CoreCLR…
+==== main 进入 ====
+UIApplicationMain 开始
+viewDidLoad
+viewDidAppear
+==== Port17 iOS 探针 ====
+JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉
+创建 probe 线程
+probe 线程启动（16MB 栈）
+TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
+CoreLib dll：存在
+CoreLib 原生 dylib：存在
+初始化 CoreCLR…
