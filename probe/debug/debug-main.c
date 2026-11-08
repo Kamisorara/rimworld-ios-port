@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <libgen.h>
+#include <sys/mman.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -81,6 +82,20 @@ int main(int argc, char **argv)
         set_err(sink); // 关键：让运行时报错可见
     else
         printf("没有 coreclr_set_error_writer 导出\n");
+
+    // 地面真相：符号解析与授权状态（sim 的 libsystem 是 iOS 风味——验证补丁的 dlsym 到底能不能看到开关）
+    {
+        void *wprot = dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
+        printf("[macprobe] 写保护开关 dlsym：%p\n", wprot);
+        void *rwx = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+                         MAP_ANON | MAP_PRIVATE, -1, 0);
+        printf("[macprobe] RWX mmap：%s\n", rwx != MAP_FAILED ? "成功" : "被拒");
+        if (rwx != MAP_FAILED) munmap(rwx, 4096);
+        void *mj = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+                        MAP_ANON | MAP_PRIVATE | 0x8000, -1, 0);
+        printf("[macprobe] MAP_JIT mmap：%s\n", mj != MAP_FAILED ? "成功" : "被拒");
+        if (mj != MAP_FAILED) munmap(mj, 4096);
+    }
     char *tpa = build_tpa(managed);
     if (!tpa) {
         printf("managed 目录不可读\n");
