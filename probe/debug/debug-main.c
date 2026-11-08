@@ -56,6 +56,7 @@ typedef int (*exec_fn)(void *, unsigned int, char **, const char *,
 
 int main(int argc, char **argv)
 {
+    setbuf(stdout, NULL); // 段错误时不丢日志
     host_set_log_sink(sink);
     const char *dir = argv[1];
     char self[4096];

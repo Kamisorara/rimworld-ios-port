@@ -38,6 +38,8 @@ jobs:
           mkdir -p bundle
           cp pack/runtimes/osx-arm64/native/*.dylib bundle/
           cp pack/runtimes/osx-arm64/lib/net11.0/*.dll bundle/
+          cp pack/runtimes/osx-arm64/lib/net11.0/*.dylib bundle/ 2>/dev/null || true
+          ls bundle | wc -l
           cp probe/build/hello-out/Hello.dll bundle/
           # 布局 B：SDK 10.x 运行时（天然平铺）
           SDKRUNTIME=$(ls -d ~/.dotnet/shared/Microsoft.NETCore.App/*/ | sort -V | grep -E '/10\.' | tail -n1)
