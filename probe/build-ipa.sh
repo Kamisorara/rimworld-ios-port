@@ -19,7 +19,7 @@ xcrun -sdk iphoneos clang \
     -fobjc-arc \
     -Wl,-rpath,@executable_path \
     "$ROOT/probe/app/main.m" "$ROOT/probe/app/host.c" \
-    -framework UIKit -framework Foundation \
+    -framework UIKit -framework Foundation -framework CoreGraphics \
     -o "$APP/Port17Probe"
 cp "$ROOT/probe/app/Info.plist" "$APP/"
 
