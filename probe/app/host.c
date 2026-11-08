@@ -10,10 +10,8 @@
 
 // mach_vm_region_recurse 的头文件 mach/mach_vm.h 在 iOS SDK 里被 #error 挡住；
 // 用 vm_region_64 + VM_REGION_BASIC_INFO_64——CoreCLR PAL 的 map/virtual.cpp 在
-// iOS 构建里就用这一组合（share_mode/max_protection 都在 basic_info_data_64_t 里）。
-#ifndef SM_PRIVATE
-#define SM_PRIVATE 1
-#endif
+// iOS 构建里就用这一组合。iOS 的 basic_info 是精简版（没有 share_mode），所以
+// 不区分匿名与否，改为报告可执行区域总量，由执行前后的差值看新分配的执行内存。
 
 typedef int (*coreclr_initialize_fn)(
     const char *exePath, const char *appDomainName, int propertyCount,
@@ -74,8 +72,8 @@ static char *build_tpa(const char *managed_dir)
     return tpa;
 }
 
-// 匿名（SM_PRIVATE）且含执行权限的内存区域 = JIT 分配的可执行内存。
-// 解释器模式下应该几乎没有；JIT 开启后 CoreCLR 的双映射（RW+RX）会计入。
+// 统计含执行权限的内存区域（含系统映射）。执行前后各扫一次，差值即新分配的
+// 执行内存：JIT 开启时差值明显（CoreCLR 代码堆数十 MB），解释器模式下几乎为零。
 static void scan_exec_regions(const char *when)
 {
     vm_address_t addr = 0;
@@ -84,7 +82,6 @@ static void scan_exec_regions(const char *when)
     mach_msg_type_number_t count;
     mach_port_t object_name;
     uint64_t total = 0;
-    uint64_t largest = 0;
     uint64_t nregions = 0;
     while (1) {
         count = VM_REGION_BASIC_INFO_COUNT_64;
@@ -92,11 +89,8 @@ static void scan_exec_regions(const char *when)
                          (vm_region_info_t)&info, &count,
                          &object_name) != KERN_SUCCESS)
             break;
-        if ((info.max_protection & VM_PROT_EXECUTE) != 0 &&
-            info.share_mode == SM_PRIVATE) {
+        if ((info.max_protection & VM_PROT_EXECUTE) != 0) {
             total += size;
-            if (size > largest)
-                largest = size;
             nregions++;
         }
         if (addr + size <= addr)
@@ -105,9 +99,9 @@ static void scan_exec_regions(const char *when)
     }
     char buf[256];
     snprintf(buf, sizeof(buf),
-             "匿名可执行内存（%s）：%llu 个区域，共 %llu KiB，最大 %llu KiB",
-             when, (unsigned long long)nregions, (unsigned long long)(total / 1024),
-             (unsigned long long)(largest / 1024));
+             "可执行内存（%s）：%llu 个区域，共 %llu KiB",
+             when, (unsigned long long)nregions,
+             (unsigned long long)(total / 1024));
     host_log(buf);
 }
 
