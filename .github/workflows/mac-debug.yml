@@ -40,7 +40,7 @@ jobs:
           cp pack/runtimes/osx-arm64/lib/net11.0/*.dll bundle/managed/
           cp probe/build/hello-out/Hello.dll bundle/managed/
           # 布局 B：SDK 运行时布局（托管与原生全在同一目录）
-          SDKRUNTIME=$(ls -d ~/.dotnet/shared/Microsoft.NETCore.App/*/ | tail -n1)
+          SDKRUNTIME=$(ls -d ~/.dotnet/shared/Microsoft.NETCore.App/*/ | sort -V | grep -E '/10\.' | tail -n1)
           echo "SDK 运行时: $SDKRUNTIME"
           mkdir -p bundle10
           cp "$SDKRUNTIME"/*.dll bundle10/
