@@ -210,7 +210,6 @@ int run_probe(const char *bundle_dir)
 
     scan_exec_regions("执行前");
 
-    char *hello_path = path_join(managed_dir, "Hello.dll");
     char *argv[1] = {hello_path};
     unsigned int exit_code = 0;
     hr = exec(host, 1, argv, hello_path, &exit_code);
