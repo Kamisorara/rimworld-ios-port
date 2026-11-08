@@ -37,16 +37,18 @@ jobs:
           cp probe/build/hello-out/Hello.dll runtime/ 2>/dev/null || true
           ls runtime | head
 
-      - name: 编 Hello 与探针宿主（macOS arm64）
+      - name: 组装布局并编译
         run: |
           dotnet build probe/hello/hello.csproj -c Release -o probe/build/hello-out
-          mkdir runtime2 && cp runtime/*.dll runtime2/ && cp probe/build/hello-out/Hello.dll runtime2/
-          cp pack/runtimes/osx-arm64/native/*.dylib runtime2/
+          mkdir -p bundle/managed
+          cp pack/runtimes/osx-arm64/native/*.dylib bundle/
+          cp pack/runtimes/osx-arm64/lib/net11.0/*.dll bundle/managed/
+          cp probe/build/hello-out/Hello.dll bundle/managed/
           clang -arch arm64 -I probe/app -Wl,-rpath,@executable_path \
             probe/debug/debug-main.c probe/app/host.c \
             -o macprobe
 
       - name: 跑探针（真实 stderr）
         run: |
-          ./macprobe "$PWD/runtime2"
+          ./macprobe "$PWD/bundle"
           echo "exit=$?"
