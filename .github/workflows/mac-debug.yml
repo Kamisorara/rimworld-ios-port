@@ -51,7 +51,7 @@ jobs:
             -o macprobe
 
       - name: 对照组 1——官方 osx 包布局
-        run: ./macprobe "$PWD/bundle" ; echo "exit=$?"
+        run: ./macprobe "$PWD/bundle" || true
 
       - name: 对照组 2——SDK 10.0.x 运行时（平铺布局）
-        run: ./macprobe "$PWD/bundle10" flat ; echo "exit=$?"
+        run: ./macprobe "$PWD/bundle10" flat || true
