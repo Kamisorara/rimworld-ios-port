@@ -3,6 +3,7 @@
 #import <UIKit/UIKit.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <pthread.h>
 #import "host.h"
 
 static UITextView *g_text = nil;
@@ -34,32 +35,48 @@ static void append_log(const char *msg)
     });
 }
 
+// 探针跑在专用大栈 pthread 上：GCD 队列线程栈只有 ~512KB，
+// coreclr_initialize 解析几百个 TPA 程序集的元数据会把它打爆（mac 主线程 8MB 无恙）。
+static void *probe_thread(void *arg)
+{
+    boot_log(@"probe 线程启动（16MB 栈）");
+
+    // CoreCLR 的内部报错走 stderr（iOS 上默认进系统日志），重定向到文件
+    // 再读回来附进屏幕日志——它给出的文件名比 0x80070002 有用得多。
+    NSString *errPath = [NSHomeDirectory()
+        stringByAppendingPathComponent:@"Documents/coreclr-stderr.log"];
+    freopen(errPath.fileSystemRepresentation, "w", stderr);
+
+    const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];
+    int rc = run_probe(bundle);
+
+    NSString *err = [NSString stringWithContentsOfFile:errPath
+        encoding:NSUTF8StringEncoding error:nil];
+    if (err.length > 0) {
+        append_log("---- CoreCLR stderr ----");
+        append_log(err.UTF8String);
+    }
+
+    char buf[64];
+    snprintf(buf, sizeof(buf), "run_probe 返回 %d", rc);
+    append_log(buf);
+    return NULL;
+}
+
 static void run_probe_on_bg(void)
 {
     append_log("==== Port17 iOS 探针 ====");
-    append_log("注意：不经过 StikDebug 开 JIT，JIT 探针应报“疑似解释器”");
-    dispatch_async(g_probe_queue, ^{
-        // CoreCLR 的内部报错走 stderr（iOS 上默认进系统日志），重定向到文件
-        // 再读回来附进屏幕日志——它给出的文件名比 0x80070002 有用得多。
-        NSString *errPath = [NSHomeDirectory()
-            stringByAppendingPathComponent:@"Documents/coreclr-stderr.log"];
-        freopen(errPath.fileSystemRepresentation, "w", stderr);
-
-        const char *bundle =
-            [[NSBundle mainBundle].bundlePath UTF8String];
-        int rc = run_probe(bundle);
-
-        NSString *err = [NSString stringWithContentsOfFile:errPath
-            encoding:NSUTF8StringEncoding error:nil];
-        if (err.length > 0) {
-            append_log("---- CoreCLR stderr ----");
-            append_log(err.UTF8String);
-        }
-
-        char buf[64];
-        snprintf(buf, sizeof(buf), "run_probe 返回 %d", rc);
-        append_log(buf);
-    });
+    append_log("JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉");
+    boot_log(@"创建 probe 线程");
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 16u * 1024 * 1024);
+    pthread_t tid;
+    if (pthread_create(&tid, &attr, probe_thread, NULL) != 0) {
+        boot_log(@"pthread_create 失败");
+        append_log("probe 线程创建失败");
+    }
+    pthread_attr_destroy(&attr);
 }
 
 @interface ProbeVC : UIViewController
@@ -137,10 +154,26 @@ static void run_probe_on_bg(void)
 
 @end
 
+// 崩溃信号尽力打点（fprintf 非严格 async-signal-safe，诊断够用）。
+// 没有任何信号行而进程消失 = SIGKILL（jetsam/看门狗），打不出来。
+static void crash_handler(int sig)
+{
+    char buf[48];
+    snprintf(buf, sizeof(buf), "收到信号 %d（SIGSEGV=11, SIGBUS=10, SIGABRT=6, SIGTRAP=5）", sig);
+    NSString *line = [NSString stringWithUTF8String:buf];
+    boot_log(line);
+    _exit(100 + sig);
+}
+
 int main(int argc, char *argv[])
 {
     @autoreleasepool {
         boot_log(@"==== main 进入 ====");
+        signal(SIGSEGV, crash_handler);
+        signal(SIGBUS, crash_handler);
+        signal(SIGABRT, crash_handler);
+        signal(SIGTRAP, crash_handler);
+        signal(SIGILL, crash_handler);
         // Hello 的文件输出也固定到 Documents，黑屏时经 Files app 可读
         setenv("HELLO_OUT", [[NSHomeDirectory()
             stringByAppendingPathComponent:@"Documents/hello.log"]
