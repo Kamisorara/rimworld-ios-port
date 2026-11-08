@@ -103,6 +103,8 @@ jobs:
           echo "C exit=$?"
           echo "---- hello.log ----"
           cat bundle-sim/hello-C.log 2>/dev/null || echo "（无 hello-C.log）"
+          echo "---- lldb 诊断（变体 A 崩溃现场）----"
+          lldb -b             -o "target symbols add $PWD/bundle-sim/libcoreclr.dylib.dwarf"             -o run             -k "thread backtrace 8"             -k "memory region \$_siginfo._si_addr"             -k "expr -- (int)g_isWXorXEnabled"             -k "expr -- (void*)dlsym(0, \"pthread_jit_write_protect_np\")"             -k "image lookup -rn PAL_JitWriteProtect"             -k quit             ./macprobe-sim "$PWD/bundle-sim" A 2>&1 | tail -80 || true
           exit 0
 
   debug:
