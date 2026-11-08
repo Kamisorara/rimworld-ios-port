@@ -1,0 +1,8 @@
+build/
+runtime-src/
+runtime-out/
+artifacts/
+obj/
+bin/
+*.ipa
+.DS_Store

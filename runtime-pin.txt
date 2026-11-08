@@ -1,0 +1,3 @@
+86ee4f57ebc
+# dotnet/runtime release/11.0 @ 2026-11-05 (86ee4f57ebc...)
+# v11.0.0 GA tag 发布后升级到该 tag，之后跟随 11.0.x 服务版本

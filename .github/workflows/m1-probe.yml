@@ -1,0 +1,78 @@
+name: m1-probe
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  runtime:
+    # 仅在 runtime-pin.txt 变化后重建（缓存命中即跳过编译）
+    runs-on: macos-15
+    timeout-minutes: 300
+    outputs:
+      cache-key: ${{ steps.key.outputs.key }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 计算缓存键
+        id: key
+        run: echo "key=runtime-ios-arm64-$(head -n1 runtime-pin.txt | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+
+      - name: 查缓存
+        id: cache
+        uses: actions/cache@v4
+        with:
+          key: ${{ steps.key.outputs.key }}
+          path: runtime-out
+          lookup-only: true
+
+      - name: 清理磁盘
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -rf /usr/local/lib/android ~/Library/Android || true
+          df -h /
+
+      - name: 构建 CoreCLR + BCL（iOS arm64，JIT）
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-runtime.sh
+
+      - name: 保存缓存
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          key: ${{ steps.key.outputs.key }}
+          path: runtime-out
+
+      - name: 上传运行时产物（排查用）
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-ios-arm64
+          path: runtime-out
+          retention-days: 7
+
+  ipa:
+    needs: runtime
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 取运行时缓存
+        uses: actions/cache/restore@v4
+        with:
+          key: ${{ needs.runtime.outputs.cache-key }}
+          path: runtime-out
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 打 IPA
+        run: ./probe/build-ipa.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: port17probe-ipa
+          path: build/port17probe.ipa
+          retention-days: 14

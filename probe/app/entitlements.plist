@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- SideStore/AltStore 侧载时会重签并自带 get-task-allow；这里是为了
+	     ad-hoc 直签或开发机直装时也能被 StikDebug 识别。 -->
+	<key>com.apple.security.get-task-allow</key>
+	<true/>
+</dict>
+</plist>

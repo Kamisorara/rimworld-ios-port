@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>Hello</AssemblyName>
+    <RootNamespace>Hello</RootNamespace>
+    <!-- IL 即可：TPA 宿主方式加载，不需要运行时包，也不做 R2R -->
+  </PropertyGroup>
+
+</Project>
