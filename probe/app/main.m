@@ -2,13 +2,29 @@
 // 这是 M2 正式宿主的种子——触摸原始事件、软键盘桥都会长在这个结构上。
 #import <UIKit/UIKit.h>
 #include <stdio.h>
+#include <stdlib.h>
 #import "host.h"
 
 static UITextView *g_text = nil;
 static dispatch_queue_t g_probe_queue = NULL;
 
+// UI 之外的地面真相：所有阶段打点同步落 Documents/port17-ui.log，
+// 黑屏/闪退时经 Files app 也能拿到（Info.plist 开了文件共享）。
+static void boot_log(NSString *line)
+{
+    NSString *path = [NSHomeDirectory()
+        stringByAppendingPathComponent:@"Documents/port17-ui.log"];
+    NSString *out = [NSString stringWithFormat:@"%@\n", line];
+    FILE *f = fopen(path.fileSystemRepresentation, "a");
+    if (f != NULL) {
+        fputs(out.UTF8String, f);
+        fclose(f);
+    }
+}
+
 static void append_log(const char *msg)
 {
+    boot_log([NSString stringWithUTF8String:msg]);
     NSString *line = [NSString stringWithUTF8String:msg];
     dispatch_async(dispatch_get_main_queue(), ^{
         g_text.text = [g_text.text stringByAppendingString:
@@ -54,6 +70,7 @@ static void run_probe_on_bg(void)
 - (void)viewDidLoad
 {
     [super viewDidLoad];
+    boot_log(@"viewDidLoad");
     self.view.backgroundColor = UIColor.blackColor;
 
     g_text = [[UITextView alloc] initWithFrame:CGRectZero];
@@ -88,6 +105,7 @@ static void run_probe_on_bg(void)
 - (void)viewDidAppear:(BOOL)animated
 {
     [super viewDidAppear:animated];
+    boot_log(@"viewDidAppear");
     static BOOL ran = NO;
     if (!ran) {
         ran = YES;
@@ -122,7 +140,15 @@ static void run_probe_on_bg(void)
 int main(int argc, char *argv[])
 {
     @autoreleasepool {
-        return UIApplicationMain(argc, argv, nil,
-                                 NSStringFromClass([AppDelegate class]));
+        boot_log(@"==== main 进入 ====");
+        // Hello 的文件输出也固定到 Documents，黑屏时经 Files app 可读
+        setenv("HELLO_OUT", [[NSHomeDirectory()
+            stringByAppendingPathComponent:@"Documents/hello.log"]
+            fileSystemRepresentation], 1);
+        boot_log(@"UIApplicationMain 开始");
+        int rc = UIApplicationMain(argc, argv, nil,
+                                   NSStringFromClass([AppDelegate class]));
+        boot_log(@"UIApplicationMain 返回");
+        return rc;
     }
 }
