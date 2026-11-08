@@ -93,16 +93,16 @@ jobs:
           echo "模拟器设备：$UDID"
           xcrun simctl bootstatus "$UDID" -b
           echo "==== 变体 A：默认（W^X 开）===="
-          xcrun simctl spawn "$UDID" "$PWD/macprobe-sim" "$PWD/bundle-sim" A
+          SIMCTL_CHILD_HELLO_OUT="$PWD/bundle-sim/hello-A.log" xcrun simctl spawn "$UDID" "$PWD/macprobe-sim" "$PWD/bundle-sim" A
           echo "A exit=$?"
           echo "==== 变体 B：属性 EnableWriteXorExecute=0 ===="
-          xcrun simctl spawn "$UDID" "$PWD/macprobe-sim" "$PWD/bundle-sim" B
+          SIMCTL_CHILD_HELLO_OUT="$PWD/bundle-sim/hello-B.log" xcrun simctl spawn "$UDID" "$PWD/macprobe-sim" "$PWD/bundle-sim" B
           echo "B exit=$?"
-          echo "==== 变体 C：环境变量 COMPlus_EnableWriteXorExecute=0 ===="
-          xcrun simctl spawn "$UDID" env COMPlus_EnableWriteXorExecute=0 "$PWD/macprobe-sim" "$PWD/bundle-sim" A
+          echo "==== 变体 C：环境变量 COMPlus_EnableWriteXorExecute=0（SIMCTL_CHILD 注入）===="
+          SIMCTL_CHILD_COMPlus_EnableWriteXorExecute=0 SIMCTL_CHILD_HELLO_OUT="$PWD/bundle-sim/hello-A.log" xcrun simctl spawn "$UDID" "$PWD/macprobe-sim" "$PWD/bundle-sim" A
           echo "C exit=$?"
           echo "---- hello.log ----"
-          cat bundle-sim/hello.log 2>/dev/null || echo "（无）"
+          cat bundle-sim/hello-C.log 2>/dev/null || echo "（无 hello-C.log）"
           exit 0
 
   debug:
