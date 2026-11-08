@@ -88,10 +88,13 @@ jobs:
             probe/debug/debug-main.c probe/app/host.c \
             -o macprobe-sim
           set +e
+          # 模拟器二进制直接在宿主跑需要 DYLD_ROOT_PATH（lldb 会自己配，直接跑不会）
+          export DYLD_ROOT_PATH="$(xcrun -sdk iphonesimulator --show-sdk-path)"
+          export DYLD_SHARED_CACHE_DIR=/System/Volumes/Preboot/Cryptexes/OS/Simulator
           echo "==== 变体 A：默认（W^X 开）===="
           ./macprobe-sim "$PWD/bundle-sim" A
           echo "A exit=$?"
-          echo "==== 变体 B：属性 EnableWriteXorExecute=0（已证不生效）===="
+          echo "==== 变体 B：属性 EnableWriteXorExecute=0 ===="
           ./macprobe-sim "$PWD/bundle-sim" B
           echo "B exit=$?"
           echo "==== 变体 C：环境变量 COMPlus_EnableWriteXorExecute=0 ===="
