@@ -91,8 +91,13 @@ int main(int argc, char **argv)
                         "APP_NI_PATHS", "NATIVE_DLL_SEARCH_DIRECTORIES",
                         "APP_CONTEXT_BASE_DIRECTORY"};
     const char *vA[] = {tpa, managed, managed, (char *)dir, (char *)dir};
-    const char *kB[] = {"TRUSTED_PLATFORM_ASSEMBLIES"};
-    const char *vB[] = {tpa};
+    // B：A + EnableWriteXorExecute=0（W^X 关 → JIT 直连 RWX，不需要翻页开关）。
+    // 真机已传该属性仍崩，怀疑属性→旋钮的机制在此构建路径未生效——本变体直接验证。
+    const char *kB[] = {"TRUSTED_PLATFORM_ASSEMBLIES", "APP_PATHS",
+                        "APP_NI_PATHS", "NATIVE_DLL_SEARCH_DIRECTORIES",
+                        "APP_CONTEXT_BASE_DIRECTORY",
+                        "System.Runtime.EnableWriteXorExecute"};
+    const char *vB[] = {tpa, managed, managed, (char *)dir, (char *)dir, "0"};
 
     struct {
         const char *name;
@@ -101,9 +106,8 @@ int main(int argc, char **argv)
         const char **v;
         int n;
     } variants[] = {
-        {"A exePath=宿主可执行 + 全属性（hostpolicy 语义）", self, kA, vA, 5},
-        {"B exePath=宿主可执行 + 仅 TPA", self, kB, vB, 1},
-        {"C exePath=Hello.dll（此前一直的传法）", hello, kA, vA, 5},
+        {"A 默认（W^X 开，预期崩在 InitThreadManager）", self, kA, vA, 5},
+        {"B +EnableWriteXorExecute=0", self, kB, vB, 6},
     };
 
     for (size_t i = 0; i < sizeof(variants) / sizeof(variants[0]); i++) {
