@@ -34,12 +34,12 @@ jobs:
       - name: 编 Hello 与探针
         run: |
           dotnet build probe/hello/hello.csproj -c Release -o probe/build/hello-out
-          # 布局 A：官方包布局（native/ + managed/ 分离）
-          mkdir -p bundle/managed
+          # 拍平布局（官方包 lib/net11.0 + native/ 合一目录——app bundle 的标准形态）
+          mkdir -p bundle
           cp pack/runtimes/osx-arm64/native/*.dylib bundle/
-          cp pack/runtimes/osx-arm64/lib/net11.0/*.dll bundle/managed/
-          cp probe/build/hello-out/Hello.dll bundle/managed/
-          # 布局 B：SDK 运行时布局（托管与原生全在同一目录）
+          cp pack/runtimes/osx-arm64/lib/net11.0/*.dll bundle/
+          cp probe/build/hello-out/Hello.dll bundle/
+          # 布局 B：SDK 10.x 运行时（天然平铺）
           SDKRUNTIME=$(ls -d ~/.dotnet/shared/Microsoft.NETCore.App/*/ | sort -V | grep -E '/10\.' | tail -n1)
           echo "SDK 运行时: $SDKRUNTIME"
           mkdir -p bundle10

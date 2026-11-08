@@ -64,8 +64,8 @@ int main(int argc, char **argv)
         printf("realpath 失败\n");
         return 2;
     }
-    char *managed = pj(dir, "managed");
-    char *hello = pj(managed, "Hello.dll");
+    const char *managed = dir; // 拍平布局：托管 dll 与 dylib 同目录
+    char *hello = pj(dir, "Hello.dll");
 
     void *lib = dlopen(pj(dir, "libcoreclr.dylib"), RTLD_NOW | RTLD_GLOBAL);
     if (!lib) {

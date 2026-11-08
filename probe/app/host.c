@@ -21,6 +21,7 @@ typedef int (*coreclr_initialize_fn)(
 typedef int (*coreclr_execute_assembly_fn)(
     void *hostHandle, unsigned int argc, char **argv,
     const char *managedAssemblyPath, unsigned int *exitCode);
+typedef void (*coreclr_set_error_writer_fn)(void (*)(const char *message));
 
 static void (*g_log_sink)(const char *) = NULL;
 
@@ -108,9 +109,12 @@ static void scan_exec_regions(const char *when)
 
 int run_probe(const char *bundle_dir)
 {
-    char *managed_dir = path_join(bundle_dir, "managed");
+    // 拍平布局：托管 dll 与 libcoreclr.dylib 同在 .app 根目录——CoreCLR 初始化
+    // 按 libcoreclr 所在目录找 System.Private.CoreLib.dll（不走 TPA），子目录布局
+    // 会让初始化以 0x80070002 静默失败。
+    char *managed_dir = strdup(bundle_dir);
     char *dylib_path = path_join(bundle_dir, "libcoreclr.dylib");
-    char *hello_path = path_join(managed_dir, "Hello.dll");
+    char *hello_path = path_join(bundle_dir, "Hello.dll");
 
     void *clr = dlopen(dylib_path, RTLD_NOW | RTLD_GLOBAL);
     if (clr == NULL) {
@@ -121,10 +125,14 @@ int run_probe(const char *bundle_dir)
         (coreclr_initialize_fn)dlsym(clr, "coreclr_initialize");
     coreclr_execute_assembly_fn exec =
         (coreclr_execute_assembly_fn)dlsym(clr, "coreclr_execute_assembly");
+    coreclr_set_error_writer_fn set_err =
+        (coreclr_set_error_writer_fn)dlsym(clr, "coreclr_set_error_writer");
     if (init == NULL || exec == NULL) {
         host_log("找不到 coreclr_initialize / coreclr_execute_assembly");
         return -2;
     }
+    if (set_err != NULL)
+        set_err(host_log); // 运行时报错走 error writer，不设就完全静默
 
     char *tpa = build_tpa(managed_dir);
     if (tpa == NULL) {
@@ -167,7 +175,9 @@ int run_probe(const char *bundle_dir)
     host_log("初始化 CoreCLR…");
     void *host = NULL;
     unsigned int domain = 0;
-    int hr = init(hello_path, "Port17Probe", 7, keys, values, &host, &domain);
+    // exePath 契约 = 原生宿主可执行文件路径（hostpolicy 传 host_path，不是托管 dll）
+    char *host_exec = path_join(bundle_dir, "Port17Probe");
+    int hr = init(host_exec, "Port17Probe", 7, keys, values, &host, &domain);
     if (hr != 0) {
         char buf[64];
         snprintf(buf, sizeof(buf), "coreclr_initialize 失败：0x%08x", hr);

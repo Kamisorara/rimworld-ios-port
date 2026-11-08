@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/build/Port17Probe.app"
 
 rm -rf "$ROOT/build"
-mkdir -p "$APP/managed"
+mkdir -p "$APP"
 
 # 1) 托管探针（IL 即可，TPA 宿主加载）
 dotnet build "$ROOT/probe/hello/hello.csproj" -c Release -o "$ROOT/build/hello"
@@ -23,10 +23,11 @@ xcrun -sdk iphoneos clang \
     -o "$APP/Port17Probe"
 cp "$ROOT/probe/app/Info.plist" "$APP/"
 
-# 3) 运行时 + 探针程序集
+# 3) 运行时 + 探针程序集：全部平铺在 .app 根——CoreCLR 按 libcoreclr.dylib 所在
+#    目录找 System.Private.CoreLib.dll，与托管 dll 分目录会让初始化 0x80070002
 cp "$ROOT"/runtime-out/*.dylib "$APP/"
-cp "$ROOT"/runtime-out/managed/*.dll "$APP/managed/"
-cp "$ROOT/build/hello/Hello.dll" "$APP/managed/"
+cp "$ROOT"/runtime-out/managed/*.dll "$APP/"
+cp "$ROOT/build/hello/Hello.dll" "$APP/"
 
 # 4) ad-hoc 签名：先内嵌文件，后 bundle（顺序不能反）
 ENT="$ROOT/probe/app/entitlements.plist"
