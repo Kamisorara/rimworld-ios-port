@@ -39,8 +39,9 @@ jobs:
           cp pack/runtimes/osx-arm64/native/*.dylib bundle/
           cp pack/runtimes/osx-arm64/lib/net11.0/*.dll bundle/
           cp pack/runtimes/osx-arm64/lib/net11.0/*.dylib bundle/ 2>/dev/null || true
-          ls bundle | wc -l
           cp probe/build/hello-out/Hello.dll bundle/
+          cp probe/build/hello-out/Hello.runtimeconfig.json bundle/
+          # 布局 B：SDK 10.x 运行时（天然平铺）
           # 布局 B：SDK 10.x 运行时（天然平铺）
           SDKRUNTIME=$(ls -d ~/.dotnet/shared/Microsoft.NETCore.App/*/ | sort -V | grep -E '/10\.' | tail -n1)
           echo "SDK 运行时: $SDKRUNTIME"
@@ -57,3 +58,14 @@ jobs:
 
       - name: 对照组 2——SDK 10.0.x 运行时（平铺布局）
         run: ./macprobe "$PWD/bundle10" flat || true
+
+      - name: 对照组 3——官方 dotnet 宿主直接跑 bundle10
+        run: ~/.dotnet/dotnet bundle10/Hello.dll || true
+
+      - name: lldb 拿 macprobe 崩溃栈
+        if: always()
+        run: |
+          lldb -b \
+            -o "settings set target.process.stop-on-exec false" \
+            -o run -o "bt 25" -o quit \
+            ./macprobe "$PWD/bundle10" flat 2>&1 | tail -40 || true
