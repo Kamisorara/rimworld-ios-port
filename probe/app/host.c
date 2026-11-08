@@ -19,7 +19,7 @@ typedef int (*coreclr_initialize_fn)(
     const char **propertyKeys, const char **propertyValues, void **hostHandle,
     unsigned int *domainId);
 typedef int (*coreclr_execute_assembly_fn)(
-    void *hostHandle, unsigned int argc, char **argv,
+    void *hostHandle, unsigned int domainId, int argc, char **argv,
     const char *managedAssemblyPath, unsigned int *exitCode);
 typedef void (*coreclr_set_error_writer_fn)(void (*)(const char *message));
 
@@ -191,7 +191,7 @@ int run_probe(const char *bundle_dir)
 
     char *argv[1] = {hello_path};
     unsigned int exit_code = 0;
-    hr = exec(host, 1, argv, hello_path, &exit_code);
+    hr = exec(host, domain, 1, argv, hello_path, &exit_code);
     if (hr != 0) {
         char buf[64];
         snprintf(buf, sizeof(buf), "coreclr_execute_assembly 失败：0x%08x", hr);

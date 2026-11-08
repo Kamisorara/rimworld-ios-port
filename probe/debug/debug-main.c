@@ -51,7 +51,7 @@ static char *build_tpa(const char *dir)
 typedef void (*set_error_writer_fn)(void (*)(const char *));
 typedef int (*init_fn)(const char *, const char *, int, const char **,
                        const char **, void **, unsigned int *);
-typedef int (*exec_fn)(void *, unsigned int, char **, const char *,
+typedef int (*exec_fn)(void *, unsigned int, int, char **, const char *,
                        unsigned int *);
 
 int main(int argc, char **argv)
@@ -119,7 +119,7 @@ int main(int argc, char **argv)
         printf("[macprobe] → 初始化成功！执行 Hello…\n");
         char *cargv[1] = {hello};
         unsigned int exit_code = 0;
-        hr = exec(host, 1, cargv, hello, &exit_code);
+        hr = exec(host, domain, 1, cargv, hello, &exit_code);
         printf("[macprobe] execute_assembly hr=0x%08x exit=%u\n", hr,
                exit_code);
         return hr == 0 ? 0 : 1;
