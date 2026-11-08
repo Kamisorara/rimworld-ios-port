@@ -42,7 +42,7 @@ jobs:
           dotnet build probe/hello/hello.csproj -c Release -o probe/build/hello-out
           mkdir runtime2 && cp runtime/*.dll runtime2/ && cp probe/build/hello-out/Hello.dll runtime2/
           cp pack/runtimes/osx-arm64/native/*.dylib runtime2/
-          clang -arch arm64 -Wl,-rpath,@executable_path \
+          clang -arch arm64 -I probe/app -Wl,-rpath,@executable_path \
             probe/debug/debug-main.c probe/app/host.c \
             -o macprobe
 
