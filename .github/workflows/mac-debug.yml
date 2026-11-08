@@ -88,11 +88,15 @@ jobs:
             probe/debug/debug-main.c probe/app/host.c \
             -o macprobe-sim
           set +e
-          ./macprobe-sim "$PWD/bundle-sim"
-          echo "直接运行 exit=$?"
-          lldb -b -o run \
-            -k "thread backtrace all" -k "register read pc x0 x1" -k "quit" \
-            ./macprobe-sim "$PWD/bundle-sim" 2>&1 | tail -60
+          echo "==== 变体 A：默认（W^X 开）===="
+          ./macprobe-sim "$PWD/bundle-sim" A
+          echo "A exit=$?"
+          echo "==== 变体 B：EnableWriteXorExecute=0 ===="
+          ./macprobe-sim "$PWD/bundle-sim" B
+          echo "B exit=$?"
+          if [ ! -f bundle-sim/hello.log ]; then cp probe/build/hello-out/Hello.runtimeconfig.json bundle-sim/ 2>/dev/null; fi
+          echo "---- hello.log ----"
+          cat bundle-sim/hello.log 2>/dev/null || echo "（无）"
           exit 0
 
   debug:

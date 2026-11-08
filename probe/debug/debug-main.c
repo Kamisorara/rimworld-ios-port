@@ -110,24 +110,21 @@ int main(int argc, char **argv)
         {"B +EnableWriteXorExecute=0", self, kB, vB, 6},
     };
 
-    for (size_t i = 0; i < sizeof(variants) / sizeof(variants[0]); i++) {
-        printf("[macprobe] ---- %s ----\n", variants[i].name);
-        void *host = NULL;
-        unsigned int domain = 0;
-        int hr = init(variants[i].exe, "macdebug", variants[i].n,
-                      variants[i].k, variants[i].v, &host, &domain);
-        if (hr != 0) {
-            printf("[macprobe] → 失败 0x%08x\n", hr);
-            continue;
-        }
-        printf("[macprobe] → 初始化成功！执行 Hello…\n");
-        char *cargv[1] = {hello};
-        unsigned int exit_code = 0;
-        hr = exec(host, domain, 1, cargv, hello, &exit_code);
-        printf("[macprobe] execute_assembly hr=0x%08x exit=%u\n", hr,
-               exit_code);
-        return hr == 0 ? 0 : 1;
+    // 变体作为参数逐进程运行：崩溃会带走整个进程，循环跑没有意义
+    int which = (argc > 2 && argv[2][0] == 'B') ? 1 : 0;
+    printf("[macprobe] ---- %s ----\n", variants[which].name);
+    void *host = NULL;
+    unsigned int domain = 0;
+    int hr = init(variants[which].exe, "macdebug", variants[which].n,
+                  variants[which].k, variants[which].v, &host, &domain);
+    if (hr != 0) {
+        printf("[macprobe] → 失败 0x%08x\n", hr);
+        return 1;
     }
-    printf("[macprobe] 所有变体都失败\n");
-    return 1;
+    printf("[macprobe] → 初始化成功！执行 Hello…\n");
+    char *cargv[1] = {hello};
+    unsigned int exit_code = 0;
+    hr = exec(host, domain, 1, cargv, hello, &exit_code);
+    printf("[macprobe] execute_assembly hr=0x%08x exit=%u\n", hr, exit_code);
+    return hr == 0 ? 0 : 1;
 }
