@@ -89,7 +89,7 @@ jobs:
             -o macprobe-sim
           set +e
           # 直接跑需要 dyld_sim 的一整套环境——走 simctl spawn（启动模拟器设备并在其中运行）
-          UDID=$(xcrun simctl list devices available | sed -E -n 's/.*\(([0-9A-Fa-f-]{36})\).*//p' | head -n1)
+          UDID=$(xcrun simctl list devices available | grep -oE "[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}" | head -n1)
           echo "模拟器设备：$UDID"
           xcrun simctl bootstatus "$UDID" -b
           echo "==== 变体 A：默认（W^X 开）===="
