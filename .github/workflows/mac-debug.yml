@@ -1,8 +1,7 @@
 name: mac-debug
 
-# 在 macOS runner 上用官方 osx-arm64 运行时包跑同一个探针宿主：
-# 验证 host.c 的调用逻辑本身（TPA/属性组/exePath），stderr 全可见。
-# 与 iOS 失败对照：这里过了 → 问题在 iOS 专属环节（布局/签名/沙盒）。
+# 在 macOS runner 上复现宿主调用：官方 osx-arm64 包 + 自带 .NET SDK 运行时两个对照组，
+# 属性组变体矩阵二分，定位 coreclr_initialize 0x80070002。
 on:
   workflow_dispatch:
   push:
@@ -31,24 +30,28 @@ jobs:
           echo "版本 $VER"
           curl -sL -o pack.nupkg "https://nuget.azure.cn/v3-flatcontainer/$PKG/$VER/$PKG.$VER.nupkg"
           unzip -q pack.nupkg -d pack
-          mkdir -p runtime
-          cp pack/runtimes/osx-arm64/lib/net11.0/*.dll runtime/
-          cp pack/runtimes/osx-arm64/native/*.dylib runtime/
-          cp probe/build/hello-out/Hello.dll runtime/ 2>/dev/null || true
-          ls runtime | head
 
-      - name: 组装布局并编译
+      - name: 编 Hello 与探针
         run: |
           dotnet build probe/hello/hello.csproj -c Release -o probe/build/hello-out
+          # 布局 A：官方包布局（native/ + managed/ 分离）
           mkdir -p bundle/managed
           cp pack/runtimes/osx-arm64/native/*.dylib bundle/
           cp pack/runtimes/osx-arm64/lib/net11.0/*.dll bundle/managed/
           cp probe/build/hello-out/Hello.dll bundle/managed/
+          # 布局 B：SDK 运行时布局（托管与原生全在同一目录）
+          SDKRUNTIME=$(ls -d ~/.dotnet/shared/Microsoft.NETCore.App/*/ | tail -n1)
+          echo "SDK 运行时: $SDKRUNTIME"
+          mkdir -p bundle10
+          cp "$SDKRUNTIME"/*.dll bundle10/
+          cp "$SDKRUNTIME"/*.dylib bundle10/
+          cp probe/build/hello-out/Hello.dll bundle10/
           clang -arch arm64 -I probe/app -Wl,-rpath,@executable_path \
             probe/debug/debug-main.c probe/app/host.c \
             -o macprobe
 
-      - name: 跑探针（真实 stderr）
-        run: |
-          ./macprobe "$PWD/bundle"
-          echo "exit=$?"
+      - name: 对照组 1——官方 osx 包布局
+        run: ./macprobe "$PWD/bundle" ; echo "exit=$?"
+
+      - name: 对照组 2——SDK 10.0.x 运行时（平铺布局）
+        run: ./macprobe "$PWD/bundle10" flat ; echo "exit=$?"
