@@ -46,11 +46,17 @@ jobs:
           df -h /
 
       - name: 构建 CoreCLR + BCL（iOS arm64，JIT）
+        id: build
         if: steps.cache.outputs.cache-hit != 'true'
         run: ./scripts/build-runtime.sh
 
+      # 收集只告警不失败：编译产物在任何情况下都要进入下面的保存步骤
+      - name: 收集运行时产物
+        if: steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
+        run: ./scripts/collect-runtime.sh
+
       - name: 保存缓存
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
         uses: actions/cache/save@v4
         with:
           key: ${{ steps.key.outputs.key }}
@@ -58,10 +64,14 @@ jobs:
 
       # Actions 缓存 7 天未访问即逐出；Release 附件永久，作为复用的最终兜底
       - name: 发布运行时产物到 Release
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if [ ! -e "runtime-out/managed/System.Private.CoreLib.dll" ] || [ ! -e "runtime-out/libcoreclr.dylib" ]; then
+            echo "产物不完整，暂不发布 Release（Artifacts 里保留了原始输出供排查）"
+            exit 0
+          fi
           PIN="${{ steps.key.outputs.pin }}"
           cd runtime-out
           zip -qry "../runtime-ios-arm64-$PIN.zip" .
@@ -72,11 +82,13 @@ jobs:
             || gh release upload "runtime-$PIN" "runtime-ios-arm64-$PIN.zip" --clobber
 
       - name: 上传运行时产物（排查用）
+        if: steps.cache.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: runtime-ios-arm64
           path: runtime-out
           retention-days: 7
+          if-no-files-found: warn
 
   ipa:
     needs: runtime
