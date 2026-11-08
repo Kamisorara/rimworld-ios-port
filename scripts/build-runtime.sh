@@ -19,7 +19,14 @@ fi
 cd "$SRC"
 git checkout --detach "$PIN"
 
-./build.sh clr+libs -os ios -arch arm64 -c Release --dynamiccodecompiled true
+# -DFEATURE_INTERPRETER=0：Apple mobile 强制静态链接，而 FEATURE_INTERPRETER 的默认值是个
+# configure 期未求值的生成器表达式字符串（$<IF:$<CONFIG:Debug,Checked>,1,0>），链接清单处的
+# if(FEATURE_INTERPRETER) 会把它当真值 → 解释器与 JIT 同时静态链入 libcoreclr.dylib，
+# getJit/jitStartup 等 8 个符号重复。显式定义为 0（JIT 变体不需要解释器）绕过该组合
+# （静态链接 + 动态代码，微软 CI 不构建的矩阵格）。
+./build.sh clr+libs -os ios -arch arm64 -c Release \
+    --dynamiccodecompiled true \
+    -cmakeargs "-DFEATURE_INTERPRETER=0"
 
 # ---- 收集产物 ----
 rm -rf "$OUT"
