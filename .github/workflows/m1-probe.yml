@@ -5,6 +5,15 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# 排队不取消：防止缓存尚未保存时新 run 触发重复的长时间编译
+concurrency:
+  group: m1-probe-${{ github.ref }}
+  cancel-in-progress: false
+
+# gh release create/upload 需要写权限
+permissions:
+  contents: write
+
 jobs:
   runtime:
     # 仅在 runtime-pin.txt 变化后重建（缓存命中即跳过编译）
@@ -15,9 +24,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 计算缓存键
+      - name: 计算 pin 与缓存键
         id: key
-        run: echo "key=runtime-ios-arm64-$(head -n1 runtime-pin.txt | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+        run: |
+          PIN="$(head -n1 runtime-pin.txt | tr -d '[:space:]')"
+          echo "pin=$PIN" >> "$GITHUB_OUTPUT"
+          echo "key=runtime-ios-arm64-$PIN" >> "$GITHUB_OUTPUT"
 
       - name: 查缓存
         id: cache
@@ -44,6 +56,21 @@ jobs:
           key: ${{ steps.key.outputs.key }}
           path: runtime-out
 
+      # Actions 缓存 7 天未访问即逐出；Release 附件永久，作为复用的最终兜底
+      - name: 发布运行时产物到 Release
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PIN="${{ steps.key.outputs.pin }}"
+          cd runtime-out
+          zip -qry "../runtime-ios-arm64-$PIN.zip" .
+          cd ..
+          gh release create "runtime-$PIN" "runtime-ios-arm64-$PIN.zip" \
+            --title "Runtime iOS arm64 (JIT) $PIN" \
+            --notes "dotnet/runtime $PIN，iOS arm64，--dynamiccodecompiled true。缓存逐出后由 ipa job 自动从此恢复；本地 mac 调试也可下载解压到 runtime-out/ 复用。" \
+            || gh release upload "runtime-$PIN" "runtime-ios-arm64-$PIN.zip" --clobber
+
       - name: 上传运行时产物（排查用）
         uses: actions/upload-artifact@v4
         with:
@@ -63,6 +90,21 @@ jobs:
         with:
           key: ${{ needs.runtime.outputs.cache-key }}
           path: runtime-out
+
+      - name: 缓存未命中则从 Release 恢复
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$(ls -A runtime-out 2>/dev/null)" ]; then
+            echo "缓存命中"
+            exit 0
+          fi
+          PIN="$(head -n1 runtime-pin.txt | tr -d '[:space:]')"
+          echo "缓存未命中（可能被逐出），从 Release runtime-$PIN 恢复"
+          gh release download "runtime-$PIN" -p "runtime-ios-arm64-$PIN.zip" --clobber
+          mkdir -p runtime-out
+          unzip -q "runtime-ios-arm64-$PIN.zip" -d runtime-out
+          ls runtime-out
 
       - uses: actions/setup-dotnet@v4
         with:
