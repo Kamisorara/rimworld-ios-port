@@ -91,10 +91,12 @@ jobs:
           echo "==== 变体 A：默认（W^X 开）===="
           ./macprobe-sim "$PWD/bundle-sim" A
           echo "A exit=$?"
-          echo "==== 变体 B：EnableWriteXorExecute=0 ===="
+          echo "==== 变体 B：属性 EnableWriteXorExecute=0（已证不生效）===="
           ./macprobe-sim "$PWD/bundle-sim" B
           echo "B exit=$?"
-          if [ ! -f bundle-sim/hello.log ]; then cp probe/build/hello-out/Hello.runtimeconfig.json bundle-sim/ 2>/dev/null; fi
+          echo "==== 变体 C：环境变量 COMPlus_EnableWriteXorExecute=0 ===="
+          COMPlus_EnableWriteXorExecute=0 ./macprobe-sim "$PWD/bundle-sim" A
+          echo "C exit=$?"
           echo "---- hello.log ----"
           cat bundle-sim/hello.log 2>/dev/null || echo "（无）"
           exit 0
