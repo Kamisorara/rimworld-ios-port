@@ -3,11 +3,17 @@
 #include <dlfcn.h>
 #include <dirent.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/errno.h>
+
+// mach_vm_region_recurse 的头文件 mach/mach_vm.h 在 iOS SDK 里被 #error 挡住；
+// 用 vm_region_64 + VM_REGION_BASIC_INFO_64——CoreCLR PAL 的 map/virtual.cpp 在
+// iOS 构建里就用这一组合（share_mode/max_protection 都在 basic_info_data_64_t 里）。
+#ifndef SM_PRIVATE
+#define SM_PRIVATE 1
+#endif
 
 typedef int (*coreclr_initialize_fn)(
     const char *exePath, const char *appDomainName, int propertyCount,
@@ -72,17 +78,20 @@ static char *build_tpa(const char *managed_dir)
 // 解释器模式下应该几乎没有；JIT 开启后 CoreCLR 的双映射（RW+RX）会计入。
 static void scan_exec_regions(const char *when)
 {
-    mach_vm_address_t addr = MACH_VM_MIN_ADDRESS;
-    mach_vm_size_t size;
-    vm_region_recurse_info_data_64_t info;
-    mach_msg_type_number_t count = VM_REGION_RECURSE_INFO_COUNT_64;
-    natural_t depth = 0;
+    vm_address_t addr = 0;
+    vm_size_t size;
+    vm_region_basic_info_data_64_t info;
+    mach_msg_type_number_t count;
+    mach_port_t object_name;
     uint64_t total = 0;
     uint64_t largest = 0;
     uint64_t nregions = 0;
-    while (mach_vm_region_recurse(mach_task_self(), &addr, &size, &depth,
-                                  (vm_region_recurse_info_t)&info, &count) ==
-           KERN_SUCCESS) {
+    while (1) {
+        count = VM_REGION_BASIC_INFO_COUNT_64;
+        if (vm_region_64(mach_task_self(), &addr, &size, VM_REGION_BASIC_INFO_64,
+                         (vm_region_info_t)&info, &count,
+                         &object_name) != KERN_SUCCESS)
+            break;
         if ((info.max_protection & VM_PROT_EXECUTE) != 0 &&
             info.share_mode == SM_PRIVATE) {
             total += size;
@@ -90,10 +99,9 @@ static void scan_exec_regions(const char *when)
                 largest = size;
             nregions++;
         }
-        count = VM_REGION_RECURSE_INFO_COUNT_64;
+        if (addr + size <= addr)
+            break; // 溢出保护：扫完全部区域
         addr += size;
-        if (addr == 0)
-            break;
     }
     char buf[256];
     snprintf(buf, sizeof(buf),

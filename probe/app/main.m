@@ -52,7 +52,7 @@ static void run_probe_on_bg(void)
     g_text.layoutManager.allowsNonContiguousLayout = NO;
     [self.view addSubview:g_text];
 
-    UIButton *again = [UIButton systemButtonWithType:UIButtonTypeSystem];
+    UIButton *again = [UIButton buttonWithType:UIButtonTypeSystem];
     [again setTitle:@"重新运行" forState:UIControlStateNormal];
     [again setTitleColor:UIColor.systemBlueColor forState:UIControlStateNormal];
     again.translatesAutoresizingMaskIntoConstraints = NO;
