@@ -88,17 +88,18 @@ jobs:
             probe/debug/debug-main.c probe/app/host.c \
             -o macprobe-sim
           set +e
-          # 模拟器二进制直接在宿主跑需要 DYLD_ROOT_PATH（lldb 会自己配，直接跑不会）
-          export DYLD_ROOT_PATH="$(xcrun -sdk iphonesimulator --show-sdk-path)"
-          export DYLD_SHARED_CACHE_DIR=/System/Volumes/Preboot/Cryptexes/OS/Simulator
+          # 直接跑需要 dyld_sim 的一整套环境——走 simctl spawn（启动模拟器设备并在其中运行）
+          UDID=$(xcrun simctl list devices available | sed -E -n 's/.*\(([0-9A-Fa-f-]{36})\).*//p' | head -n1)
+          echo "模拟器设备：$UDID"
+          xcrun simctl bootstatus "$UDID" -b
           echo "==== 变体 A：默认（W^X 开）===="
-          ./macprobe-sim "$PWD/bundle-sim" A
+          xcrun simctl spawn "$UDID" "$PWD/macprobe-sim" "$PWD/bundle-sim" A
           echo "A exit=$?"
           echo "==== 变体 B：属性 EnableWriteXorExecute=0 ===="
-          ./macprobe-sim "$PWD/bundle-sim" B
+          xcrun simctl spawn "$UDID" "$PWD/macprobe-sim" "$PWD/bundle-sim" B
           echo "B exit=$?"
           echo "==== 变体 C：环境变量 COMPlus_EnableWriteXorExecute=0 ===="
-          COMPlus_EnableWriteXorExecute=0 ./macprobe-sim "$PWD/bundle-sim" A
+          xcrun simctl spawn "$UDID" env COMPlus_EnableWriteXorExecute=0 "$PWD/macprobe-sim" "$PWD/bundle-sim" A
           echo "C exit=$?"
           echo "---- hello.log ----"
           cat bundle-sim/hello.log 2>/dev/null || echo "（无）"
