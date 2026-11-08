@@ -1,0 +1,52 @@
+name: mac-debug
+
+# 在 macOS runner 上用官方 osx-arm64 运行时包跑同一个探针宿主：
+# 验证 host.c 的调用逻辑本身（TPA/属性组/exePath），stderr 全可见。
+# 与 iOS 失败对照：这里过了 → 问题在 iOS 专属环节（布局/签名/沙盒）。
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'probe/app/**'
+      - 'probe/hello/**'
+      - 'probe/debug/**'
+      - '.github/workflows/mac-debug.yml'
+
+jobs:
+  debug:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 取官方 osx-arm64 运行时包
+        run: |
+          PKG="microsoft.netcore.app.runtime.osx-arm64"
+          VER=$(curl -sL "https://nuget.azure.cn/v3-flatcontainer/$PKG/index.json" | tr ',' '\n' | grep -o '"11\.0\.0-rc\.3[^"]*"' | tail -n1 | tr -d '"')
+          echo "版本 $VER"
+          curl -sL -o pack.nupkg "https://nuget.azure.cn/v3-flatcontainer/$PKG/$VER/$PKG.$VER.nupkg"
+          unzip -q pack.nupkg -d pack
+          mkdir -p runtime
+          cp pack/runtimes/osx-arm64/lib/net11.0/*.dll runtime/
+          cp pack/runtimes/osx-arm64/native/*.dylib runtime/
+          cp probe/build/hello-out/Hello.dll runtime/ 2>/dev/null || true
+          ls runtime | head
+
+      - name: 编 Hello 与探针宿主（macOS arm64）
+        run: |
+          dotnet build probe/hello/hello.csproj -c Release -o probe/build/hello-out
+          mkdir runtime2 && cp runtime/*.dll runtime2/ && cp probe/build/hello-out/Hello.dll runtime2/
+          cp pack/runtimes/osx-arm64/native/*.dylib runtime2/
+          clang -arch arm64 -Wl,-rpath,@executable_path \
+            probe/debug/debug-main.c probe/app/host.c \
+            -o macprobe
+
+      - name: 跑探针（真实 stderr）
+        run: |
+          ./macprobe "$PWD/runtime2"
+          echo "exit=$?"
