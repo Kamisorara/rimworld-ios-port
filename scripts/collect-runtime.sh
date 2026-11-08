@@ -25,6 +25,14 @@ else
         || echo "::warning::CoreLib IL 目录复制失败"
 fi
 
+# 托管类库的原生部分（libSystem.Native 等）：coreclr 输出目录里没有，
+# 但官方 ios 运行时包的 native/ 里有——缺了它们 CoreLib 引导期的第一个
+# P/Invoke 就会 dlopen 失败（表现为 0x80070002）。按名字在全部构建输出里找。
+find "$SRC/artifacts/bin" -name 'libSystem.*.dylib' -print0 |
+while IFS= read -r -d '' d; do
+    cp -n "$d" "$OUT/" 2>/dev/null || true
+done
+
 # 其余 BCL：先 ios 专属变体（cp -n 之后不再覆盖），再 RID 无关版本补齐
 find "$SRC/artifacts/bin" -type d -path '*/Release/net11.0-ios' -print0 |
 while IFS= read -r -d '' d; do
@@ -41,6 +49,9 @@ ls -la "$OUT" | head -25
 echo "managed dll 数量：$(ls "$OUT/managed" 2>/dev/null | wc -l | tr -d ' ')"
 if [ ! -e "$OUT/libcoreclr.dylib" ]; then
     echo "::warning::runtime-out 里没有 libcoreclr.dylib，产物不完整"
+fi
+if [ ! -e "$OUT/libSystem.Native.dylib" ]; then
+    echo "::warning::runtime-out 里没有 libSystem.Native.dylib（类库原生部分），运行时会 0x80070002"
 fi
 if [ ! -e "$OUT/managed/System.Private.CoreLib.dll" ]; then
     echo "::warning::managed 里没有 System.Private.CoreLib.dll，产物不完整"

@@ -23,9 +23,23 @@ static void run_probe_on_bg(void)
     append_log("==== Port17 iOS 探针 ====");
     append_log("注意：不经过 StikDebug 开 JIT，JIT 探针应报“疑似解释器”");
     dispatch_async(g_probe_queue, ^{
+        // CoreCLR 的内部报错走 stderr（iOS 上默认进系统日志），重定向到文件
+        // 再读回来附进屏幕日志——它给出的文件名比 0x80070002 有用得多。
+        NSString *errPath = [NSHomeDirectory()
+            stringByAppendingPathComponent:@"Documents/coreclr-stderr.log"];
+        freopen(errPath.fileSystemRepresentation, "w", stderr);
+
         const char *bundle =
             [[NSBundle mainBundle].bundlePath UTF8String];
         int rc = run_probe(bundle);
+
+        NSString *err = [NSString stringWithContentsOfFile:errPath
+            encoding:NSUTF8StringEncoding error:nil];
+        if (err.length > 0) {
+            append_log("---- CoreCLR stderr ----");
+            append_log(err.UTF8String);
+        }
+
         char buf[64];
         snprintf(buf, sizeof(buf), "run_probe 返回 %d", rc);
         append_log(buf);

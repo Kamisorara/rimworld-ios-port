@@ -149,61 +149,30 @@ int run_probe(const char *bundle_dir)
         host_log(buf);
     }
 
-    // 一次跑一组初始化变体（真机上 0x80070002 = FILE_NOT_FOUND 的来源定位）：
-    // A 基线；B exePath 用程序集文件路径（安卓版 host.c 的做法）；C 再叠安卓版的关键属性；
-    // D 再叠全球化 Invariant（Apple mobile 是 hybrid globalization，文化数据缺失也可能是
-    // FILE_NOT_FOUND 的来源）。
+    // 正式属性组（对照安卓版 host.c 与官方 ios 运行时包布局）：
+    // libSystem.Native 等类库原生 dylib 在 bundle 根目录，原生搜索目录指向那里，
+    // 类库按名字 dlopen 失败后会用这里给的路径按全路径重试。
+    const char *keys[7] = {
+        "TRUSTED_PLATFORM_ASSEMBLIES",
+        "APP_PATHS",
+        "APP_NI_PATHS",
+        "NATIVE_DLL_SEARCH_DIRECTORIES",
+        "APP_CONTEXT_BASE_DIRECTORY",
+        "RUNTIME_IDENTIFIER",
+        "STARTUP_HOOKS",
+    };
+    const char *values[7] = {tpa, managed_dir, managed_dir, (char *)bundle_dir,
+                             (char *)bundle_dir, "ios-arm64", ""};
+
+    host_log("初始化 CoreCLR…");
     void *host = NULL;
     unsigned int domain = 0;
-    int hr = -1;
-
-    const char *keysA[3] = {"TRUSTED_PLATFORM_ASSEMBLIES", "APP_PATHS",
-                            "APP_NI_PATHS"};
-    const char *valuesA[3] = {tpa, managed_dir, managed_dir};
-
-    const char *keysC[5] = {"TRUSTED_PLATFORM_ASSEMBLIES", "APP_PATHS",
-                            "APP_NI_PATHS", "NATIVE_DLL_SEARCH_DIRECTORIES",
-                            "APP_CONTEXT_BASE_DIRECTORY"};
-    const char *valuesC[5] = {tpa, managed_dir, managed_dir, (char *)bundle_dir,
-                              (char *)bundle_dir};
-
-    const char *keysD[7] = {"TRUSTED_PLATFORM_ASSEMBLIES", "APP_PATHS",
-                            "APP_NI_PATHS", "NATIVE_DLL_SEARCH_DIRECTORIES",
-                            "APP_CONTEXT_BASE_DIRECTORY",
-                            "System.Globalization.Invariant",
-                            "System.Globalization.PredefinedCulturesOnly"};
-    const char *valuesD[7] = {tpa, managed_dir, managed_dir, (char *)bundle_dir,
-                              (char *)bundle_dir, "true", "false"};
-
-    struct {
-        const char *name;
-        const char *exe;
-        const char **keys;
-        const char **values;
-        int count;
-    } variants[] = {
-        {"A 基线（目录作 exePath）", bundle_dir, keysA, valuesA, 3},
-        {"B exePath=程序集文件", hello_path, keysA, valuesA, 3},
-        {"C +搜索目录/基目录", hello_path, keysC, valuesC, 5},
-        {"D +全球化 Invariant", hello_path, keysD, valuesD, 7},
-    };
-
-    for (size_t i = 0; i < sizeof(variants) / sizeof(variants[0]); i++) {
-        char buf[96];
-        snprintf(buf, sizeof(buf), "尝试 %s…", variants[i].name);
-        host_log(buf);
-        hr = init(variants[i].exe, "Port17Probe", variants[i].count,
-                  variants[i].keys, variants[i].values, &host, &domain);
-        if (hr == 0) {
-            host_log("→ 该变体成功");
-            break;
-        }
-        snprintf(buf, sizeof(buf), "→ 失败：0x%08x", hr);
-        host_log(buf);
-        host = NULL;
-    }
+    int hr = init(hello_path, "Port17Probe", 7, keys, values, &host, &domain);
     if (hr != 0) {
-        host_log("所有初始化变体都失败");
+        char buf[64];
+        snprintf(buf, sizeof(buf), "coreclr_initialize 失败：0x%08x", hr);
+        host_log(buf);
+        host_log("（CoreCLR 自己写到 stderr 的内容已附在日志末尾）");
         return -4;
     }
     host_log("CoreCLR 就绪");
