@@ -25,7 +25,7 @@ index 0ff5b7435ec..3787cb38d28 100644
  
  PALIMPORT
 diff --git a/src/coreclr/pal/src/map/virtual.cpp b/src/coreclr/pal/src/map/virtual.cpp
-index caf5388b1b3..1a1418c6b57 100644
+index caf5388b1b3..70d79226637 100644
 --- a/src/coreclr/pal/src/map/virtual.cpp
 +++ b/src/coreclr/pal/src/map/virtual.cpp
 @@ -1279,7 +1279,22 @@ ExitVirtualProtect:
@@ -36,8 +36,8 @@ index caf5388b1b3..1a1418c6b57 100644
 +#if (defined(HOST_OSX) || defined(HOST_IOS) || defined(HOST_TVOS) || defined(HOST_MACCATALYST)) && defined(HOST_ARM64)
 +#if !defined(HOST_OSX)
 +// The iOS SDK marks pthread_jit_write_protect_np as unavailable, but the
-+// symbol exists in libsystem_pthread.dylib (iOS 14+); JIT apps on iOS resolve
-+// it dynamically. Only reached by JIT builds with the JIT grant active.
++// symbol exists in libsystem_pthread.dylib; JIT-enabled processes may resolve
++// it dynamically. Used only by JIT builds with an active JIT grant.
 +#include <dlfcn.h>
 +static void port17_jit_write_protect(int enabled)
 +{
@@ -61,3 +61,22 @@ index caf5388b1b3..1a1418c6b57 100644
  
  #if HAVE_VM_ALLOCATE
  //---------------------------------------------------------------------------------------
+diff --git a/src/coreclr/utilcode/executableallocator.cpp b/src/coreclr/utilcode/executableallocator.cpp
+index f982fa1f940..398ddd8cf01 100644
+--- a/src/coreclr/utilcode/executableallocator.cpp
++++ b/src/coreclr/utilcode/executableallocator.cpp
+@@ -262,6 +262,14 @@ HRESULT ExecutableAllocator::StaticInitialize(FatalErrorHandler fatalErrorHandle
+ 
+     g_fatalErrorHandler = fatalErrorHandler;
+     g_isWXorXEnabled = Configuration::GetKnobBooleanValue(W("System.Runtime.EnableWriteXorExecute"), CLRConfig::EXTERNAL_EnableWriteXorExecute);
++#if (defined(HOST_IOS) || defined(HOST_TVOS) || defined(HOST_MACCATALYST)) && defined(HOST_ARM64)
++    // Port17: Apple mobile JIT builds must not use W^X. pthread_jit_write_protect_np is
++    // not visible to dlsym on iOS, so the RX<->RW flip used by ExecutableWriterHolder
++    // cannot work; with a debugger-granted JIT allowance, plain RWX mappings are
++    // permitted, so disable W^X deterministically (host property / COMPlus knob
++    // plumbing was unreliable in this configuration).
++    g_isWXorXEnabled = false;
++#endif
+     g_instance = new (nothrow) ExecutableAllocator();
+     if (g_instance == NULL)
+     {
