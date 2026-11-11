@@ -1,0 +1,516 @@
+diff --git a/src/coreclr/clrdefinitions.cmake b/src/coreclr/clrdefinitions.cmake
+index 8584b8852dc..179dd18b2a1 100644
+--- a/src/coreclr/clrdefinitions.cmake
++++ b/src/coreclr/clrdefinitions.cmake
+@@ -236,7 +236,11 @@ if (FEATURE_CORECLR_FLUSH_INSTRUCTION_CACHE_TO_PROTECT_STUB_READS)
+   add_definitions(-DFEATURE_CORECLR_FLUSH_INSTRUCTION_CACHE_TO_PROTECT_STUB_READS)
+ endif()
+ 
+-if (CLR_CMAKE_TARGET_APPLE)
++# Port17: on Apple arm64 the thunk templates would be vm_remap'd out of the
++# loaded coreclr image, which is not viable on iOS 26 (and would bypass the
++# JIT arena). Precode/stub heaps use the classic reserve+commit path instead,
++# which is served by the arena-backed ExecutableAllocator.
++if (CLR_CMAKE_TARGET_APPLE AND NOT CLR_CMAKE_TARGET_ARCH_ARM64)
+  add_definitions(-DFEATURE_MAP_THUNKS_FROM_IMAGE)
+ endif()
+ 
+diff --git a/src/coreclr/inc/executableallocator.h b/src/coreclr/inc/executableallocator.h
+index 93c4758956f..ab981e695ba 100644
+--- a/src/coreclr/inc/executableallocator.h
++++ b/src/coreclr/inc/executableallocator.h
+@@ -301,16 +301,23 @@ class ExecutableWriterHolder
+     void Unmap()
+     {
+ #if defined(HOST_APPLE) && defined(HOST_ARM64) && !defined(DACCESS_COMPILE)
+-        if (m_addressRX != NULL)
++        if (!ExecutableAllocator::IsDoubleMappingEnabled())
+         {
+-            PAL_JitWriteProtect(false);
++            // Legacy fallback: MAP_JIT mapping toggled writable per thread
++            // (used when the arena backend is unavailable, e.g. hardened macOS).
++            if (m_addressRX != NULL)
++            {
++                PAL_JitWriteProtect(false);
++            }
+         }
+-#else
+-        if (m_addressRX != m_addressRW)
++        else
++#endif
+         {
+-            ExecutableAllocator::Instance()->UnmapRW((void*)m_addressRW);
++            if (m_addressRX != m_addressRW)
++            {
++                ExecutableAllocator::Instance()->UnmapRW((void*)m_addressRW);
++            }
+         }
+-#endif
+     }
+ 
+ public:
+@@ -337,11 +344,18 @@ public:
+     {
+         m_addressRX = addressRX;
+ #if defined(HOST_APPLE) && defined(HOST_ARM64)
+-        m_addressRW = addressRX;
+-        PAL_JitWriteProtect(true);
+-#else
+-        m_addressRW = (T *)ExecutableAllocator::Instance()->MapRW((void*)addressRX, size, cacheMapping);
++        if (!ExecutableAllocator::IsDoubleMappingEnabled())
++        {
++            // Legacy fallback: MAP_JIT mapping toggled writable per thread.
++            m_addressRW = addressRX;
++            PAL_JitWriteProtect(true);
++        }
++        else
+ #endif
++        {
++            // Arena backend: MapRW returns the RW alias of the RX view.
++            m_addressRW = (T *)ExecutableAllocator::Instance()->MapRW((void*)addressRX, size, cacheMapping);
++        }
+     }
+ 
+     ~ExecutableWriterHolder()
+diff --git a/src/coreclr/minipal/Unix/doublemapping.cpp b/src/coreclr/minipal/Unix/doublemapping.cpp
+index 997d7a523e8..306578af502 100644
+--- a/src/coreclr/minipal/Unix/doublemapping.cpp
++++ b/src/coreclr/minipal/Unix/doublemapping.cpp
+@@ -42,6 +42,9 @@
+ #ifdef TARGET_APPLE
+ 
+ #include <mach/mach.h>
++#if defined(TARGET_ARM64)
++#include <libkern/OSCacheControl.h> // sys_icache_invalidate
++#endif
+ 
+ #else // TARGET_APPLE
+ 
+@@ -53,6 +56,259 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
+ 
+ #endif // TARGET_APPLE
+ 
++#if defined(TARGET_APPLE) && defined(TARGET_ARM64)
++
++// ---------------------------------------------------------------------------
++// Port17 dual-JIT arena backend (iOS device / macOS CI).
++//
++// iOS does not export pthread_jit_write_protect_np, so a MAP_JIT mapping can
++// never be made writable in-process; on iOS 26+ the kernel additionally
++// refuses to execute self-created RWX mappings even when mmap succeeds.
++// Debugger-granted JIT (StikDebug) works in two steps:
++//   1. while the process is CS_DEBUGGED, a debugserver launch script
++//      (rw17-jit.js) allocates one fixed-size RX arena through the private
++//      "_M<size>,rx" packet, touches every page, and stamps a handshake
++//      header (magic + pid) at offset 0;
++//   2. this backend scans the VM regions for that arena, verifies the
++//      handshake, and creates two aliases of the whole capacity via vm_remap:
++//      an RX view for execution and an RW view for writing. Aliases of
++//      debugger-created pages are not subject to the W^X provenance check.
++// When no arena is found (macOS, a seeded CI arena is still found by scan, or
++// devices where plain RWX execution is permitted) the backend falls back to a
++// self-allocated RWX arena with the same execution probe. If nothing is
++// usable it returns false and the allocator degrades to the legacy path.
++// ---------------------------------------------------------------------------
++
++static const char s_rw17ArenaMagic[16] = "RW17-JIT-ARENA1!";
++static const size_t Rw17ArenaCapacity = 0x6000000;  // 96 MiB; keep in sync with rw17-jit.js
++static const size_t Rw17ArenaHeaderSize = 0x4000;   // page 0 holds the handshake header
++static const size_t Rw17ArenaPageSize = 0x4000;     // arm64 Apple device page size
++
++struct Rw17ArenaMapper
++{
++    uint8_t* rxBase;        // execution view
++    uint8_t* rwBase;        // write view; == rxBase in single-mapping mode
++    size_t capacity;
++    bool singleMapping;     // self-allocated RWX arena: no aliases
++};
++
++static Rw17ArenaMapper* s_rw17Mapper = NULL;
++
++#define RW17_LOG(...) do { fprintf(stderr, "[rw17-arena] " __VA_ARGS__); } while (0)
++
++// Read the 20-byte handshake header (magic + pid) at the start of a region.
++static bool Rw17ReadArenaHeader(void* regionStart, uint32_t* pPid)
++{
++    const size_t headerSize = sizeof(s_rw17ArenaMagic) + sizeof(uint32_t);
++    uint8_t buffer[sizeof(s_rw17ArenaMagic) + sizeof(uint32_t)];
++    vm_size_t bytesRead = 0;
++    kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t)regionStart, headerSize,
++                                         (vm_address_t)buffer, &bytesRead);
++    if (kr != KERN_SUCCESS || bytesRead != headerSize)
++    {
++        return false;
++    }
++    if (memcmp(buffer, s_rw17ArenaMagic, sizeof(s_rw17ArenaMagic)) != 0)
++    {
++        return false;
++    }
++    uint32_t pid;
++    memcpy(&pid, buffer + sizeof(s_rw17ArenaMagic), sizeof(pid));
++    *pPid = pid;
++    return true;
++}
++
++// Walk the VM regions and return the RX arena stamped by the launch script.
++static void* Rw17FindArena()
++{
++    mach_port_t task = mach_task_self();
++    const uint32_t pid = getpid();
++    vm_address_t address = 0;
++    for (;;)
++    {
++        // <mach/mach_vm.h> is blocked in the iOS SDK; vm_region_64 is the same facility.
++        vm_region_basic_info_data_64_t info;
++        mach_msg_type_number_t infoCount = VM_REGION_BASIC_INFO_COUNT_64;
++        mach_port_t objectName = MACH_PORT_NULL;
++        vm_size_t regionSize = 0;
++        kern_return_t kr = vm_region_64(task, &address, &regionSize, VM_REGION_BASIC_INFO_64,
++                                        (vm_region_info_t)&info, &infoCount, &objectName);
++        if (kr != KERN_SUCCESS || regionSize == 0)
++        {
++            break;
++        }
++        if (objectName != MACH_PORT_NULL)
++        {
++            mach_port_deallocate(task, objectName);
++        }
++        if ((info.protection & VM_PROT_EXECUTE) && !(info.protection & VM_PROT_WRITE) &&
++            regionSize >= Rw17ArenaCapacity)
++        {
++            uint32_t pidInHeader = 0;
++            if (Rw17ReadArenaHeader((void*)address, &pidInHeader))
++            {
++                if (pidInHeader == pid)
++                {
++                    RW17_LOG("arena found at %p (%llu bytes, pid %u)\n",
++                             (void*)address, (unsigned long long)regionSize, pidInHeader);
++                    return (void*)address;
++                }
++                RW17_LOG("arena header pid %u does not match this process (%u); skipping\n",
++                         pidInHeader, pid);
++            }
++        }
++        vm_address_t next = address + regionSize;
++        if (next <= address)
++        {
++            break; // wrapped around the address space
++        }
++        address = next;
++    }
++    return NULL;
++}
++
++// Verify the (rw, rx) view pair executes self-written code: two instruction
++// writes through the RW view, each flushed on both views, each called via RX.
++static bool Rw17ProbeExecute(uint8_t* rxView, uint8_t* rwView)
++{
++    const uint32_t kGadget42[2] = { 0x52800540u, 0xD65F03C0u }; // movz w0, #42 ; ret
++    const uint32_t kGadget43Word = 0x52800560u;                 // movz w0, #43
++
++    memcpy(rwView, kGadget42, sizeof(kGadget42));
++    sys_icache_invalidate(rwView, sizeof(kGadget42));
++    sys_icache_invalidate(rxView, sizeof(kGadget42));
++
++    int32_t (*probe)(void) = (int32_t (*)(void))rxView;
++    if (probe() != 42)
++    {
++        return false;
++    }
++
++    memcpy(rwView, &kGadget43Word, sizeof(kGadget43Word));
++    sys_icache_invalidate(rwView, sizeof(kGadget43Word));
++    sys_icache_invalidate(rxView, sizeof(kGadget43Word));
++    return probe() == 43;
++}
++
++// Create an RW alias of [source, source+size) via vm_remap (the aliasing of
++// debugger-created pages bypasses the W^X provenance check that blocks a
++// direct mprotect of the arena itself).
++static uint8_t* Rw17MapAliasRW(void* source, size_t size)
++{
++    vm_address_t alias = 0;
++    vm_prot_t curProtection, maxProtection;
++    kern_return_t kr = vm_remap(mach_task_self(), &alias, size, 0, VM_FLAGS_ANYWHERE,
++                                mach_task_self(), (vm_address_t)source, FALSE,
++                                &curProtection, &maxProtection, VM_INHERIT_NONE);
++    if (kr != KERN_SUCCESS)
++    {
++        return NULL;
++    }
++    if (mprotect((void*)alias, size, PROT_READ | PROT_WRITE) == -1)
++    {
++        vm_deallocate(mach_task_self(), alias, size);
++        return NULL;
++    }
++    return (uint8_t*)alias;
++}
++
++static bool Rw17CreateArenaMapper(void** pHandle, size_t* pMaxExecutableCodeSize)
++{
++    Rw17ArenaMapper* mapper = (Rw17ArenaMapper*)calloc(1, sizeof(Rw17ArenaMapper));
++    if (mapper == NULL)
++    {
++        return false;
++    }
++
++    void* arena = Rw17FindArena();
++    if (arena != NULL)
++    {
++        uint8_t* rwAlias = Rw17MapAliasRW(arena, Rw17ArenaCapacity);
++        if (rwAlias == NULL)
++        {
++            RW17_LOG("RW alias of the arena failed; falling back to a self-allocated arena\n");
++        }
++        else
++        {
++            vm_address_t rxAlias = 0;
++            vm_prot_t curProtection, maxProtection;
++            kern_return_t kr = vm_remap(mach_task_self(), &rxAlias, Rw17ArenaCapacity, 0, VM_FLAGS_ANYWHERE,
++                                        mach_task_self(), (vm_address_t)arena, FALSE,
++                                        &curProtection, &maxProtection, VM_INHERIT_NONE);
++            if (kr != KERN_SUCCESS)
++            {
++                RW17_LOG("RX alias vm_remap failed (kr=%d); falling back to a self-allocated arena\n", kr);
++                munmap(rwAlias, Rw17ArenaCapacity);
++            }
++            else
++            {
++                if (mprotect((void*)rxAlias, Rw17ArenaCapacity, PROT_READ | PROT_EXEC) == -1)
++                {
++                    // The remap normally inherits the source RX protection already.
++                    RW17_LOG("mprotect(RX alias, R|X) failed (errno=%d); continuing with inherited protection\n", errno);
++                }
++
++                mapper->rxBase = (uint8_t*)rxAlias;
++                mapper->rwBase = rwAlias;
++                mapper->singleMapping = false;
++
++                // Probe code writes through the RW view, then the RX->RW->RX
++                // commit flip that loader-heap data pages depend on.
++                if (Rw17ProbeExecute(mapper->rxBase + Rw17ArenaHeaderSize, mapper->rwBase + Rw17ArenaHeaderSize) &&
++                    mprotect(mapper->rxBase + Rw17ArenaHeaderSize, Rw17ArenaPageSize, PROT_READ | PROT_WRITE) == 0 &&
++                    mprotect(mapper->rxBase + Rw17ArenaHeaderSize, Rw17ArenaPageSize, PROT_READ | PROT_EXEC) == 0)
++                {
++                    RW17_LOG("arena adopted: rx=%p rw=%p capacity=%zu (debugger-granted)\n",
++                             (void*)mapper->rxBase, (void*)mapper->rwBase, Rw17ArenaCapacity);
++                    s_rw17Mapper = mapper;
++                    *pHandle = mapper;
++                    *pMaxExecutableCodeSize = Rw17ArenaCapacity - Rw17ArenaHeaderSize;
++                    return true;
++                }
++
++                RW17_LOG("arena views failed the execution/commit probes; falling back\n");
++                munmap((void*)rxAlias, Rw17ArenaCapacity);
++                munmap(rwAlias, Rw17ArenaCapacity);
++                mapper->rxBase = NULL;
++                mapper->rwBase = NULL;
++            }
++        }
++    }
++    else
++    {
++        RW17_LOG("no pre-allocated arena found - run the rw17-jit.js StikDebug launch script first\n");
++    }
++
++    // Fallback: one self-allocated RWX arena. Works on macOS hosts and on
++    // debugger-attached devices whose kernel executes self-written code.
++    void* self = mmap(NULL, Rw17ArenaCapacity, PROT_READ | PROT_WRITE | PROT_EXEC,
++                      MAP_ANON | MAP_PRIVATE, -1, 0);
++    if (self == MAP_FAILED)
++    {
++        RW17_LOG("cannot allocate a plain RWX arena (errno=%d); no usable JIT memory\n", errno);
++        free(mapper);
++        return false;
++    }
++
++    mapper->rxBase = mapper->rwBase = (uint8_t*)self;
++    mapper->singleMapping = true;
++    if (!Rw17ProbeExecute(mapper->rxBase + Rw17ArenaHeaderSize, mapper->rwBase + Rw17ArenaHeaderSize))
++    {
++        RW17_LOG("self-allocated RWX arena does not execute code (code signing?); no usable JIT memory\n");
++        munmap(self, Rw17ArenaCapacity);
++        free(mapper);
++        return false;
++    }
++
++    RW17_LOG("self-allocated RWX arena at %p (single-mapping mode)\n", self);
++    s_rw17Mapper = mapper;
++    *pHandle = mapper;
++    *pMaxExecutableCodeSize = Rw17ArenaCapacity - Rw17ArenaHeaderSize;
++    return true;
++}
++
++#endif // TARGET_APPLE && TARGET_ARM64
++
+ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecutableCodeSize)
+ {
+     if (minipal_detect_rosetta())
+@@ -146,8 +402,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
+     *pHandle = (void*)(size_t)fd;
+ #else // !TARGET_APPLE
+ 
++#if defined(TARGET_ARM64)
++    if (!Rw17CreateArenaMapper(pHandle, pMaxExecutableCodeSize))
++    {
++        return false;
++    }
++#else
+     *pMaxExecutableCodeSize = SIZE_MAX;
+     *pHandle = NULL;
++#endif
+ #endif // !TARGET_APPLE
+ 
+     return true;
+@@ -157,6 +420,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
+ {
+ #ifndef TARGET_APPLE
+     close((int)(size_t)mapperHandle);
++#else
++#if defined(TARGET_ARM64)
++    // The arena aliases are intentionally left mapped; process teardown reclaims them.
++    free(mapperHandle);
++#endif
+ #endif
+ }
+ 
+@@ -197,6 +465,23 @@ bool IsMapJitFlagNeeded()
+ 
+ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offset, size_t size, const void *rangeStart, const void* rangeEnd)
+ {
++#if defined(TARGET_APPLE) && defined(TARGET_ARM64)
++    // Arena mode: offsets live in the adopted (or self-allocated) arena; the
++    // page-0 handshake header is skipped, so addresses are base + header + offset.
++    // No OS calls are involved - the aliases were created once at adoption.
++    Rw17ArenaMapper* mapper = (Rw17ArenaMapper*)mapperHandle;
++    uint8_t* addr = (mapper != NULL ? mapper->rxBase : NULL) + Rw17ArenaHeaderSize + offset;
++    if ((rangeStart != NULL || rangeEnd != NULL) &&
++        ((uintptr_t)addr < (uintptr_t)rangeStart || (uintptr_t)(addr + size) > (uintptr_t)rangeEnd))
++    {
++        // Jump-stub windows are computed around existing code heaps. Since all
++        // JIT code lives in one 96 MiB arena, arm64's ±128 MiB direct branch
++        // range still holds; grant the allocation but say so.
++        RW17_LOG("range-restricted reserve at %p (%zu bytes) outside [%p, %p) - granting anyway\n",
++                 (void*)addr, size, rangeStart, rangeEnd);
++    }
++    return addr;
++#else
+     int fd = (int)(size_t)mapperHandle;
+ 
+     bool isUnlimitedRange = (rangeStart == NULL) && (rangeEnd == NULL);
+@@ -246,20 +531,49 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
+         result = NULL;
+     }
+     return result;
++#endif // TARGET_ARM64
+ }
+ 
+ void *VMToOSInterface::CommitDoubleMappedMemory(void* pStart, size_t size, bool isExecutable)
+ {
++#if defined(TARGET_APPLE) && defined(TARGET_ARM64)
++    // Arena mode: the execution view flips between RX (code pages) and RW
++    // (loader-heap data pages that must stay near the code). Single-mapping
++    // mode keeps code pages RWX so writes through the shared view keep working.
++    int protection;
++    if (s_rw17Mapper != NULL && s_rw17Mapper->singleMapping)
++    {
++        protection = isExecutable ? (PROT_READ | PROT_WRITE | PROT_EXEC) : (PROT_READ | PROT_WRITE);
++    }
++    else
++    {
++        protection = isExecutable ? (PROT_READ | PROT_EXEC) : (PROT_READ | PROT_WRITE);
++    }
++    if (mprotect(pStart, size, protection) == -1)
++    {
++        RW17_LOG("commit flip of %p (%llu bytes, %s) failed (errno=%d)\n",
++                 pStart, (unsigned long long)size, isExecutable ? "rx" : "rw", errno);
++        return NULL;
++    }
++
++    return pStart;
++#else
+     if (mprotect(pStart, size, isExecutable ? (PROT_READ | PROT_EXEC) : (PROT_READ | PROT_WRITE)) == -1)
+     {
+         return NULL;
+     }
+ 
+     return pStart;
++#endif // TARGET_ARM64
+ }
+ 
+ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart, size_t offset, size_t size)
+ {
++#if defined(TARGET_APPLE) && defined(TARGET_ARM64)
++    // Arena pages are shared aliases; keep them mapped (offsets are reused
++    // without zeroing, which is fine for JIT scratch code).
++    return true;
++#else
+ #ifndef TARGET_APPLE
+     int fd = (int)(size_t)mapperHandle;
+     if (mmap(pStart, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, offset) == MAP_FAILED)
+@@ -269,6 +583,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
+     memset(pStart, 0, size);
+ #endif // TARGET_APPLE
+     return munmap(pStart, size) != -1;
++#endif // TARGET_ARM64
+ }
+ 
+ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t offset, size_t size)
+@@ -302,16 +617,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
+ 
+     return (void*)startRW;
+ #else // TARGET_AMD64
+-    // This method should not be called on OSX ARM64
+-    assert(false);
+-    return NULL;
++    // Arena backend: the RW view is one whole-capacity alias created at
++    // adoption time; individual mappings are plain address translations.
++    Rw17ArenaMapper* mapper = (Rw17ArenaMapper*)mapperHandle;
++    if (mapper == NULL)
++    {
++        return NULL;
++    }
++    return mapper->rwBase + Rw17ArenaHeaderSize + offset;
+ #endif // TARGET_AMD64
+ #endif // TARGET_APPLE
+ }
+ 
+ bool VMToOSInterface::ReleaseRWMapping(void* pStart, size_t size)
+ {
++#if defined(TARGET_APPLE) && defined(TARGET_ARM64)
++    // The RW view is one permanent alias; individual mappings are not unmapped.
++    return true;
++#else
+     return munmap(pStart, size) != -1;
++#endif
+ }
+ 
+ #ifndef TARGET_APPLE
+diff --git a/src/coreclr/utilcode/executableallocator.cpp b/src/coreclr/utilcode/executableallocator.cpp
+index f982fa1f940..a176db2c566 100644
+--- a/src/coreclr/utilcode/executableallocator.cpp
++++ b/src/coreclr/utilcode/executableallocator.cpp
+@@ -124,7 +124,7 @@ bool ExecutableAllocator::IsDoubleMappingEnabled()
+ {
+     LIMITED_METHOD_CONTRACT;
+ 
+-#if defined(HOST_APPLE) && defined(HOST_ARM64) || defined(HOST_WASM)
++#if defined(HOST_WASM)
+     return false;
+ #else
+     return g_isWXorXEnabled;
+@@ -262,6 +262,14 @@ HRESULT ExecutableAllocator::StaticInitialize(FatalErrorHandler fatalErrorHandle
+ 
+     g_fatalErrorHandler = fatalErrorHandler;
+     g_isWXorXEnabled = Configuration::GetKnobBooleanValue(W("System.Runtime.EnableWriteXorExecute"), CLRConfig::EXTERNAL_EnableWriteXorExecute);
++#if defined(HOST_APPLE) && defined(HOST_ARM64)
++    // Port17: on Apple arm64 the legacy path (MAP_JIT + pthread_jit_write_protect_np)
++    // can never write JIT code on iOS (the toggle is not exported), and iOS 26
++    // refuses to execute self-created RWX mappings. Force the double-mapped
++    // arena backend on; its probes (minipal/Unix/doublemapping.cpp) degrade
++    // gracefully and restore the legacy path when nothing is usable.
++    g_isWXorXEnabled = true;
++#endif
+     g_instance = new (nothrow) ExecutableAllocator();
+     if (g_instance == NULL)
+     {

@@ -10,9 +10,18 @@ PIN="$(head -n1 "$ROOT/runtime-pin.txt" | tr -d '[:space:]')"
 SRC="$ROOT/runtime-src"
 CLROS="ios"
 OUTDIR_NOTE=""
+BIN_MATCH="*ios*arm64*release*"
 if [ "${1:-}" = "--sim" ]; then
     CLROS="iossimulator"   # 模拟器目标：二进制可直接在 macOS 宿主上原生跑（调试用）
     OUTDIR_NOTE="（simulator）"
+    BIN_MATCH="*iossimulator*arm64*release*"
+elif [ "${1:-}" = "--osx" ]; then
+    # macOS 原生变体：同 pin 同补丁，产物在 runner 上原生可跑。CI 里配
+    # RW17_SEED_ARENA=1 全链路验证竞技场后端（扫描/别名/探针/Commit 翻转），
+    # 补 sim 变体测不了 JIT 的缺口。
+    CLROS="osx"
+    OUTDIR_NOTE="（osx 原生）"
+    BIN_MATCH="*osx*arm64*release*"
 fi
 
 echo "runtime pin: $PIN"
@@ -48,4 +57,4 @@ done
     --dynamiccodecompiled true \
     -cmakeargs "-DFEATURE_INTERPRETER=0"
 
-echo "build done ${OUTDIR_NOTE}: $(find artifacts/bin/coreclr -maxdepth 1 -type d -iname '*ios*arm64*release*')"
+echo "build done ${OUTDIR_NOTE}: $(find artifacts/bin/coreclr -maxdepth 1 -type d -iname "$BIN_MATCH")"

@@ -11,14 +11,21 @@ set -uo pipefail   # 不用 -e：单段失败不应毁掉整个收集
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/runtime-src"
 OUT="$ROOT/runtime-out"
-if [ "${1:-}" = "--sim" ]; then OUT="$ROOT/runtime-out-sim"; fi
+BIN_MATCH="*ios*arm64*release*"
+if [ "${1:-}" = "--sim" ]; then
+    OUT="$ROOT/runtime-out-sim"
+    BIN_MATCH="*iossimulator*arm64*release*"
+elif [ "${1:-}" = "--osx" ]; then
+    OUT="$ROOT/runtime-out-osx"
+    BIN_MATCH="*osx*arm64*release*"
+fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT/managed"
 
-CORECLR_BIN="$(find "$SRC/artifacts/bin/coreclr" -maxdepth 1 -type d -iname '*ios*arm64*release*' | head -n1)"
+CORECLR_BIN="$(find "$SRC/artifacts/bin/coreclr" -maxdepth 1 -type d -iname "$BIN_MATCH" | head -n1)"
 if [ -z "$CORECLR_BIN" ]; then
-    echo "::warning::找不到 coreclr 的 iOS arm64 Release 输出目录"
+    echo "::warning::找不到 coreclr 的目标 arm64 Release 输出目录（$BIN_MATCH）"
 else
     cp "$CORECLR_BIN"/*.dylib "$OUT"/ || echo "::warning::dylib 复制不完整"
     # CoreLib 的 IL 输出在 coreclr 输出目录的 IL/ 子目录里

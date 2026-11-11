@@ -31,7 +31,8 @@ jobs:
         run: |
           PIN="$(head -n1 runtime-pin.txt | tr -d '[:space:]')"
           echo "pin=$PIN" >> "$GITHUB_OUTPUT"
-          echo "key=runtime-sim-arm64-$PIN-c1" >> "$GITHUB_OUTPUT"
+          # c2 = 双JIT竞技场补丁（替换 jit-write-protect-ios.patch，随补丁缓存键 c5 一同升位）
+          echo "key=runtime-sim-arm64-$PIN-c2" >> "$GITHUB_OUTPUT"
 
       - name: 查缓存
         id: cache
@@ -92,19 +93,19 @@ jobs:
           UDID=$(xcrun simctl list devices available | grep -oE "[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}" | head -n1)
           echo "模拟器设备：$UDID"
           xcrun simctl bootstatus "$UDID" -b
-          echo "==== 变体 A：默认（W^X 开）===="
-          SIMCTL_CHILD_HELLO_OUT="$PWD/bundle-sim/hello-A.log" xcrun simctl spawn "$UDID" "$PWD/macprobe-sim" "$PWD/bundle-sim" A
-          echo "A exit=$?"
-          echo "==== 变体 B：属性 EnableWriteXorExecute=0 ===="
-          SIMCTL_CHILD_HELLO_OUT="$PWD/bundle-sim/hello-B.log" xcrun simctl spawn "$UDID" "$PWD/macprobe-sim" "$PWD/bundle-sim" B
-          echo "B exit=$?"
-          echo "==== 变体 C：环境变量 COMPlus_EnableWriteXorExecute=0（SIMCTL_CHILD 注入）===="
-          SIMCTL_CHILD_COMPlus_EnableWriteXorExecute=0 SIMCTL_CHILD_HELLO_OUT="$PWD/bundle-sim/hello-A.log" xcrun simctl spawn "$UDID" "$PWD/macprobe-sim" "$PWD/bundle-sim" A
-          echo "C exit=$?"
+          echo "==== 默认变体（预期：simctl spawn 双拒 RWX/MAP_JIT → 竞技场后端干净降级，不再 SIGBUS）===="
+          SIMCTL_CHILD_HELLO_OUT="$PWD/bundle-sim/hello-A.log" xcrun simctl spawn "$UDID" "$PWD/macprobe-sim" "$PWD/bundle-sim"
+          echo "exit=$?"
           echo "---- hello.log ----"
-          cat bundle-sim/hello-C.log 2>/dev/null || echo "（无 hello-C.log）"
-          echo "---- lldb 诊断（变体 A 崩溃现场）----"
-          lldb -b             -o run             -k "thread backtrace 8"             -k "memory region \$_siginfo._si_addr"             -k "expr -- (int)g_isWXorXEnabled"             -k "expr -- (void*)dlsym(0, \"pthread_jit_write_protect_np\")"             -k "image lookup -rn PAL_JitWriteProtect"             -k quit             ./macprobe-sim "$PWD/bundle-sim" A 2>&1 | tail -80 || true
+          cat bundle-sim/hello-A.log 2>/dev/null || echo "（无 hello-A.log）"
+          echo "---- lldb 诊断（崩溃现场）----"
+          lldb -b \
+            -o run \
+            -k "thread backtrace 8" \
+            -k "memory region \$_siginfo._si_addr" \
+            -k "expr -- (int)g_isWXorXEnabled" \
+            -k quit \
+            ./macprobe-sim "$PWD/bundle-sim" 2>&1 | tail -80 || true
           exit 0
 
   debug:
@@ -167,3 +168,87 @@ jobs:
             ./macprobe "$PWD/bundle10" flat 2>&1 || true
           echo "---- hello.log（探针进度）----"
           cat bundle10/hello.log 2>/dev/null || echo "（无）"
+
+  # osx 原生变体：同 pin 同补丁（-os osx），产物在 runner 上原生可跑。
+  # simctl spawn 的 sim 进程双拒 RWX/MAP_JIT 测不了 JIT，官方 osx 包对照组又不跑
+  # 我们改过的 dylib——这是唯一能在 CI 全链路验证竞技场后端的环：
+  #   运行 1（不种子）：无竞技场 → 后备自建 RWX 竞技场（single-mapping 模式）
+  #   运行 2（种子）：宿主伪造 96MiB RX 竞技场 → 扫描/握手/别名/探针/Commit 翻转全链路
+  osx-arena:
+    runs-on: macos-15
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 计算 pin 与缓存键
+        id: key
+        run: |
+          PIN="$(head -n1 runtime-pin.txt | tr -d '[:space:]')"
+          echo "pin=$PIN" >> "$GITHUB_OUTPUT"
+          echo "key=runtime-osx-arm64-$PIN-c1" >> "$GITHUB_OUTPUT"
+
+      - name: 查缓存
+        id: cache
+        uses: actions/cache@v4
+        with:
+          key: ${{ steps.key.outputs.key }}
+          path: runtime-out-osx
+          lookup-only: true
+
+      - name: 恢复缓存
+        if: steps.cache.outputs.cache-hit == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          key: ${{ steps.key.outputs.key }}
+          path: runtime-out-osx
+
+      - name: 清理磁盘
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -rf /usr/local/lib/android ~/Library/Android || true
+          df -h /
+
+      - name: 构建 osx 原生版 CoreCLR + BCL（JIT，带竞技场补丁）
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          ./scripts/build-runtime.sh --osx
+          ./scripts/collect-runtime.sh --osx
+
+      - name: 保存缓存
+        if: steps.cache.outputs.cache-hit != 'true' && success()
+        uses: actions/cache/save@v4
+        with:
+          key: ${{ steps.key.outputs.key }}
+          path: runtime-out-osx
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 组装并运行（后备模式 + 种子竞技场模式）
+        run: |
+          dotnet build probe/hello/hello.csproj -c Release -o probe/build/hello-out
+          mkdir -p bundle-osx
+          cp runtime-out-osx/*.dylib bundle-osx/
+          cp runtime-out-osx/managed/*.dll bundle-osx/
+          cp probe/build/hello-out/Hello.dll bundle-osx/
+          cp probe/build/hello-out/Hello.runtimeconfig.json bundle-osx/
+          ls bundle-osx | wc -l
+          clang -arch arm64 -I probe/app -Wl,-rpath,@executable_path \
+            probe/debug/debug-main.c probe/app/host.c \
+            -o macprobe-osx
+          set +e
+          echo "==== 运行 1：后备模式（无竞技场 → 自建 RWX）===="
+          HELLO_OUT="$PWD/bundle-osx/hello-fallback.log" ./macprobe-osx "$PWD/bundle-osx"
+          echo "fallback exit=$?"
+          echo "==== 运行 2：种子竞技场模式（扫描命中 → RX/RW 别名）===="
+          RW17_SEED_ARENA=1 HELLO_OUT="$PWD/bundle-osx/hello-arena.log" ./macprobe-osx "$PWD/bundle-osx"
+          echo "arena exit=$?"
+          echo "---- lldb 诊断（运行 2 崩溃现场，若有）----"
+          RW17_SEED_ARENA=1 lldb -b \
+            -o run \
+            -k "thread backtrace 8" \
+            -k "memory region \$_siginfo._si_addr" \
+            -k quit \
+            ./macprobe-osx "$PWD/bundle-osx" 2>&1 | tail -60 || true
+          exit 0

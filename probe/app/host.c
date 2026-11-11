@@ -182,17 +182,21 @@ int run_probe(const char *bundle_dir)
             }
         }
         void *wprot = dlsym(RTLD_DEFAULT, "pthread_jit_write_protect_np");
-        snprintf(buf, sizeof(buf), "写保护开关符号：%s",
-                 wprot != NULL ? "找到" : "未找到（补丁需改弱引用声明）");
+        snprintf(buf, sizeof(buf), "写保护开关符号：%s（竞技场方案下仅作诊断）",
+                 wprot != NULL ? "找到" : "未找到（iOS 正常现象）");
         host_log(buf);
+        host_log("提示：先在 StikDebug 运行 rw17-jit.js 预分配 JIT 竞技场，再打开本应用");
     }
 
     // 正式属性组（对照安卓版 host.c 与官方 ios 运行时包布局）：
     // libSystem.Native 等类库原生 dylib 在 bundle 根目录，原生搜索目录指向那里，
     // 类库按名字 dlopen 失败后会用这里给的路径按全路径重试。
-    // EnableWriteXorExecute=0：iOS 上 pthread_jit_write_protect_np 对 dlsym 不可见，
-    // W^X 翻页开关无从生效 → 关掉 W^X，JIT 走直连 RWX 单一映射（attach 授权下可映射、可写、可执行）。
-    const char *keys[8] = {
+    // JIT 内存由 runtime 补丁（patches/dualjit-arena.patch）里的竞技场后端接管：
+    // 先在 StikDebug 运行 probe/stikdebug/rw17-jit.js 预分配 RX 竞技场，
+    // 运行时扫描命中后走 vm_remap RX/RW 双视图；未命中时运行时自建 RWX 后备。
+    // 注：System.Runtime.EnableWriteXorExecute 在 Apple arm64 上是死配置
+    //（IsDoubleMappingEnabled/IsWXORXEnabled 曾硬编码），不再设置。
+    const char *keys[7] = {
         "TRUSTED_PLATFORM_ASSEMBLIES",
         "APP_PATHS",
         "APP_NI_PATHS",
@@ -200,17 +204,16 @@ int run_probe(const char *bundle_dir)
         "APP_CONTEXT_BASE_DIRECTORY",
         "RUNTIME_IDENTIFIER",
         "STARTUP_HOOKS",
-        "System.Runtime.EnableWriteXorExecute",
     };
-    const char *values[8] = {tpa, managed_dir, managed_dir, (char *)bundle_dir,
-                             (char *)bundle_dir, "ios-arm64", "", "0"};
+    const char *values[7] = {tpa, managed_dir, managed_dir, (char *)bundle_dir,
+                             (char *)bundle_dir, "ios-arm64", ""};
 
     host_log("初始化 CoreCLR…");
     void *host = NULL;
     unsigned int domain = 0;
     // exePath 契约 = 原生宿主可执行文件路径（hostpolicy 传 host_path，不是托管 dll）
     char *host_exec = path_join(bundle_dir, "Port17Probe");
-    int hr = init(host_exec, "Port17Probe", 8, keys, values, &host, &domain);
+    int hr = init(host_exec, "Port17Probe", 7, keys, values, &host, &domain);
     if (hr != 0) {
         char buf[64];
         snprintf(buf, sizeof(buf), "coreclr_initialize 失败：0x%08x", hr);
