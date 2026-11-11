@@ -161,8 +161,8 @@ static const void *rw17_find_arena(void)
 // 循环在 iOS 挂起/恢复之间来回没有副作用，用户随时可以切去 StikDebug 跑脚本。
 static void wait_for_rw17_arena(void)
 {
-    const int kTimeoutSec = 120;
-    host_log("等待 JIT 竞技场就绪（rw17-jit.js 页扫写需数秒；可现在切去 StikDebug 运行）…");
+    const int kTimeoutSec = 600;
+    host_log("等待 JIT 竞技场就绪（rw17-jit.js 页扫写约需 90 秒；可现在切去 StikDebug 运行）…");
     for (int waited = 0; waited <= kTimeoutSec; waited++) {
         if (rw17_find_arena() != NULL) {
             char buf[96];
@@ -180,7 +180,7 @@ static void wait_for_rw17_arena(void)
             host_log(buf);
         }
     }
-    host_log("等待超时（120 秒）未见到竞技场——rw17-jit.js 未运行或未成功；仍继续初始化（预期失败）");
+    host_log("等待超时（600 秒）未见到竞技场——rw17-jit.js 未运行、未完成或挂到了别的进程；仍继续初始化（预期失败）");
 }
 
 // 把 stderr 强制落盘并逐行读回屏幕日志。Darwin libc 里 freopen 后的 stderr 是

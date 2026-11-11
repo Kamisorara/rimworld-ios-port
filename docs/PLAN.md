@@ -22,7 +22,7 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 **产出**：可下载的 `port17probe.ipa`。
 **真机 JIT 流程（2026-11-11 起）**：
 1. SideStore 安装 IPA（自签带 `get-task-allow`）；
-2. StikDebug：启用 JIT（debugserver attach）并启动探针 app——app 自动等待竞技场（最长 120 秒，超时给出明确日志）；
+2. StikDebug：启用 JIT（debugserver attach）并启动探针 app——app 自动等待竞技场（最长 600 秒，超时给出明确日志）；
 3. StikDebug 运行脚本 `probe/stikdebug/rw17-jit.js`（128MiB RX 竞技场 + 魔数握手，逐页验证约需数秒）——脚本完成瞬间 app 自动继续；
 4. 日志期待链：`JIT 竞技场已就绪` → `arena found at …` → `arena adopted: rx=… rw=…` → `CoreCLR 就绪` → `JIT 生效` → `exit 42`。
 
