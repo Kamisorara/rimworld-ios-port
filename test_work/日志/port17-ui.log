@@ -1,79 +1,94 @@
-==== main 进入 ====
-UIApplicationMain 开始
-viewDidLoad
-viewDidAppear
-==== Port17 iOS 探针 ====
-注意：不经过 StikDebug 开 JIT，JIT 探针应报“疑似解释器”
-TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
-CoreLib dll：存在
-CoreLib 原生 dylib：存在
-初始化 CoreCLR…
-==== main 进入 ====
-UIApplicationMain 开始
-viewDidLoad
-viewDidAppear
-==== Port17 iOS 探针 ====
-注意：不经过 StikDebug 开 JIT，JIT 探针应报“疑似解释器”
-TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
-CoreLib dll：存在
-CoreLib 原生 dylib：存在
-初始化 CoreCLR…
-==== main 进入 ====
-UIApplicationMain 开始
-viewDidLoad
-viewDidAppear
-==== Port17 iOS 探针 ====
-注意：不经过 StikDebug 开 JIT，JIT 探针应报“疑似解释器”
-TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
-CoreLib dll：存在
-CoreLib 原生 dylib：存在
-初始化 CoreCLR…
-==== main 进入 ====
-UIApplicationMain 开始
-viewDidLoad
-viewDidAppear
-==== Port17 iOS 探针 ====
-JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉
-创建 probe 线程
-probe 线程启动（16MB 栈）
-TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
-CoreLib dll：存在
-CoreLib 原生 dylib：存在
-初始化 CoreCLR…
-==== main 进入 ====
-UIApplicationMain 开始
-viewDidLoad
-viewDidAppear
-==== Port17 iOS 探针 ====
-JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉
-创建 probe 线程
-probe 线程启动（16MB 栈）
-TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
-CoreLib dll：存在
-CoreLib 原生 dylib：存在
-初始化 CoreCLR…
-收到信号 10（SIGSEGV=11, SIGBUS=10, SIGABR
-==== main 进入 ====
-UIApplicationMain 开始
-viewDidLoad
-viewDidAppear
-==== Port17 iOS 探针 ====
-JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉
-创建 probe 线程
-probe 线程启动（16MB 栈）
-TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
-CoreLib dll：存在
-CoreLib 原生 dylib：存在
-初始化 CoreCLR…
-==== main 进入 ====
-UIApplicationMain 开始
-viewDidLoad
-viewDidAppear
-==== Port17 iOS 探针 ====
-JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉
-创建 probe 线程
-probe 线程启动（16MB 栈）
-TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
-CoreLib dll：存在
-CoreLib 原生 dylib：存在
-初始化 CoreCLR…
+[18:40:00.987] ==== main 进入（新会话）====
+[18:40:00.988] UIApplicationMain 开始
+[18:40:01.004] viewDidLoad
+[18:40:01.017] viewDidAppear
+[18:40:01.018] ==== Port17 iOS 探针 ====
+[18:40:01.018] JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉
+[18:40:01.018] 创建 probe 线程
+[18:40:01.018] probe 线程启动（16MB 栈）
+[18:40:01.031] TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
+[18:40:01.031] CoreLib dll：存在
+[18:40:01.031] CoreLib 原生 dylib：存在
+[18:40:01.031] 授权探测：RWX 映射成功（attach 授权生效）
+[18:40:01.040] 写保护开关符号：未找到（iOS 正常现象）（竞技场方案下仅作诊断）
+[18:40:01.041] 提示：先在 StikDebug 运行 rw17-jit.js 预分配 JIT 竞技场，再打开本应用
+[18:40:01.041] 初始化 CoreCLR…
+[18:40:01.044] 收到信号 10（SIGSEGV=11, SIGBUS=10, SIGABRT=6, SIGTRAP=5, SIGILL=4），转系统写崩溃
+[18:40:28.424] ==== main 进入（新会话）====
+[18:40:28.425] UIApplicationMain 开始
+[18:40:28.442] viewDidLoad
+[18:40:28.456] viewDidAppear
+[18:40:28.456] ==== Port17 iOS 探针 ====
+[18:40:28.456] JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉
+[18:40:28.456] 创建 probe 线程
+[18:40:28.456] probe 线程启动（16MB 栈）
+[18:40:28.459] TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
+[18:40:28.459] CoreLib dll：存在
+[18:40:28.460] CoreLib 原生 dylib：存在
+[18:40:28.460] 授权探测：RWX 映射成功（attach 授权生效）
+[18:40:28.460] 写保护开关符号：未找到（iOS 正常现象）（竞技场方案下仅作诊断）
+[18:40:28.460] 提示：先在 StikDebug 运行 rw17-jit.js 预分配 JIT 竞技场，再打开本应用
+[18:40:28.460] 初始化 CoreCLR…
+[18:40:28.465] 收到信号 10（SIGSEGV=11, SIGBUS=10, SIGABRT=6, SIGTRAP=5, SIGILL=4），转系统写崩溃
+[18:41:31.967] ==== main 进入（新会话）====
+[18:41:31.968] UIApplicationMain 开始
+[18:41:31.983] viewDidLoad
+[18:41:32.001] viewDidAppear
+[18:41:32.001] ==== Port17 iOS 探针 ====
+[18:41:32.002] JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉
+[18:41:32.002] 创建 probe 线程
+[18:41:32.002] probe 线程启动（16MB 栈）
+[18:41:32.016] TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
+[18:41:32.016] CoreLib dll：存在
+[18:41:32.017] CoreLib 原生 dylib：存在
+[18:41:32.017] 授权探测：RWX 映射成功（attach 授权生效）
+[18:41:32.017] 写保护开关符号：未找到（iOS 正常现象）（竞技场方案下仅作诊断）
+[18:41:32.017] 提示：先在 StikDebug 运行 rw17-jit.js 预分配 JIT 竞技场，再打开本应用
+[18:41:32.017] 初始化 CoreCLR…
+[18:41:57.934] ==== main 进入（新会话）====
+[18:41:57.935] UIApplicationMain 开始
+[18:41:57.949] viewDidLoad
+[18:41:57.967] viewDidAppear
+[18:41:57.967] ==== Port17 iOS 探针 ====
+[18:41:57.967] JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉
+[18:41:57.968] 创建 probe 线程
+[18:41:57.968] probe 线程启动（16MB 栈）
+[18:41:57.970] TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
+[18:41:57.970] CoreLib dll：存在
+[18:41:57.971] CoreLib 原生 dylib：存在
+[18:41:57.971] 授权探测：RWX 映射成功（attach 授权生效）
+[18:41:57.971] 写保护开关符号：未找到（iOS 正常现象）（竞技场方案下仅作诊断）
+[18:41:57.971] 提示：先在 StikDebug 运行 rw17-jit.js 预分配 JIT 竞技场，再打开本应用
+[18:41:57.971] 初始化 CoreCLR…
+[18:43:46.181] ==== main 进入（新会话）====
+[18:43:46.182] UIApplicationMain 开始
+[18:43:46.196] viewDidLoad
+[18:43:46.212] viewDidAppear
+[18:43:46.212] ==== Port17 iOS 探针 ====
+[18:43:46.212] JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉
+[18:43:46.212] 创建 probe 线程
+[18:43:46.212] probe 线程启动（16MB 栈）
+[18:43:46.215] TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
+[18:43:46.215] CoreLib dll：存在
+[18:43:46.215] CoreLib 原生 dylib：存在
+[18:43:46.215] 授权探测：RWX 映射成功（attach 授权生效）
+[18:43:46.216] 写保护开关符号：未找到（iOS 正常现象）（竞技场方案下仅作诊断）
+[18:43:46.216] 提示：先在 StikDebug 运行 rw17-jit.js 预分配 JIT 竞技场，再打开本应用
+[18:43:46.216] 初始化 CoreCLR…
+[18:43:46.222] 收到信号 10（SIGSEGV=11, SIGBUS=10, SIGABRT=6, SIGTRAP=5, SIGILL=4），转系统写崩溃
+[18:44:13.216] ==== main 进入（新会话）====
+[18:44:13.218] UIApplicationMain 开始
+[18:44:13.234] viewDidLoad
+[18:44:13.247] viewDidAppear
+[18:44:13.247] ==== Port17 iOS 探针 ====
+[18:44:13.247] JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉
+[18:44:13.247] 创建 probe 线程
+[18:44:13.248] probe 线程启动（16MB 栈）
+[18:44:13.250] TPA 长度 50378，首 80 字符：/private/var/mobile/Containers/Data/Application/E9EA77F3-DCB1-4DDA-BD57-07D4D615
+[18:44:13.250] CoreLib dll：存在
+[18:44:13.251] CoreLib 原生 dylib：存在
+[18:44:13.251] 授权探测：RWX 映射成功（attach 授权生效）
+[18:44:13.251] 写保护开关符号：未找到（iOS 正常现象）（竞技场方案下仅作诊断）
+[18:44:13.251] 提示：先在 StikDebug 运行 rw17-jit.js 预分配 JIT 竞技场，再打开本应用
+[18:44:13.252] 初始化 CoreCLR…
+[18:44:13.257] 收到信号 10（SIGSEGV=11, SIGBUS=10, SIGABRT=6, SIGTRAP=5, SIGILL=4），转系统写崩溃

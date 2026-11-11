@@ -95,20 +95,22 @@ index 93c4758956f..4b34fb57be9 100644
  
      ~ExecutableWriterHolder()
 diff --git a/src/coreclr/minipal/Unix/doublemapping.cpp b/src/coreclr/minipal/Unix/doublemapping.cpp
-index 997d7a523e8..3529ef15e88 100644
+index 997d7a523e8..12887cdd6fd 100644
 --- a/src/coreclr/minipal/Unix/doublemapping.cpp
 +++ b/src/coreclr/minipal/Unix/doublemapping.cpp
-@@ -42,6 +42,9 @@
+@@ -42,6 +42,11 @@
  #ifdef TARGET_APPLE
  
  #include <mach/mach.h>
 +#if defined(TARGET_ARM64)
 +#include <libkern/OSCacheControl.h> // sys_icache_invalidate
++#include <signal.h>
++#include <setjmp.h>
 +#endif
  
  #else // TARGET_APPLE
  
-@@ -53,6 +56,262 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
+@@ -53,6 +58,315 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
  
  #endif // TARGET_APPLE
  
@@ -183,8 +185,10 @@ index 997d7a523e8..3529ef15e88 100644
 +    mach_port_t task = mach_task_self();
 +    const uint32_t pid = getpid();
 +    vm_address_t address = 0;
++    unsigned regionsWalked = 0;
 +    for (;;)
 +    {
++        regionsWalked++;
 +        // <mach/mach_vm.h> is blocked in the iOS SDK; vm_region_64 is the same facility.
 +        vm_region_basic_info_data_64_t info;
 +        mach_msg_type_number_t infoCount = VM_REGION_BASIC_INFO_COUNT_64;
@@ -223,30 +227,72 @@ index 997d7a523e8..3529ef15e88 100644
 +        }
 +        address = next;
 +    }
++    RW17_LOG("scan finished: %u VM regions walked, no matching arena\n", regionsWalked);
 +    return NULL;
++}
++
++static sigjmp_buf s_rw17ProbeJmp;
++static volatile sig_atomic_t s_rw17ProbeFaulted;
++
++static void Rw17ProbeFaultHandler(int sig, siginfo_t* info, void* context)
++{
++    (void)context;
++    s_rw17ProbeFaulted = 1;
++    RW17_LOG("probe fault (sig=%d, fault address %p) - reported as clean failure\n",
++             sig, info != NULL ? info->si_addr : NULL);
++    siglongjmp(s_rw17ProbeJmp, 1);
 +}
 +
 +// Verify the (rw, rx) view pair executes self-written code: two instruction
 +// writes through the RW view, each flushed on both views, each called via RX.
++// A fault during the probe (code signing rejection, non-writable alias, ...)
++// is caught by a temporary handler and reported as a clean false - the probe
++// must never kill the process (same pattern as STS2's executeProbe).
 +static bool Rw17ProbeExecute(uint8_t* rxView, uint8_t* rwView)
 +{
-+    const uint32_t kGadget42[2] = { 0x52800540u, 0xD65F03C0u }; // movz w0, #42 ; ret
-+    const uint32_t kGadget43Word = 0x52800560u;                 // movz w0, #43
-+
-+    memcpy(rwView, kGadget42, sizeof(kGadget42));
-+    sys_icache_invalidate(rwView, sizeof(kGadget42));
-+    sys_icache_invalidate(rxView, sizeof(kGadget42));
-+
-+    int32_t (*probe)(void) = (int32_t (*)(void))rxView;
-+    if (probe() != 42)
++    struct sigaction faultAction;
++    memset(&faultAction, 0, sizeof(faultAction));
++    faultAction.sa_sigaction = Rw17ProbeFaultHandler;
++    faultAction.sa_flags = SA_SIGINFO;
++    sigemptyset(&faultAction.sa_mask);
++    struct sigaction oldBus, oldSegv, oldIll;
++    if (sigaction(SIGBUS, &faultAction, &oldBus) != 0 ||
++        sigaction(SIGSEGV, &faultAction, &oldSegv) != 0 ||
++        sigaction(SIGILL, &faultAction, &oldIll) != 0)
 +    {
++        RW17_LOG("cannot install probe fault handlers (errno=%d)\n", errno);
 +        return false;
 +    }
 +
-+    memcpy(rwView, &kGadget43Word, sizeof(kGadget43Word));
-+    sys_icache_invalidate(rwView, sizeof(kGadget43Word));
-+    sys_icache_invalidate(rxView, sizeof(kGadget43Word));
-+    return probe() == 43;
++    const uint32_t kGadget42[2] = { 0x52800540u, 0xD65F03C0u }; // movz w0, #42 ; ret
++    const uint32_t kGadget43Word = 0x52800560u;                 // movz w0, #43
++    bool ok = false;
++    s_rw17ProbeFaulted = 0;
++    if (sigsetjmp(s_rw17ProbeJmp, 1) == 0)
++    {
++        memcpy(rwView, kGadget42, sizeof(kGadget42));
++        sys_icache_invalidate(rwView, sizeof(kGadget42));
++        sys_icache_invalidate(rxView, sizeof(kGadget42));
++
++        int32_t (*probe)(void) = (int32_t (*)(void))rxView;
++        ok = probe() == 42;
++        if (ok)
++        {
++            memcpy(rwView, &kGadget43Word, sizeof(kGadget43Word));
++            sys_icache_invalidate(rwView, sizeof(kGadget43Word));
++            sys_icache_invalidate(rxView, sizeof(kGadget43Word));
++            ok = probe() == 43;
++        }
++    }
++
++    sigaction(SIGBUS, &oldBus, NULL);
++    sigaction(SIGSEGV, &oldSegv, NULL);
++    sigaction(SIGILL, &oldIll, NULL);
++    if (s_rw17ProbeFaulted)
++    {
++        return false;
++    }
++    return ok;
 +}
 +
 +// Create an RW alias of [source, source+size) via vm_remap (the aliasing of
@@ -338,8 +384,12 @@ index 997d7a523e8..3529ef15e88 100644
 +        RW17_LOG("no pre-allocated arena found - run the rw17-jit.js StikDebug launch script first\n");
 +    }
 +
-+    // Fallback: one self-allocated RWX arena. Works on macOS hosts and on
-+    // debugger-attached devices whose kernel executes self-written code.
++#if defined(TARGET_OSX)
++    // macOS fallback: one self-allocated RWX arena. On iOS this path is
++    // deliberately absent: a self-created RWX mapping passes mmap but the
++    // kernel refuses to execute it (code signing), and even a validated
++    // probe would be a lie about long-term usability. STS2's DualJIT ships
++    // no fallback for the same reason - no arena, no JIT.
 +    void* self = mmap(NULL, Rw17ArenaCapacity, PROT_READ | PROT_WRITE | PROT_EXEC,
 +                      MAP_ANON | MAP_PRIVATE, -1, 0);
 +    if (self == MAP_FAILED)
@@ -364,6 +414,11 @@ index 997d7a523e8..3529ef15e88 100644
 +    *pHandle = mapper;
 +    *pMaxExecutableCodeSize = Rw17ArenaCapacity - Rw17ArenaHeaderSize;
 +    return true;
++#else
++    RW17_LOG("iOS: no arena and no fallback - run the rw17-jit.js StikDebug launch script first, then relaunch\n");
++    free(mapper);
++    return false;
++#endif
 +}
 +
 +#endif // TARGET_APPLE && TARGET_ARM64
@@ -371,7 +426,7 @@ index 997d7a523e8..3529ef15e88 100644
  bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecutableCodeSize)
  {
      if (minipal_detect_rosetta())
-@@ -146,8 +405,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
+@@ -146,8 +460,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
      *pHandle = (void*)(size_t)fd;
  #else // !TARGET_APPLE
  
@@ -387,7 +442,7 @@ index 997d7a523e8..3529ef15e88 100644
  #endif // !TARGET_APPLE
  
      return true;
-@@ -157,6 +423,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
+@@ -157,6 +478,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
  {
  #ifndef TARGET_APPLE
      close((int)(size_t)mapperHandle);
@@ -399,7 +454,7 @@ index 997d7a523e8..3529ef15e88 100644
  #endif
  }
  
-@@ -197,6 +468,23 @@ bool IsMapJitFlagNeeded()
+@@ -197,6 +523,23 @@ bool IsMapJitFlagNeeded()
  
  void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offset, size_t size, const void *rangeStart, const void* rangeEnd)
  {
@@ -423,7 +478,7 @@ index 997d7a523e8..3529ef15e88 100644
      int fd = (int)(size_t)mapperHandle;
  
      bool isUnlimitedRange = (rangeStart == NULL) && (rangeEnd == NULL);
-@@ -246,20 +534,49 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
+@@ -246,20 +589,49 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
          result = NULL;
      }
      return result;
@@ -473,7 +528,7 @@ index 997d7a523e8..3529ef15e88 100644
  #ifndef TARGET_APPLE
      int fd = (int)(size_t)mapperHandle;
      if (mmap(pStart, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, offset) == MAP_FAILED)
-@@ -269,6 +586,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
+@@ -269,6 +641,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
      memset(pStart, 0, size);
  #endif // TARGET_APPLE
      return munmap(pStart, size) != -1;
@@ -481,7 +536,7 @@ index 997d7a523e8..3529ef15e88 100644
  }
  
  void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t offset, size_t size)
-@@ -302,16 +620,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
+@@ -302,16 +675,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
  
      return (void*)startRW;
  #else // TARGET_AMD64
@@ -512,7 +567,7 @@ index 997d7a523e8..3529ef15e88 100644
  
  #ifndef TARGET_APPLE
 diff --git a/src/coreclr/utilcode/executableallocator.cpp b/src/coreclr/utilcode/executableallocator.cpp
-index f982fa1f940..a176db2c566 100644
+index f982fa1f940..4e366290b9b 100644
 --- a/src/coreclr/utilcode/executableallocator.cpp
 +++ b/src/coreclr/utilcode/executableallocator.cpp
 @@ -124,7 +124,7 @@ bool ExecutableAllocator::IsDoubleMappingEnabled()
@@ -539,3 +594,17 @@ index f982fa1f940..a176db2c566 100644
      g_instance = new (nothrow) ExecutableAllocator();
      if (g_instance == NULL)
      {
+@@ -288,6 +296,13 @@ bool ExecutableAllocator::Initialize()
+         if (!VMToOSInterface::CreateDoubleMemoryMapper(&m_doubleMemoryMapperHandle, &m_maxExecutableCodeSize))
+         {
+             g_isWXorXEnabled = false;
++#if defined(TARGET_IOS) || defined(TARGET_TVOS) || defined(TARGET_MACCATALYST)
++            // Port17: Apple mobile has no usable legacy path - the MAP_JIT write
++            // toggle is an empty macro there, so continuing would SIGBUS inside
++            // initialization. Fail loudly instead; the [rw17-arena] stderr lines
++            // say what to do (run the rw17-jit.js StikDebug launch script).
++            return false;
++#endif
+             return true;
+         }
+ 
