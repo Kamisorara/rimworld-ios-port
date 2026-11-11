@@ -95,7 +95,7 @@ index 93c4758956f..4b34fb57be9 100644
  
      ~ExecutableWriterHolder()
 diff --git a/src/coreclr/minipal/Unix/doublemapping.cpp b/src/coreclr/minipal/Unix/doublemapping.cpp
-index 997d7a523e8..e63a041c51b 100644
+index 997d7a523e8..fdaaecaf81b 100644
 --- a/src/coreclr/minipal/Unix/doublemapping.cpp
 +++ b/src/coreclr/minipal/Unix/doublemapping.cpp
 @@ -42,6 +42,11 @@
@@ -110,7 +110,7 @@ index 997d7a523e8..e63a041c51b 100644
  
  #else // TARGET_APPLE
  
-@@ -53,6 +58,315 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
+@@ -53,6 +58,319 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
  
  #endif // TARGET_APPLE
  
@@ -328,6 +328,7 @@ index 997d7a523e8..e63a041c51b 100644
 +    void* arena = Rw17FindArena();
 +    if (arena != NULL)
 +    {
++        RW17_LOG("creating aliases: full-capacity remap from %p\n");
 +        uint8_t* rwAlias = Rw17MapAliasRW(arena, Rw17ArenaCapacity);
 +        if (rwAlias == NULL)
 +        {
@@ -335,6 +336,7 @@ index 997d7a523e8..e63a041c51b 100644
 +        }
 +        else
 +        {
++            RW17_LOG("RW alias at %p\n", (void*)rwAlias);
 +            vm_address_t rxAlias = 0;
 +            vm_prot_t curProtection, maxProtection;
 +            kern_return_t kr = vm_remap(mach_task_self(), &rxAlias, Rw17ArenaCapacity, 0, VM_FLAGS_ANYWHERE,
@@ -353,12 +355,14 @@ index 997d7a523e8..e63a041c51b 100644
 +                    RW17_LOG("mprotect(RX alias, R|X) failed (errno=%d); continuing with inherited protection\n", errno);
 +                }
 +
++                RW17_LOG("RX alias at %p\n", (void*)rxAlias);
 +                mapper->rxBase = (uint8_t*)rxAlias;
 +                mapper->rwBase = rwAlias;
 +                mapper->singleMapping = false;
 +
 +                // Probe code writes through the RW view, then the RX->RW->RX
 +                // commit flip that loader-heap data pages depend on.
++                RW17_LOG("running execution probes (writes via RW, calls via RX)\n");
 +                if (Rw17ProbeExecute(mapper->rxBase + Rw17ArenaHeaderSize, mapper->rwBase + Rw17ArenaHeaderSize) &&
 +                    mprotect(mapper->rxBase + Rw17ArenaHeaderSize, Rw17ArenaPageSize, PROT_READ | PROT_WRITE) == 0 &&
 +                    mprotect(mapper->rxBase + Rw17ArenaHeaderSize, Rw17ArenaPageSize, PROT_READ | PROT_EXEC) == 0)
@@ -371,7 +375,7 @@ index 997d7a523e8..e63a041c51b 100644
 +                    return true;
 +                }
 +
-+                RW17_LOG("arena views failed the execution/commit probes; falling back\n");
++                RW17_LOG("execution/commit probes failed (no fault line => debugger intercepted it); falling back\n");
 +                munmap((void*)rxAlias, Rw17ArenaCapacity);
 +                munmap(rwAlias, Rw17ArenaCapacity);
 +                mapper->rxBase = NULL;
@@ -426,7 +430,7 @@ index 997d7a523e8..e63a041c51b 100644
  bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecutableCodeSize)
  {
      if (minipal_detect_rosetta())
-@@ -146,8 +460,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
+@@ -146,8 +464,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
      *pHandle = (void*)(size_t)fd;
  #else // !TARGET_APPLE
  
@@ -442,7 +446,7 @@ index 997d7a523e8..e63a041c51b 100644
  #endif // !TARGET_APPLE
  
      return true;
-@@ -157,6 +478,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
+@@ -157,6 +482,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
  {
  #ifndef TARGET_APPLE
      close((int)(size_t)mapperHandle);
@@ -454,7 +458,7 @@ index 997d7a523e8..e63a041c51b 100644
  #endif
  }
  
-@@ -197,6 +523,23 @@ bool IsMapJitFlagNeeded()
+@@ -197,6 +527,23 @@ bool IsMapJitFlagNeeded()
  
  void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offset, size_t size, const void *rangeStart, const void* rangeEnd)
  {
@@ -478,7 +482,7 @@ index 997d7a523e8..e63a041c51b 100644
      int fd = (int)(size_t)mapperHandle;
  
      bool isUnlimitedRange = (rangeStart == NULL) && (rangeEnd == NULL);
-@@ -246,20 +589,49 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
+@@ -246,20 +593,49 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
          result = NULL;
      }
      return result;
@@ -528,7 +532,7 @@ index 997d7a523e8..e63a041c51b 100644
  #ifndef TARGET_APPLE
      int fd = (int)(size_t)mapperHandle;
      if (mmap(pStart, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, offset) == MAP_FAILED)
-@@ -269,6 +641,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
+@@ -269,6 +645,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
      memset(pStart, 0, size);
  #endif // TARGET_APPLE
      return munmap(pStart, size) != -1;
@@ -536,7 +540,7 @@ index 997d7a523e8..e63a041c51b 100644
  }
  
  void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t offset, size_t size)
-@@ -302,16 +675,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
+@@ -302,16 +679,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
  
      return (void*)startRW;
  #else // TARGET_AMD64
