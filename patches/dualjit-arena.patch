@@ -95,7 +95,7 @@ index 93c4758956f..4b34fb57be9 100644
  
      ~ExecutableWriterHolder()
 diff --git a/src/coreclr/minipal/Unix/doublemapping.cpp b/src/coreclr/minipal/Unix/doublemapping.cpp
-index 997d7a523e8..e5d6445c9b5 100644
+index 997d7a523e8..3529ef15e88 100644
 --- a/src/coreclr/minipal/Unix/doublemapping.cpp
 +++ b/src/coreclr/minipal/Unix/doublemapping.cpp
 @@ -42,6 +42,9 @@
@@ -139,7 +139,7 @@ index 997d7a523e8..e5d6445c9b5 100644
 +// that forbids truncating string initializers.
 +static const char s_rw17ArenaMagic[17] = "RW17-JIT-ARENA1!";
 +static const size_t Rw17ArenaMagicLen = sizeof(s_rw17ArenaMagic) - 1; // == 16
-+static const size_t Rw17ArenaCapacity = 0x6000000;  // 96 MiB; keep in sync with rw17-jit.js
++static const size_t Rw17ArenaCapacity = 0x8000000;  // 128 MiB; keep in sync with rw17-jit.js (max safe size: arena must stay within arm64 s ±128 MiB direct-branch reach)
 +static const size_t Rw17ArenaHeaderSize = 0x4000;   // page 0 holds the handshake header
 +static const size_t Rw17ArenaPageSize = 0x4000;     // arm64 Apple device page size
 +
@@ -413,7 +413,7 @@ index 997d7a523e8..e5d6445c9b5 100644
 +        ((uintptr_t)addr < (uintptr_t)rangeStart || (uintptr_t)(addr + size) > (uintptr_t)rangeEnd))
 +    {
 +        // Jump-stub windows are computed around existing code heaps. Since all
-+        // JIT code lives in one 96 MiB arena, arm64's ±128 MiB direct branch
++        // JIT code lives in one 128 MiB arena, arm64's ±128 MiB direct branch
 +        // range still holds; grant the allocation but say so.
 +        RW17_LOG("range-restricted reserve at %p (%zu bytes) outside [%p, %p) - granting anyway\n",
 +                 (void*)addr, size, rangeStart, rangeEnd);

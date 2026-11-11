@@ -2,7 +2,7 @@
 // 契约：① exePath = 原生宿主可执行文件路径（hostpolicy 传 host_path）；
 // ② 运行时报错走 coreclr_set_error_writer，不设就完全静默。
 // 用法：macprobe <bundle_dir> [variant（已弃用，仅为兼容旧 workflow 参数）]
-// RW17_SEED_ARENA=1 时先在本进程伪造一块 JIT 竞技场（96MiB RX + 魔数握手头），
+// RW17_SEED_ARENA=1 时先在本进程伪造一块 JIT 竞技场（128MiB RX + 魔数握手头），
 // 用于在 CI 的 mac 原生环境全链路验证竞技场后端（扫描/别名/探针/Commit 翻转）。
 #include "host.h"
 #include <dirent.h>
@@ -65,7 +65,7 @@ static void seed_arena_if_requested(void)
 {
     if (getenv("RW17_SEED_ARENA") == NULL)
         return;
-    const size_t cap = 0x6000000; // 96 MiB，与 rw17-jit.js / 运行时补丁一致
+    const size_t cap = 0x8000000; // 128 MiB，与 rw17-jit.js / 运行时补丁一致
     uint8_t *p = mmap(NULL, cap, PROT_READ | PROT_WRITE | PROT_EXEC,
                       MAP_ANON | MAP_PRIVATE, -1, 0);
     if (p == MAP_FAILED) {
@@ -80,7 +80,7 @@ static void seed_arena_if_requested(void)
         munmap(p, cap);
         return;
     }
-    printf("[macprobe] seed: 竞技场就绪 %p（96MiB RX，pid %u）\n", (void *)p, pid);
+    printf("[macprobe] seed: 竞技场就绪 %p（128MiB RX，pid %u）\n", (void *)p, pid);
 }
 
 int main(int argc, char **argv)

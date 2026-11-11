@@ -31,7 +31,7 @@ jobs:
           echo "pin=$PIN" >> "$GITHUB_OUTPUT"
           # 补丁或收集逻辑变化时把后缀升级一位，强制重跑（也要重编译，runner 上没有源产物）
           # c5 = 双JIT竞技场补丁（替换 jit-write-protect-ios.patch）
-          echo "key=runtime-ios-arm64-$PIN-c5" >> "$GITHUB_OUTPUT"
+          echo "key=runtime-ios-arm64-$PIN-c6" >> "$GITHUB_OUTPUT"
 
       - name: 查缓存
         id: cache

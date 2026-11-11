@@ -39,7 +39,7 @@
 ## 真机测试（M1 验收）
 
 1. 下载 IPA，经 SideStore（或 AltStore）侧载——侧载自动带 `get-task-allow`；
-2. StikDebug 启用 JIT（调试器 attach），**然后运行启动脚本 [`probe/stikdebug/rw17-jit.js`](probe/stikdebug/rw17-jit.js)**——它在游戏进程里预分配 96MiB RX JIT 竞技场（iOS 26+ 上这是 CoreCLR 能拿到的唯一可执行内存；逐页验证约需几秒）；
+2. StikDebug 启用 JIT（调试器 attach），**然后运行启动脚本 [`probe/stikdebug/rw17-jit.js`](probe/stikdebug/rw17-jit.js)**——它在游戏进程里预分配 128MiB RX JIT 竞技场（iOS 26+ 上这是 CoreCLR 能拿到的唯一可执行内存；逐页验证约需几秒）；
 3. 打开 app：日志应出现 `[rw17-arena] arena found …` → `arena adopted …`，Hello 以几十毫秒执行，结论"JIT 生效"；
 4. 屏幕上同时打印 mach 匿名 RX 区域统计（JIT 开启时非零且变大）。
 

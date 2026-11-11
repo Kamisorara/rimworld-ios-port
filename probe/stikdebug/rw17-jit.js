@@ -13,7 +13,7 @@
 // Usage order in StikDebug: enable JIT (debugger attach) -> run this script ->
 // launch the app. Magic and capacity must stay in sync with the runtime patch.
 (() => {
-    const pid = get_pid(), cap = 0x6000000, page = 0x4000;
+    const pid = get_pid(), cap = 0x8000000, page = 0x4000;
     const stop = send_command("vAttach;" + pid.toString(16));
     if (!/^[TS][0-9a-f]{2}/i.test(stop)) throw Error("Attach failed: " + stop);
     let address = 0, published = false;
@@ -40,5 +40,5 @@
         if (!published && address) send_command("_m"+address.toString(16));
         send_command("D");
     }
-    log("rw17-jit: arena prepared (96 MiB RX). Return to the launcher and enable JIT, then launch the app.");
+    log("rw17-jit: arena prepared (128 MiB RX). Return to the launcher and enable JIT, then launch the app.");
 })();
