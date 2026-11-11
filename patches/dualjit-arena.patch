@@ -95,7 +95,7 @@ index 93c4758956f..4b34fb57be9 100644
  
      ~ExecutableWriterHolder()
 diff --git a/src/coreclr/minipal/Unix/doublemapping.cpp b/src/coreclr/minipal/Unix/doublemapping.cpp
-index 997d7a523e8..fdaaecaf81b 100644
+index 997d7a523e8..494d0e8a0a4 100644
 --- a/src/coreclr/minipal/Unix/doublemapping.cpp
 +++ b/src/coreclr/minipal/Unix/doublemapping.cpp
 @@ -42,6 +42,11 @@
@@ -110,7 +110,7 @@ index 997d7a523e8..fdaaecaf81b 100644
  
  #else // TARGET_APPLE
  
-@@ -53,6 +58,319 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
+@@ -53,6 +58,312 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
  
  #endif // TARGET_APPLE
  
@@ -127,10 +127,11 @@ index 997d7a523e8..fdaaecaf81b 100644
 +//      (rw17-jit.js) allocates one fixed-size RX arena through the private
 +//      "_M<size>,rx" packet, touches every page, and stamps a handshake
 +//      header (magic + pid) at offset 0;
-+//   2. this backend scans the VM regions for that arena, verifies the
-+//      handshake, and creates two aliases of the whole capacity via vm_remap:
-+//      an RX view for execution and an RW view for writing. Aliases of
-+//      debugger-created pages are not subject to the W^X provenance check.
++//   2. this backend scans the VM regions for that arena (it enumerates as a
++//      single 16 KiB submap entry - match by magic+pid, never by capacity),
++//      verifies the handshake, creates ONE vm_remap(copy=FALSE) RW alias for
++//      writing, and executes through the granted arena itself (RX as granted,
++//      the STS2-proven pattern; remapped copies are not proven executable).
 +// When no arena is found (macOS, a seeded CI arena is still found by scan, or
 +// devices where plain RWX execution is permitted) the backend falls back to a
 +// self-allocated RWX arena with the same execution probe. If nothing is
@@ -328,59 +329,51 @@ index 997d7a523e8..fdaaecaf81b 100644
 +    void* arena = Rw17FindArena();
 +    if (arena != NULL)
 +    {
-+        RW17_LOG("creating aliases: full-capacity remap from %p\n");
++        // STS2-faithful single-remap structure (proven on iOS 26 devices):
++        // - EXECUTE through the ORIGINAL debugger-granted arena: it is RX as
++        //   granted and STS2 calls it directly (ready_v1 blr on arena+0x40);
++        //   executing a vm_remap COPY of the pages is NOT a proven operation
++        //   and faulted on device with a debugger session attached.
++        // - WRITE through ONE vm_remap(copy=FALSE) alias made RW (STS2 does
++        //   exactly this and its writes succeed).
++        // - Loader-heap data pages (interleavedloaderheap writes through the
++        //   Commit(false) pointer) need the arena subrange flipped RW; that is
++        //   a plain mprotect syscall - it fails cleanly (no fault) if the
++        //   kernel refuses, which the probe below verifies up front.
++        // NOTE: while a debugserver session is attached, mach exceptions go to
++        // the debugger FIRST - a faulting instruction stops the process and our
++        // in-process handler never runs (the script continue loop then spins).
++        // Every step is logged so a freeze pins to one line.
++        RW17_LOG("creating the RW alias: full-capacity remap from %p\n", arena);
 +        uint8_t* rwAlias = Rw17MapAliasRW(arena, Rw17ArenaCapacity);
 +        if (rwAlias == NULL)
 +        {
-+            RW17_LOG("RW alias of the arena failed; falling back to a self-allocated arena\n");
++            RW17_LOG("RW alias of the arena failed; no usable JIT memory\n");
 +        }
 +        else
 +        {
-+            RW17_LOG("RW alias at %p\n", (void*)rwAlias);
-+            vm_address_t rxAlias = 0;
-+            vm_prot_t curProtection, maxProtection;
-+            kern_return_t kr = vm_remap(mach_task_self(), &rxAlias, Rw17ArenaCapacity, 0, VM_FLAGS_ANYWHERE,
-+                                        mach_task_self(), (vm_address_t)arena, FALSE,
-+                                        &curProtection, &maxProtection, VM_INHERIT_NONE);
-+            if (kr != KERN_SUCCESS)
++            RW17_LOG("RW alias at %p; execution uses the granted arena directly\n", (void*)rwAlias);
++            mapper->rxBase = (uint8_t*)arena;
++            mapper->rwBase = rwAlias;
++            mapper->singleMapping = false;
++
++            RW17_LOG("running execution probes (writes via the RW alias, calls via the arena)\n");
++            if (Rw17ProbeExecute(mapper->rxBase + Rw17ArenaHeaderSize, mapper->rwBase + Rw17ArenaHeaderSize) &&
++                mprotect(mapper->rxBase + Rw17ArenaHeaderSize, Rw17ArenaPageSize, PROT_READ | PROT_WRITE) == 0 &&
++                mprotect(mapper->rxBase + Rw17ArenaHeaderSize, Rw17ArenaPageSize, PROT_READ | PROT_EXEC) == 0)
 +            {
-+                RW17_LOG("RX alias vm_remap failed (kr=%d); falling back to a self-allocated arena\n", kr);
-+                munmap(rwAlias, Rw17ArenaCapacity);
++                RW17_LOG("arena adopted: rx=%p rw=%p capacity=%zu (debugger-granted)\n",
++                         (void*)mapper->rxBase, (void*)mapper->rwBase, Rw17ArenaCapacity);
++                s_rw17Mapper = mapper;
++                *pHandle = mapper;
++                *pMaxExecutableCodeSize = Rw17ArenaCapacity - Rw17ArenaHeaderSize;
++                return true;
 +            }
-+            else
-+            {
-+                if (mprotect((void*)rxAlias, Rw17ArenaCapacity, PROT_READ | PROT_EXEC) == -1)
-+                {
-+                    // The remap normally inherits the source RX protection already.
-+                    RW17_LOG("mprotect(RX alias, R|X) failed (errno=%d); continuing with inherited protection\n", errno);
-+                }
 +
-+                RW17_LOG("RX alias at %p\n", (void*)rxAlias);
-+                mapper->rxBase = (uint8_t*)rxAlias;
-+                mapper->rwBase = rwAlias;
-+                mapper->singleMapping = false;
-+
-+                // Probe code writes through the RW view, then the RX->RW->RX
-+                // commit flip that loader-heap data pages depend on.
-+                RW17_LOG("running execution probes (writes via RW, calls via RX)\n");
-+                if (Rw17ProbeExecute(mapper->rxBase + Rw17ArenaHeaderSize, mapper->rwBase + Rw17ArenaHeaderSize) &&
-+                    mprotect(mapper->rxBase + Rw17ArenaHeaderSize, Rw17ArenaPageSize, PROT_READ | PROT_WRITE) == 0 &&
-+                    mprotect(mapper->rxBase + Rw17ArenaHeaderSize, Rw17ArenaPageSize, PROT_READ | PROT_EXEC) == 0)
-+                {
-+                    RW17_LOG("arena adopted: rx=%p rw=%p capacity=%zu (debugger-granted)\n",
-+                             (void*)mapper->rxBase, (void*)mapper->rwBase, Rw17ArenaCapacity);
-+                    s_rw17Mapper = mapper;
-+                    *pHandle = mapper;
-+                    *pMaxExecutableCodeSize = Rw17ArenaCapacity - Rw17ArenaHeaderSize;
-+                    return true;
-+                }
-+
-+                RW17_LOG("execution/commit probes failed (no fault line => debugger intercepted it); falling back\n");
-+                munmap((void*)rxAlias, Rw17ArenaCapacity);
-+                munmap(rwAlias, Rw17ArenaCapacity);
-+                mapper->rxBase = NULL;
-+                mapper->rwBase = NULL;
-+            }
++            RW17_LOG("probes failed (no fault line => debugger intercepted it); no usable JIT memory\n");
++            munmap(rwAlias, Rw17ArenaCapacity);
++            mapper->rxBase = NULL;
++            mapper->rwBase = NULL;
 +        }
 +    }
 +    else
@@ -430,7 +423,7 @@ index 997d7a523e8..fdaaecaf81b 100644
  bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecutableCodeSize)
  {
      if (minipal_detect_rosetta())
-@@ -146,8 +464,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
+@@ -146,8 +457,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
      *pHandle = (void*)(size_t)fd;
  #else // !TARGET_APPLE
  
@@ -446,7 +439,7 @@ index 997d7a523e8..fdaaecaf81b 100644
  #endif // !TARGET_APPLE
  
      return true;
-@@ -157,6 +482,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
+@@ -157,6 +475,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
  {
  #ifndef TARGET_APPLE
      close((int)(size_t)mapperHandle);
@@ -458,7 +451,7 @@ index 997d7a523e8..fdaaecaf81b 100644
  #endif
  }
  
-@@ -197,6 +527,23 @@ bool IsMapJitFlagNeeded()
+@@ -197,6 +520,23 @@ bool IsMapJitFlagNeeded()
  
  void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offset, size_t size, const void *rangeStart, const void* rangeEnd)
  {
@@ -482,7 +475,7 @@ index 997d7a523e8..fdaaecaf81b 100644
      int fd = (int)(size_t)mapperHandle;
  
      bool isUnlimitedRange = (rangeStart == NULL) && (rangeEnd == NULL);
-@@ -246,20 +593,49 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
+@@ -246,20 +586,49 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
          result = NULL;
      }
      return result;
@@ -532,7 +525,7 @@ index 997d7a523e8..fdaaecaf81b 100644
  #ifndef TARGET_APPLE
      int fd = (int)(size_t)mapperHandle;
      if (mmap(pStart, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, offset) == MAP_FAILED)
-@@ -269,6 +645,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
+@@ -269,6 +638,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
      memset(pStart, 0, size);
  #endif // TARGET_APPLE
      return munmap(pStart, size) != -1;
@@ -540,7 +533,7 @@ index 997d7a523e8..fdaaecaf81b 100644
  }
  
  void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t offset, size_t size)
-@@ -302,16 +679,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
+@@ -302,16 +672,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
  
      return (void*)startRW;
  #else // TARGET_AMD64
