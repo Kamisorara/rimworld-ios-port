@@ -16,10 +16,32 @@ index 8584b8852dc..179dd18b2a1 100644
  endif()
  
 diff --git a/src/coreclr/inc/executableallocator.h b/src/coreclr/inc/executableallocator.h
-index 93c4758956f..ab981e695ba 100644
+index 93c4758956f..4b34fb57be9 100644
 --- a/src/coreclr/inc/executableallocator.h
 +++ b/src/coreclr/inc/executableallocator.h
-@@ -301,16 +301,23 @@ class ExecutableWriterHolder
+@@ -179,9 +179,6 @@ private:
+     // Add RX block to the linked list of existing blocks
+     void AddRXBlock(BlockRX *pBlock);
+ 
+-    // Return true if double mapping is enabled.
+-    static bool IsDoubleMappingEnabled();
+-
+     // Release memory allocated via DoubleMapping for either templates or normal double mapped data
+     void ReleaseWorker(void* pRX, bool releaseTemplate);
+ 
+@@ -223,6 +220,11 @@ public:
+     // Return true if W^X is enabled
+     static bool IsWXORXEnabled();
+ 
++    // Return true if double mapping is enabled.
++    // Port17: made public - ExecutableWriterHolder consults it to fall back to
++    // the legacy MAP_JIT toggle path when the arena backend is unavailable.
++    static bool IsDoubleMappingEnabled();
++
+     // Use this function to initialize g_lazyPreferredRangeHint during startup.
+     // base is runtime .dll base address, size is runtime .dll virtual size.
+     static void InitLazyPreferredRange(size_t base, size_t size, int randomPageOffset);
+@@ -301,16 +303,23 @@ class ExecutableWriterHolder
      void Unmap()
      {
  #if defined(HOST_APPLE) && defined(HOST_ARM64) && !defined(DACCESS_COMPILE)
@@ -49,7 +71,7 @@ index 93c4758956f..ab981e695ba 100644
      }
  
  public:
-@@ -337,11 +344,18 @@ public:
+@@ -337,11 +346,18 @@ public:
      {
          m_addressRX = addressRX;
  #if defined(HOST_APPLE) && defined(HOST_ARM64)
