@@ -132,8 +132,15 @@ static bool rw17_arena_header_ok(const void *base)
     return pid == (uint32_t)getpid();
 }
 
-static const void *rw17_find_arena(void)
+typedef struct {
+    const void *arena;      // 魔数+pid 握手全中的竞技场，未找到为 NULL
+    uint64_t largestRx;     // 本进程最大 RX（不可写）区域
+    unsigned candidates;    // ≥128MiB 的 RX 区域数（无论是否盖章）
+} rw17_scan_t;
+
+static void rw17_scan(rw17_scan_t *out)
 {
+    memset(out, 0, sizeof(*out));
     vm_address_t addr = 0;
     for (;;) {
         vm_size_t size = 0;
@@ -143,30 +150,43 @@ static const void *rw17_find_arena(void)
         if (vm_region_64(mach_task_self(), &addr, &size, VM_REGION_BASIC_INFO_64,
                          (vm_region_info_t)&info, &count, &obj) != KERN_SUCCESS ||
             size == 0)
-            return NULL;
+            break;
         if (obj != MACH_PORT_NULL)
             mach_port_deallocate(mach_task_self(), obj);
-        if ((info.protection & VM_PROT_EXECUTE) &&
-            !(info.protection & VM_PROT_WRITE) && size >= RW17_ARENA_CAP &&
-            rw17_arena_header_ok((const void *)addr))
-            return (const void *)addr;
+        if ((info.protection & VM_PROT_EXECUTE) && !(info.protection & VM_PROT_WRITE)) {
+            if (size > out->largestRx)
+                out->largestRx = size;
+            if (size >= RW17_ARENA_CAP) {
+                out->candidates++;
+                if (rw17_arena_header_ok((const void *)addr))
+                    out->arena = (const void *)addr;
+            }
+        }
         vm_address_t next = addr + size;
         if (next <= addr)
-            return NULL; // 地址空间回绕
+            break; // 地址空间回绕
         addr = next;
     }
 }
 
 // 竞技场由 debugserver 从进程外写入：本进程挂起也不影响生成，所以这个等待
 // 循环在 iOS 挂起/恢复之间来回没有副作用，用户随时可以切去 StikDebug 跑脚本。
+// vm_region 只能看到本进程内存：若脚本把竞技场建到了别的进程（JIT 会话目标
+// 不是本应用），这里永远等不到——侦察日志（本进程 pid、最大 RX 区域、候选数）
+// 就是为了把这种情况一眼钉死。
 static void wait_for_rw17_arena(void)
 {
     const int kTimeoutSec = 600;
-    host_log("等待 JIT 竞技场就绪（rw17-jit.js 页扫写约需 90 秒；可现在切去 StikDebug 运行）…");
+    char buf[256];
+    snprintf(buf, sizeof(buf), "等待 JIT 竞技场就绪（本进程 pid=%d）…", (int)getpid());
+    host_log(buf);
+    host_log("提示：竞技场只会出现在脚本 vAttach 的那个进程里——请确认 StikDebug 的 JIT 会话目标就是本应用");
     for (int waited = 0; waited <= kTimeoutSec; waited++) {
-        if (rw17_find_arena() != NULL) {
-            char buf[96];
-            snprintf(buf, sizeof(buf), "JIT 竞技场已就绪（等待 %d 秒）", waited);
+        rw17_scan_t scan;
+        rw17_scan(&scan);
+        if (scan.arena != NULL) {
+            snprintf(buf, sizeof(buf), "JIT 竞技场已就绪（等待 %d 秒，%u 个候选）",
+                     waited, scan.candidates);
             host_log(buf);
             return;
         }
@@ -174,13 +194,22 @@ static void wait_for_rw17_arena(void)
             break;
         usleep(1000 * 1000);
         if (waited > 0 && waited % 15 == 0) {
-            char buf[128];
             snprintf(buf, sizeof(buf),
-                     "仍在等待 JIT 竞技场…（%d/%d 秒）", waited, kTimeoutSec);
+                     "仍在等待…（%d/%d 秒；最大 RX 区域 %llu MiB，≥128MiB 候选 %u 个）",
+                     waited, kTimeoutSec,
+                     (unsigned long long)(scan.largestRx / (1024 * 1024)),
+                     scan.candidates);
             host_log(buf);
         }
     }
-    host_log("等待超时（600 秒）未见到竞技场——rw17-jit.js 未运行、未完成或挂到了别的进程；仍继续初始化（预期失败）");
+    rw17_scan_t scan;
+    rw17_scan(&scan);
+    snprintf(buf, sizeof(buf),
+             "等待超时（600 秒）：竞技场未出现。期间最大 RX 区域 %llu MiB、候选 %u 个"
+             "——若远小于 128MiB，说明脚本把竞技场建到了别的进程（JIT 会话目标不对）",
+             (unsigned long long)(scan.largestRx / (1024 * 1024)), scan.candidates);
+    host_log(buf);
+    host_log("仍继续初始化 CoreCLR（预期失败，stderr 有扫描日志）");
 }
 
 // 把 stderr 强制落盘并逐行读回屏幕日志。Darwin libc 里 freopen 后的 stderr 是
