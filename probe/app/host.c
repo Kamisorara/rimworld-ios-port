@@ -134,9 +134,11 @@ static bool rw17_arena_header_ok(const void *base)
 
 typedef struct {
     const void *arena;      // 魔数+pid 握手全中的竞技场，未找到为 NULL
+    uint64_t arenaSize;     // 竞技场区域实际大小（可能小于 cap）
     uint64_t largestRx;     // 本进程最大 RX（不可写）区域
     uint64_t largestAny;    // 本进程最大区域（任意保护位）
-    unsigned candidates;    // ≥128MiB 的 RX 区域数（无论是否盖章）
+    unsigned rxRegions;     // RX 区域总数
+    unsigned bigRegions;    // ≥16MiB 区域数（任意保护位）
 } rw17_scan_t;
 
 static void rw17_scan(rw17_scan_t *out)
@@ -156,13 +158,17 @@ static void rw17_scan(rw17_scan_t *out)
             mach_port_deallocate(mach_task_self(), obj);
         if (size > out->largestAny)
             out->largestAny = size;
+        if (size >= 16u * 1024 * 1024)
+            out->bigRegions++;
         if ((info.protection & VM_PROT_EXECUTE) && !(info.protection & VM_PROT_WRITE)) {
+            out->rxRegions++;
             if (size > out->largestRx)
                 out->largestRx = size;
-            if (size >= RW17_ARENA_CAP) {
-                out->candidates++;
-                if (rw17_arena_header_ok((const void *)addr))
-                    out->arena = (const void *)addr;
+            // STS2 ready_v1 同款：RX + 魔数头即可（size≥1 页），
+            // 不要求整段 cap 连续——vm_remap 仍按全容量映射。
+            if (size >= 0x4000 && rw17_arena_header_ok((const void *)addr)) {
+                out->arena = (const void *)addr;
+                out->arenaSize = size;
             }
         }
         vm_address_t next = addr + size;
@@ -188,8 +194,10 @@ static void wait_for_rw17_arena(void)
         rw17_scan_t scan;
         rw17_scan(&scan);
         if (scan.arena != NULL) {
-            snprintf(buf, sizeof(buf), "JIT 竞技场已就绪（等待 %d 秒，%u 个候选）",
-                     waited, scan.candidates);
+            snprintf(buf, sizeof(buf),
+                     "JIT 竞技场已就绪（等待 %d 秒，%llu MiB @ %p）",
+                     waited, (unsigned long long)(scan.arenaSize / (1024 * 1024)),
+                     scan.arena);
             host_log(buf);
             return;
         }
@@ -198,21 +206,21 @@ static void wait_for_rw17_arena(void)
         usleep(1000 * 1000);
         if (waited > 0 && waited % 15 == 0) {
             snprintf(buf, sizeof(buf),
-                     "仍在等待…（%d/%d 秒；最大 RX %llu MiB，最大区域 %llu MiB，候选 %u 个）",
-                     waited, kTimeoutSec,
+                     "仍在等待…（%d/%d 秒；RX 区域 %u 个/最大 %llu MiB，≥16MiB 区域 %u 个/最大 %llu MiB）",
+                     waited, kTimeoutSec, scan.rxRegions,
                      (unsigned long long)(scan.largestRx / (1024 * 1024)),
-                     (unsigned long long)(scan.largestAny / (1024 * 1024)),
-                     scan.candidates);
+                     scan.bigRegions,
+                     (unsigned long long)(scan.largestAny / (1024 * 1024)));
             host_log(buf);
         }
     }
     rw17_scan_t scan;
     rw17_scan(&scan);
     snprintf(buf, sizeof(buf),
-             "等待超时（600 秒）：竞技场未出现。最大 RX %llu MiB、最大区域 %llu MiB、候选 %u 个"
-             "——区域大但非 RX=保护位问题；都不大=竞技场不在本进程或已随 detach 消失",
-             (unsigned long long)(scan.largestRx / (1024 * 1024)),
-             (unsigned long long)(scan.largestAny / (1024 * 1024)), scan.candidates);
+             "等待超时（600 秒）：竞技场未出现。RX 区域 %u 个/最大 %llu MiB，≥16MiB 区域 %u 个/最大 %llu MiB"
+             "——有大区域但无握手=竞技场盖在别的进程；有大区域但非 RX=保护位异常；都小=未建",
+             scan.rxRegions, (unsigned long long)(scan.largestRx / (1024 * 1024)),
+             scan.bigRegions, (unsigned long long)(scan.largestAny / (1024 * 1024)));
     host_log(buf);
     host_log("仍继续初始化 CoreCLR（预期失败，stderr 有扫描日志）");
 }
@@ -343,9 +351,9 @@ int run_probe(const char *bundle_dir)
         snprintf(buf, sizeof(buf), "写保护开关符号：%s（竞技场方案下仅作诊断）",
                  wprot != NULL ? "找到" : "未找到（iOS 正常现象）");
         host_log(buf);
-        host_log("提示：先经 StikDebug 启动本应用（带 JIT），再运行 rw17-jit.js——本应用会自动等待竞技场");
-        if (rwx_ok)
-            wait_for_rw17_arena();
+        host_log("提示：本应用可正常启动（无需 StikDebug 拉起）；等待期间去 StikDebug 运行 rw17-jit.js 即可");
+        (void)rwx_ok; // 授权探测仅作诊断显示；竞技场由脚本 attach 时创建，无需本地 RWX 授权
+        wait_for_rw17_arena();
     }
 
     // 正式属性组（对照安卓版 host.c 与官方 ios 运行时包布局）：

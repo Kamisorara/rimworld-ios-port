@@ -95,7 +95,7 @@ index 93c4758956f..4b34fb57be9 100644
  
      ~ExecutableWriterHolder()
 diff --git a/src/coreclr/minipal/Unix/doublemapping.cpp b/src/coreclr/minipal/Unix/doublemapping.cpp
-index 997d7a523e8..12887cdd6fd 100644
+index 997d7a523e8..e63a041c51b 100644
 --- a/src/coreclr/minipal/Unix/doublemapping.cpp
 +++ b/src/coreclr/minipal/Unix/doublemapping.cpp
 @@ -42,6 +42,11 @@
@@ -205,7 +205,7 @@ index 997d7a523e8..12887cdd6fd 100644
 +            mach_port_deallocate(task, objectName);
 +        }
 +        if ((info.protection & VM_PROT_EXECUTE) && !(info.protection & VM_PROT_WRITE) &&
-+            regionSize >= Rw17ArenaCapacity)
++            regionSize >= Rw17ArenaPageSize)
 +        {
 +            uint32_t pidInHeader = 0;
 +            if (Rw17ReadArenaHeader((void*)address, &pidInHeader))

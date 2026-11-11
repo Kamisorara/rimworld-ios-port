@@ -1,22 +1,24 @@
 // StikDebug launch script for Port17 (RimWorld iOS port probe).
-// Pre-allocates the JIT arena that libcoreclr's ExecutableAllocator scans for:
+// Modeled 1:1 on STS2-JIT.js from the SlayTheSpire2 community repack (the
+// proven reference), with one iOS-26-hardening difference at the end.
 //   1. attach the session PID via debugserver (get_pid() = the app StikDebug
-//      spawned with JIT THIS session - select Port17 Probe in the JIT tab!);
+//      spawned with JIT this session - or the app you launched this against);
 //   2. allocate one fixed-size RX arena with the private "_M<size>,rx" packet;
-//   3. prepare/touch every page - StikDebug v3.x has a bulk prepare_memory_region
-//      JIT call (one invocation); older builds fall back to per-page writes;
+//   3. write one byte per 16 KiB page (STS2 does exactly this - no bulk API);
 //   4. stamp the handshake header at offset 0: magic + pid (little-endian);
-//   5. KEEP THE DEBUGGER ATTACHED and resume the app.
-//
-// DO NOT detach ("D") at the end. Debugger-granted memory does not survive the
-// detach - verified on device: the script's own read-back sees the arena, the
-// process's vm_region scan no longer does the moment the session detaches.
-// StikDebug's own scripts (universal.js/legacy.js) work the same way: the app
-// runs while the session stays alive, which is why StikDebug must stay open.
+//   5. resume the process and KEEP THE SESSION OPEN (universal.js model).
 // The runtime side (patches/dualjit-arena.patch -> minipal/Unix/doublemapping.cpp)
-// scans ITS OWN process for an RX region starting with the same magic, verifies
-// the pid, then creates RX/RW aliases via vm_remap and serves all JIT code from
-// it.
+// scans its own process for an RX region starting with the same magic, verifies
+// the pid, then serves all JIT code from RX/RW aliases of it.
+//
+// Why no detach ("D") at the end: on one test device (iOS 26) the arena was
+// verified present through debugserver, then became invisible to the app's
+// own vm_region scan right after the script sent "D" - debugger-granted
+// memory only lived while a session was attached. STS2's flow survives its
+// detach because a second "enable JIT" attach happens afterwards; the
+// universal.js model instead keeps the session alive for the app's lifetime.
+// We do the same: the loop below blocks in 'c' (continue) until the app stops
+// again, holding the session - and with it the arena - open.
 (() => {
     const pid = get_pid(), cap = 0x8000000, page = 0x4000;
     log("rw17-jit: session pid = " + pid + " (this must be Port17 Probe!)");
@@ -30,23 +32,14 @@
         if (!Number.isSafeInteger(address) || address <= 0 || address % page) throw Error("Invalid allocation");
         log("rw17-jit: arena at 0x" + address.toString(16));
 
-        // Prepare every page so each one is really mapped. Prefer the built-in
-        // bulk call (one shot); verify by reading back, else sweep per page.
-        let prepared = false;
-        if (typeof prepare_memory_region === "function") {
-            const pr = prepare_memory_region(address, cap);
-            log("rw17-jit: prepare_memory_region -> " + pr);
-            const rd = send_command("m" + address.toString(16) + ",4");
-            prepared = /^[0-9a-f]{8}$/i.test(rd);
-            if (!prepared) log("rw17-jit: bulk prepare unverified (" + rd + "), falling back to page sweep");
-        }
-        if (!prepared) {
-            const total = cap / page;
-            for (let i = 0; i < cap; i += page) {
-                if (send_command("M"+(address+i).toString(16)+",1:00") !== "OK") throw Error("Unprepared JIT page at offset "+i);
-                const n = i / page;
-                if (n > 0 && n % 512 === 0) log("rw17-jit: page sweep " + n + "/" + total);
-            }
+        // STS2-exact page preparation: one 1-byte write per 16 KiB page,
+        // every write must succeed. ~8192 packets, progress every 1024 pages.
+        const total = cap / page;
+        for (let i = 0; i < cap; i += page) {
+            if (send_command("M"+(address+i).toString(16)+",1:00") !== "OK")
+                throw Error("Unprepared JIT page at offset "+i);
+            const n = i / page;
+            if (n > 0 && n % 1024 === 0) log("rw17-jit: page sweep " + n + "/" + total);
         }
 
         const bytes = Array.from("RW17-JIT-ARENA1!").map(c=>c.charCodeAt(0));
@@ -55,22 +48,26 @@
         if (send_command("M"+r+",14:"+tag)!=="OK" || send_command("m"+r+",14").toLowerCase()!==tag)
             throw Error("Game arena handshake failed");
         published=true;
+        log("rw17-jit: arena prepared (128 MiB RX, pid " + pid + ")");
     } finally {
-        // No "_m" deallocate on success, and NO "D" detach - ever. If something
-        // failed above, freeing the arena before detaching is still pointless
-        // (it dies with the session anyway), so we just fall through.
+        // vAttach stopped every thread. ALWAYS put the process back before
+        // anything else - a stopped process is the black-screen-no-logs bug
+        // of the previous script version. 'c' on an already-running process
+        // is harmless (debugserver replies with an error we can ignore).
+        try { send_command("c"); } catch (e) { log("rw17-jit: initial c: " + e); }
+        if (!published && address) {
+            try { send_command("_m"+address.toString(16)); } catch (e) {}
+            try { send_command("D"); } catch (e) {}
+        }
     }
-    log("rw17-jit: arena prepared (128 MiB RX, pid " + pid + ")");
-    log("rw17-jit: keeping the debugger ATTACHED - do not close StikDebug; the probe continues on its own");
-
-    const resumed = (typeof resume_app === "function") ? resume_app() : "no resume_app";
-    log("rw17-jit: resume_app -> " + resumed);
-    if (typeof resumed === "string" && resumed.indexOf("no app") === 0) {
-        // The script ran against an already-running app (no launch session to
-        // return to): continue the stopped process without detaching. This call
-        // blocks for as long as the app runs - that is expected; keep StikDebug
-        // open. The probe now finds the arena and carries on by itself.
-        log("rw17-jit: continuing the app (the script will sit here - expected)");
-        send_command("c");
+    // Hold the debug session open (universal.js model): each 'c' blocks until
+    // the process stops again, keeping the script - and the arena anchored by
+    // the session - alive while the app runs. Keep this window open; closing
+    // it ends the session (and, on iOS 26 devices of this kind, the arena).
+    log("rw17-jit: holding the session open - KEEP THIS WINDOW OPEN; the probe continues on its own");
+    for (;;) {
+        const resp = send_command("c");
+        if (!/^[TS][0-9a-f]{2}/i.test(resp)) { log("rw17-jit: session ended: " + resp); break; }
+        log("rw17-jit: process stopped (" + resp.substring(0,20) + "), continuing");
     }
 })();
