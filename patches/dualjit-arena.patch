@@ -95,7 +95,7 @@ index 93c4758956f..4b34fb57be9 100644
  
      ~ExecutableWriterHolder()
 diff --git a/src/coreclr/minipal/Unix/doublemapping.cpp b/src/coreclr/minipal/Unix/doublemapping.cpp
-index 997d7a523e8..306578af502 100644
+index 997d7a523e8..e5d6445c9b5 100644
 --- a/src/coreclr/minipal/Unix/doublemapping.cpp
 +++ b/src/coreclr/minipal/Unix/doublemapping.cpp
 @@ -42,6 +42,9 @@
@@ -108,7 +108,7 @@ index 997d7a523e8..306578af502 100644
  
  #else // TARGET_APPLE
  
-@@ -53,6 +56,259 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
+@@ -53,6 +56,262 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
  
  #endif // TARGET_APPLE
  
@@ -135,7 +135,10 @@ index 997d7a523e8..306578af502 100644
 +// usable it returns false and the allocator degrades to the legacy path.
 +// ---------------------------------------------------------------------------
 +
-+static const char s_rw17ArenaMagic[16] = "RW17-JIT-ARENA1!";
++// 16-byte magic without NUL; the array keeps one extra byte for the C++ rule
++// that forbids truncating string initializers.
++static const char s_rw17ArenaMagic[17] = "RW17-JIT-ARENA1!";
++static const size_t Rw17ArenaMagicLen = sizeof(s_rw17ArenaMagic) - 1; // == 16
 +static const size_t Rw17ArenaCapacity = 0x6000000;  // 96 MiB; keep in sync with rw17-jit.js
 +static const size_t Rw17ArenaHeaderSize = 0x4000;   // page 0 holds the handshake header
 +static const size_t Rw17ArenaPageSize = 0x4000;     // arm64 Apple device page size
@@ -155,8 +158,8 @@ index 997d7a523e8..306578af502 100644
 +// Read the 20-byte handshake header (magic + pid) at the start of a region.
 +static bool Rw17ReadArenaHeader(void* regionStart, uint32_t* pPid)
 +{
-+    const size_t headerSize = sizeof(s_rw17ArenaMagic) + sizeof(uint32_t);
-+    uint8_t buffer[sizeof(s_rw17ArenaMagic) + sizeof(uint32_t)];
++    const size_t headerSize = Rw17ArenaMagicLen + sizeof(uint32_t);
++    uint8_t buffer[Rw17ArenaMagicLen + sizeof(uint32_t)];
 +    vm_size_t bytesRead = 0;
 +    kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t)regionStart, headerSize,
 +                                         (vm_address_t)buffer, &bytesRead);
@@ -164,12 +167,12 @@ index 997d7a523e8..306578af502 100644
 +    {
 +        return false;
 +    }
-+    if (memcmp(buffer, s_rw17ArenaMagic, sizeof(s_rw17ArenaMagic)) != 0)
++    if (memcmp(buffer, s_rw17ArenaMagic, Rw17ArenaMagicLen) != 0)
 +    {
 +        return false;
 +    }
 +    uint32_t pid;
-+    memcpy(&pid, buffer + sizeof(s_rw17ArenaMagic), sizeof(pid));
++    memcpy(&pid, buffer + Rw17ArenaMagicLen, sizeof(pid));
 +    *pPid = pid;
 +    return true;
 +}
@@ -368,7 +371,7 @@ index 997d7a523e8..306578af502 100644
  bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecutableCodeSize)
  {
      if (minipal_detect_rosetta())
-@@ -146,8 +402,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
+@@ -146,8 +405,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
      *pHandle = (void*)(size_t)fd;
  #else // !TARGET_APPLE
  
@@ -384,7 +387,7 @@ index 997d7a523e8..306578af502 100644
  #endif // !TARGET_APPLE
  
      return true;
-@@ -157,6 +420,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
+@@ -157,6 +423,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
  {
  #ifndef TARGET_APPLE
      close((int)(size_t)mapperHandle);
@@ -396,7 +399,7 @@ index 997d7a523e8..306578af502 100644
  #endif
  }
  
-@@ -197,6 +465,23 @@ bool IsMapJitFlagNeeded()
+@@ -197,6 +468,23 @@ bool IsMapJitFlagNeeded()
  
  void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offset, size_t size, const void *rangeStart, const void* rangeEnd)
  {
@@ -420,7 +423,7 @@ index 997d7a523e8..306578af502 100644
      int fd = (int)(size_t)mapperHandle;
  
      bool isUnlimitedRange = (rangeStart == NULL) && (rangeEnd == NULL);
-@@ -246,20 +531,49 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
+@@ -246,20 +534,49 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
          result = NULL;
      }
      return result;
@@ -470,7 +473,7 @@ index 997d7a523e8..306578af502 100644
  #ifndef TARGET_APPLE
      int fd = (int)(size_t)mapperHandle;
      if (mmap(pStart, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, offset) == MAP_FAILED)
-@@ -269,6 +583,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
+@@ -269,6 +586,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
      memset(pStart, 0, size);
  #endif // TARGET_APPLE
      return munmap(pStart, size) != -1;
@@ -478,7 +481,7 @@ index 997d7a523e8..306578af502 100644
  }
  
  void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t offset, size_t size)
-@@ -302,16 +617,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
+@@ -302,16 +620,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
  
      return (void*)startRW;
  #else // TARGET_AMD64
