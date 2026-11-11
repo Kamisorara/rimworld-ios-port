@@ -10,8 +10,10 @@
 // scans for an RX region starting with the same magic, verifies the pid, then
 // creates RX/RW aliases via vm_remap and serves all JIT code from it.
 //
-// Usage order in StikDebug: enable JIT (debugger attach) -> run this script ->
-// launch the app. Magic and capacity must stay in sync with the runtime patch.
+// Usage order in StikDebug: launch the probe app (JIT enabled), then run this
+// script any time afterwards - the app polls for this arena (magic + pid
+// handshake) and only starts CoreCLR once it appears, so there is no race.
+// Magic and capacity must stay in sync with the runtime patch.
 (() => {
     const pid = get_pid(), cap = 0x8000000, page = 0x4000;
     const stop = send_command("vAttach;" + pid.toString(16));
@@ -40,5 +42,5 @@
         if (!published && address) send_command("_m"+address.toString(16));
         send_command("D");
     }
-    log("rw17-jit: arena prepared (128 MiB RX). Return to the launcher and enable JIT, then launch the app.");
+    log("rw17-jit: arena prepared (128 MiB RX). If the probe app is already open, it continues on its own within a second.");
 })();

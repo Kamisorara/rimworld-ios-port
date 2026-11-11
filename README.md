@@ -39,9 +39,11 @@
 ## 真机测试（M1 验收）
 
 1. 下载 IPA，经 SideStore（或 AltStore）侧载——侧载自动带 `get-task-allow`；
-2. StikDebug 启用 JIT（调试器 attach），**然后运行启动脚本 [`probe/stikdebug/rw17-jit.js`](probe/stikdebug/rw17-jit.js)**——它在游戏进程里预分配 128MiB RX JIT 竞技场（iOS 26+ 上这是 CoreCLR 能拿到的唯一可执行内存；逐页验证约需几秒）；
-3. 打开 app：日志应出现 `[rw17-arena] arena found …` → `arena adopted …`，Hello 以几十毫秒执行，结论"JIT 生效"；
-4. 屏幕上同时打印 mach 匿名 RX 区域统计（JIT 开启时非零且变大）。
+2. StikDebug 启用 JIT（调试器 attach）并启动本 app——app 会停在"等待 JIT 竞技场"最长 120 秒；
+3. 运行脚本 [`probe/stikdebug/rw17-jit.js`](probe/stikdebug/rw17-jit.js)——它在游戏进程里逐页扫写预分配 128MiB RX JIT 竞技场（iOS 26+ 上这是 CoreCLR 能拿到的唯一可执行内存，约需数秒）；脚本完成瞬间 app 自动继续初始化；
+4. 日志应出现 `[rw17-arena] arena found …` → `arena adopted …`，Hello 以几十毫秒执行，结论"JIT 生效"；屏幕同时打印 mach 匿名 RX 区域统计（JIT 开启时非零且变大）。
+
+> 日志位置：屏幕全量可读；文件在 Files app → 浏览 → 我的 iPhone → Port17 Probe（`port17-ui.log` / `coreclr-stderr.log`）。重装应用会清空数据容器，旧日志随之消失。
 
 > 机制说明：iOS 不导出 `pthread_jit_write_protect_np`，MAP_JIT 页永远无法在进程内翻转可写；iOS 26 起内核还拒绝执行自建的 RWX 映射。竞技场是 debugserver 在附着窗口内代建的（进程当时处于 CS_DEBUGGED 状态），运行时用 `vm_remap` 出 RX/RW 双视图绕过 W^X——思路来自杀戮尖塔2 社区 iOS 包（tools/ios-dualjit）的逆向，详见 [docs/PLAN.md](docs/PLAN.md) 决策表。
 

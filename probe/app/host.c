@@ -6,10 +6,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dlfcn.h>
+#include <stdbool.h>
 #include <sys/errno.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 // mach_vm_region_recurse 的头文件 mach/mach_vm.h 在 iOS SDK 里被 #error 挡住；
 // 用 vm_region_64 + VM_REGION_BASIC_INFO_64——CoreCLR PAL 的 map/virtual.cpp 在
@@ -109,6 +110,127 @@ static void scan_exec_regions(const char *when)
     host_log(buf);
 }
 
+// ---- JIT 竞技场等待（与 runtime 补丁 Rw17FindArena 同款判定）----
+// rw17-jit.js 经 debugserver 在本进程里逐页扫写 128MiB（约 8 千个包，秒级），
+// 本进程毫秒级就跑到 coreclr_initialize——不等就永远扫不到竞技场（启动竞态）。
+// 竞技场判定：RX 且 size ≥ cap 的区域，页 0 开头是 16 字节魔数 + 4 字节小端 pid。
+#define RW17_ARENA_MAGIC "RW17-JIT-ARENA1!"
+#define RW17_ARENA_CAP 0x8000000u
+
+static bool rw17_arena_header_ok(const void *base)
+{
+    uint8_t header[20]; // 魔数 16 + pid 4
+    vm_size_t got = 0;
+    if (vm_read_overwrite(mach_task_self(), (vm_address_t)base, sizeof(header),
+                          (vm_address_t)header, &got) != KERN_SUCCESS ||
+        got != sizeof(header))
+        return false;
+    if (memcmp(header, RW17_ARENA_MAGIC, 16) != 0)
+        return false;
+    uint32_t pid;
+    memcpy(&pid, header + 16, sizeof(pid));
+    return pid == (uint32_t)getpid();
+}
+
+static const void *rw17_find_arena(void)
+{
+    vm_address_t addr = 0;
+    for (;;) {
+        vm_size_t size = 0;
+        vm_region_basic_info_data_64_t info;
+        mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+        mach_port_t obj = MACH_PORT_NULL;
+        if (vm_region_64(mach_task_self(), &addr, &size, VM_REGION_BASIC_INFO_64,
+                         (vm_region_info_t)&info, &count, &obj) != KERN_SUCCESS ||
+            size == 0)
+            return NULL;
+        if (obj != MACH_PORT_NULL)
+            mach_port_deallocate(mach_task_self(), obj);
+        if ((info.protection & VM_PROT_EXECUTE) &&
+            !(info.protection & VM_PROT_WRITE) && size >= RW17_ARENA_CAP &&
+            rw17_arena_header_ok((const void *)addr))
+            return (const void *)addr;
+        vm_address_t next = addr + size;
+        if (next <= addr)
+            return NULL; // 地址空间回绕
+        addr = next;
+    }
+}
+
+// 竞技场由 debugserver 从进程外写入：本进程挂起也不影响生成，所以这个等待
+// 循环在 iOS 挂起/恢复之间来回没有副作用，用户随时可以切去 StikDebug 跑脚本。
+static void wait_for_rw17_arena(void)
+{
+    const int kTimeoutSec = 120;
+    host_log("等待 JIT 竞技场就绪（rw17-jit.js 页扫写需数秒；可现在切去 StikDebug 运行）…");
+    for (int waited = 0; waited <= kTimeoutSec; waited++) {
+        if (rw17_find_arena() != NULL) {
+            char buf[96];
+            snprintf(buf, sizeof(buf), "JIT 竞技场已就绪（等待 %d 秒）", waited);
+            host_log(buf);
+            return;
+        }
+        if (waited == kTimeoutSec)
+            break;
+        usleep(1000 * 1000);
+        if (waited > 0 && waited % 15 == 0) {
+            char buf[128];
+            snprintf(buf, sizeof(buf),
+                     "仍在等待 JIT 竞技场…（%d/%d 秒）", waited, kTimeoutSec);
+            host_log(buf);
+        }
+    }
+    host_log("等待超时（120 秒）未见到竞技场——rw17-jit.js 未运行或未成功；仍继续初始化（预期失败）");
+}
+
+// 把 stderr 强制落盘并逐行读回屏幕日志。Darwin libc 里 freopen 后的 stderr 是
+// 全缓冲，本应用不退出就永不落盘——coreclr-stderr.log 一直是 0 字节的根因
+//（main.m 已加 setvbuf 关缓冲，这里再 fflush 兜底，保证 [rw17-arena] 上屏）。
+// 注意先整体读入快照再回放：host_log 每行也写回 stderr（同一个文件），
+// 边读边写会让文件增长快过读取，逐行读永远追不上 EOF（死循环）。
+static void dump_coreclr_stderr(void)
+{
+    fflush(stderr);
+    const char *home = getenv("HOME");
+    if (home == NULL) {
+        host_log("（HOME 未设置，无法读回 coreclr-stderr.log）");
+        return;
+    }
+    char path[512];
+    snprintf(path, sizeof(path), "%s/Documents/coreclr-stderr.log", home);
+    FILE *f = fopen(path, "r");
+    if (f == NULL) {
+        host_log("（coreclr-stderr.log 打不开——stderr 重定向本身失败了）");
+        return;
+    }
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    rewind(f);
+    if (size > 64 * 1024)
+        size = 64 * 1024; // 防御上限：日志回放不拖垮 UI
+    char *data = malloc((size_t)size + 1);
+    if (data == NULL) {
+        fclose(f);
+        return;
+    }
+    size_t got = fread(data, 1, (size_t)size, f);
+    fclose(f);
+    data[got] = '\0';
+    host_log("---- CoreCLR stderr 开始 ----");
+    char *p = data;
+    while (*p != '\0') {
+        char *nl = strchr(p, '\n');
+        if (nl != NULL)
+            *nl = '\0';
+        host_log(p);
+        if (nl == NULL)
+            break;
+        p = nl + 1;
+    }
+    free(data);
+    host_log("---- CoreCLR stderr 结束 ----");
+}
+
 int run_probe(const char *bundle_dir)
 {
     // 拍平布局：托管 dll 与 libcoreclr.dylib 同在 .app 根目录——CoreCLR 初始化
@@ -163,9 +285,11 @@ int run_probe(const char *bundle_dir)
         // 都不行 = 本次运行没有 JIT 授权（StikDebug 未开或未生效）。
         void *rwx = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
                          MAP_ANON | MAP_PRIVATE, -1, 0);
+        bool rwx_ok = false;
         if (rwx != MAP_FAILED) {
             host_log("授权探测：RWX 映射成功（attach 授权生效）");
             munmap(rwx, 4096);
+            rwx_ok = true;
         } else {
             snprintf(buf, sizeof(buf), "授权探测：RWX 被拒（errno=%d）", errno);
             host_log(buf);
@@ -185,7 +309,9 @@ int run_probe(const char *bundle_dir)
         snprintf(buf, sizeof(buf), "写保护开关符号：%s（竞技场方案下仅作诊断）",
                  wprot != NULL ? "找到" : "未找到（iOS 正常现象）");
         host_log(buf);
-        host_log("提示：先在 StikDebug 运行 rw17-jit.js 预分配 JIT 竞技场，再打开本应用");
+        host_log("提示：先经 StikDebug 启动本应用（带 JIT），再运行 rw17-jit.js——本应用会自动等待竞技场");
+        if (rwx_ok)
+            wait_for_rw17_arena();
     }
 
     // 正式属性组（对照安卓版 host.c 与官方 ios 运行时包布局）：
@@ -218,7 +344,7 @@ int run_probe(const char *bundle_dir)
         char buf[64];
         snprintf(buf, sizeof(buf), "coreclr_initialize 失败：0x%08x", hr);
         host_log(buf);
-        host_log("（CoreCLR 自己写到 stderr 的内容已附在日志末尾）");
+        dump_coreclr_stderr(); // [rw17-arena] 扫描日志在这里上屏
         return -4;
     }
     host_log("CoreCLR 就绪");

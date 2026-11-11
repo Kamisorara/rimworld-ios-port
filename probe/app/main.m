@@ -49,18 +49,28 @@ static void *probe_thread(void *arg)
 
     // CoreCLR 的内部报错走 stderr（iOS 上默认进系统日志），重定向到文件
     // 再读回来附进屏幕日志——它给出的文件名比 0x80070002 有用得多。
+    // 注意：Darwin libc 里 freopen 后的 stderr 是全缓冲，本应用不退出就永不
+    // 落盘（coreclr-stderr.log 一直 0 字节的根因）——必须 setvbuf 关缓冲。
     NSString *errPath = [NSHomeDirectory()
         stringByAppendingPathComponent:@"Documents/coreclr-stderr.log"];
-    freopen(errPath.fileSystemRepresentation, "w", stderr);
+    FILE *errFile = freopen(errPath.fileSystemRepresentation, "w", stderr);
+    setvbuf(stderr, NULL, _IONBF, 0);
+    boot_log(errFile != NULL
+        ? @"stderr 已重定向到 Documents/coreclr-stderr.log（无缓冲）"
+        : @"stderr 重定向失败（沿用系统日志）");
+    fprintf(stderr, "[probe] === 本会话 stderr 捕获自检 ===\n");
 
     const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];
     int rc = run_probe(bundle);
 
-    NSString *err = [NSString stringWithContentsOfFile:errPath
-        encoding:NSUTF8StringEncoding error:nil];
-    if (err.length > 0) {
-        append_log("---- CoreCLR stderr ----");
-        append_log(err.UTF8String);
+    // rc == -4 时 host.c 已在失败点 fflush 并逐行读回过，不重复贴
+    if (rc != -4) {
+        NSString *err = [NSString stringWithContentsOfFile:errPath
+            encoding:NSUTF8StringEncoding error:nil];
+        if (err.length > 0) {
+            append_log("---- CoreCLR stderr ----");
+            append_log(err.UTF8String);
+        }
     }
 
     char buf[64];
@@ -183,6 +193,16 @@ int main(int argc, char *argv[])
         NSString *errPath = [NSHomeDirectory()
             stringByAppendingPathComponent:@"Documents/coreclr-stderr.log"];
         freopen(errPath.fileSystemRepresentation, "w", stderr);
+        setvbuf(stderr, NULL, _IONBF, 0);
+        // Documents 自检：重装应用会清空数据容器（旧日志随之消失）；
+        // Files app 路径 = 浏览 → 我的 iPhone → Port17 Probe
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSString *docDir = [NSHomeDirectory()
+            stringByAppendingPathComponent:@"Documents"];
+        BOOL isDir = NO;
+        BOOL docOk = [fm fileExistsAtPath:docDir isDirectory:&isDir] && isDir;
+        boot_log(docOk ? @"Documents 目录存在（Files app：浏览 → 我的 iPhone → Port17 Probe）"
+                       : @"Documents 目录缺失（沙盒异常，日志只剩屏幕一份）");
         signal(SIGSEGV, crash_handler);
         signal(SIGBUS, crash_handler);
         signal(SIGABRT, crash_handler);
