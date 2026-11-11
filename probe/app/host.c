@@ -135,6 +135,7 @@ static bool rw17_arena_header_ok(const void *base)
 typedef struct {
     const void *arena;      // 魔数+pid 握手全中的竞技场，未找到为 NULL
     uint64_t largestRx;     // 本进程最大 RX（不可写）区域
+    uint64_t largestAny;    // 本进程最大区域（任意保护位）
     unsigned candidates;    // ≥128MiB 的 RX 区域数（无论是否盖章）
 } rw17_scan_t;
 
@@ -153,6 +154,8 @@ static void rw17_scan(rw17_scan_t *out)
             break;
         if (obj != MACH_PORT_NULL)
             mach_port_deallocate(mach_task_self(), obj);
+        if (size > out->largestAny)
+            out->largestAny = size;
         if ((info.protection & VM_PROT_EXECUTE) && !(info.protection & VM_PROT_WRITE)) {
             if (size > out->largestRx)
                 out->largestRx = size;
@@ -180,7 +183,7 @@ static void wait_for_rw17_arena(void)
     char buf[256];
     snprintf(buf, sizeof(buf), "等待 JIT 竞技场就绪（本进程 pid=%d）…", (int)getpid());
     host_log(buf);
-    host_log("提示：竞技场只会出现在脚本 vAttach 的那个进程里——请确认 StikDebug 的 JIT 会话目标就是本应用");
+    host_log("提示：竞技场只在脚本 vAttach 的进程里、且只在调试器附着期间有效——脚本跑完后保持 StikDebug 开启");
     for (int waited = 0; waited <= kTimeoutSec; waited++) {
         rw17_scan_t scan;
         rw17_scan(&scan);
@@ -195,9 +198,10 @@ static void wait_for_rw17_arena(void)
         usleep(1000 * 1000);
         if (waited > 0 && waited % 15 == 0) {
             snprintf(buf, sizeof(buf),
-                     "仍在等待…（%d/%d 秒；最大 RX 区域 %llu MiB，≥128MiB 候选 %u 个）",
+                     "仍在等待…（%d/%d 秒；最大 RX %llu MiB，最大区域 %llu MiB，候选 %u 个）",
                      waited, kTimeoutSec,
                      (unsigned long long)(scan.largestRx / (1024 * 1024)),
+                     (unsigned long long)(scan.largestAny / (1024 * 1024)),
                      scan.candidates);
             host_log(buf);
         }
@@ -205,9 +209,10 @@ static void wait_for_rw17_arena(void)
     rw17_scan_t scan;
     rw17_scan(&scan);
     snprintf(buf, sizeof(buf),
-             "等待超时（600 秒）：竞技场未出现。期间最大 RX 区域 %llu MiB、候选 %u 个"
-             "——若远小于 128MiB，说明脚本把竞技场建到了别的进程（JIT 会话目标不对）",
-             (unsigned long long)(scan.largestRx / (1024 * 1024)), scan.candidates);
+             "等待超时（600 秒）：竞技场未出现。最大 RX %llu MiB、最大区域 %llu MiB、候选 %u 个"
+             "——区域大但非 RX=保护位问题；都不大=竞技场不在本进程或已随 detach 消失",
+             (unsigned long long)(scan.largestRx / (1024 * 1024)),
+             (unsigned long long)(scan.largestAny / (1024 * 1024)), scan.candidates);
     host_log(buf);
     host_log("仍继续初始化 CoreCLR（预期失败，stderr 有扫描日志）");
 }

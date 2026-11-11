@@ -6,12 +6,17 @@
 //   3. prepare/touch every page - StikDebug v3.x has a bulk prepare_memory_region
 //      JIT call (one invocation); older builds fall back to per-page writes;
 //   4. stamp the handshake header at offset 0: magic + pid (little-endian);
-//   5. detach - the RX arena stays mapped after the debugger leaves.
+//   5. KEEP THE DEBUGGER ATTACHED and resume the app.
+//
+// DO NOT detach ("D") at the end. Debugger-granted memory does not survive the
+// detach - verified on device: the script's own read-back sees the arena, the
+// process's vm_region scan no longer does the moment the session detaches.
+// StikDebug's own scripts (universal.js/legacy.js) work the same way: the app
+// runs while the session stays alive, which is why StikDebug must stay open.
 // The runtime side (patches/dualjit-arena.patch -> minipal/Unix/doublemapping.cpp)
 // scans ITS OWN process for an RX region starting with the same magic, verifies
 // the pid, then creates RX/RW aliases via vm_remap and serves all JIT code from
-// it. vm_region only sees the process's own memory: an arena created in any
-// other process is invisible to the probe.
+// it.
 (() => {
     const pid = get_pid(), cap = 0x8000000, page = 0x4000;
     log("rw17-jit: session pid = " + pid + " (this must be Port17 Probe!)");
@@ -51,8 +56,21 @@
             throw Error("Game arena handshake failed");
         published=true;
     } finally {
-        if (!published && address) send_command("_m"+address.toString(16));
-        send_command("D");
+        // No "_m" deallocate on success, and NO "D" detach - ever. If something
+        // failed above, freeing the arena before detaching is still pointless
+        // (it dies with the session anyway), so we just fall through.
     }
-    log("rw17-jit: arena prepared (128 MiB RX, pid " + pid + "). Switch back to the probe - it continues on its own.");
+    log("rw17-jit: arena prepared (128 MiB RX, pid " + pid + ")");
+    log("rw17-jit: keeping the debugger ATTACHED - do not close StikDebug; the probe continues on its own");
+
+    const resumed = (typeof resume_app === "function") ? resume_app() : "no resume_app";
+    log("rw17-jit: resume_app -> " + resumed);
+    if (typeof resumed === "string" && resumed.indexOf("no app") === 0) {
+        // The script ran against an already-running app (no launch session to
+        // return to): continue the stopped process without detaching. This call
+        // blocks for as long as the app runs - that is expected; keep StikDebug
+        // open. The probe now finds the arena and carries on by itself.
+        log("rw17-jit: continuing the app (the script will sit here - expected)");
+        send_command("c");
+    }
 })();
