@@ -95,7 +95,7 @@ index 93c4758956f..4b34fb57be9 100644
  
      ~ExecutableWriterHolder()
 diff --git a/src/coreclr/minipal/Unix/doublemapping.cpp b/src/coreclr/minipal/Unix/doublemapping.cpp
-index 997d7a523e8..494d0e8a0a4 100644
+index 997d7a523e8..82d841e7297 100644
 --- a/src/coreclr/minipal/Unix/doublemapping.cpp
 +++ b/src/coreclr/minipal/Unix/doublemapping.cpp
 @@ -42,6 +42,11 @@
@@ -110,7 +110,7 @@ index 997d7a523e8..494d0e8a0a4 100644
  
  #else // TARGET_APPLE
  
-@@ -53,6 +58,312 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
+@@ -53,6 +58,323 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
  
  #endif // TARGET_APPLE
  
@@ -275,14 +275,25 @@ index 997d7a523e8..494d0e8a0a4 100644
 +        sys_icache_invalidate(rwView, sizeof(kGadget42));
 +        sys_icache_invalidate(rxView, sizeof(kGadget42));
 +
++        // STS2 ready_v1 compares the two views before executing: the alias
++        // write must be visible through the granted arena (physical-page
++        // coherence), otherwise executing the arena would run stale bytes.
++        uint32_t viaAlias = 0, viaArena = 0;
++        memcpy(&viaAlias, rwView, sizeof(viaAlias));
++        memcpy(&viaArena, rxView, sizeof(viaArena));
++        RW17_LOG("probe bytes: alias=%08x arena=%08x (expect 52800540 both)\n", viaAlias, viaArena);
++
 +        int32_t (*probe)(void) = (int32_t (*)(void))rxView;
-+        ok = probe() == 42;
-+        if (ok)
++        int32_t r1 = probe();
++        RW17_LOG("probe call #1 -> %d (expect 42)\n", r1);
++        if (r1 == 42)
 +        {
 +            memcpy(rwView, &kGadget43Word, sizeof(kGadget43Word));
 +            sys_icache_invalidate(rwView, sizeof(kGadget43Word));
 +            sys_icache_invalidate(rxView, sizeof(kGadget43Word));
-+            ok = probe() == 43;
++            int32_t r2 = probe();
++            RW17_LOG("probe call #2 -> %d (expect 43)\n", r2);
++            ok = (r2 == 43);
 +        }
 +    }
 +
@@ -337,9 +348,8 @@ index 997d7a523e8..494d0e8a0a4 100644
 +        // - WRITE through ONE vm_remap(copy=FALSE) alias made RW (STS2 does
 +        //   exactly this and its writes succeed).
 +        // - Loader-heap data pages (interleavedloaderheap writes through the
-+        //   Commit(false) pointer) need the arena subrange flipped RW; that is
-+        //   a plain mprotect syscall - it fails cleanly (no fault) if the
-+        //   kernel refuses, which the probe below verifies up front.
++        //   Commit(false) pointer) commit via the always-writable RW alias; no
++        //   mprotect touches the granted pages at all.
 +        // NOTE: while a debugserver session is attached, mach exceptions go to
 +        // the debugger FIRST - a faulting instruction stops the process and our
 +        // in-process handler never runs (the script continue loop then spins).
@@ -358,9 +368,10 @@ index 997d7a523e8..494d0e8a0a4 100644
 +            mapper->singleMapping = false;
 +
 +            RW17_LOG("running execution probes (writes via the RW alias, calls via the arena)\n");
-+            if (Rw17ProbeExecute(mapper->rxBase + Rw17ArenaHeaderSize, mapper->rwBase + Rw17ArenaHeaderSize) &&
-+                mprotect(mapper->rxBase + Rw17ArenaHeaderSize, Rw17ArenaPageSize, PROT_READ | PROT_WRITE) == 0 &&
-+                mprotect(mapper->rxBase + Rw17ArenaHeaderSize, Rw17ArenaPageSize, PROT_READ | PROT_EXEC) == 0)
++            // No mprotect flips here: data pages commit through the always-
++            // writable RW alias (Commit(false) returns it), so granted pages
++            // never need their protection changed - iOS 26 refuses that.
++            if (Rw17ProbeExecute(mapper->rxBase + Rw17ArenaHeaderSize, mapper->rwBase + Rw17ArenaHeaderSize))
 +            {
 +                RW17_LOG("arena adopted: rx=%p rw=%p capacity=%zu (debugger-granted)\n",
 +                         (void*)mapper->rxBase, (void*)mapper->rwBase, Rw17ArenaCapacity);
@@ -370,7 +381,7 @@ index 997d7a523e8..494d0e8a0a4 100644
 +                return true;
 +            }
 +
-+            RW17_LOG("probes failed (no fault line => debugger intercepted it); no usable JIT memory\n");
++            RW17_LOG("execution probe failed (values logged above); no usable JIT memory\n");
 +            munmap(rwAlias, Rw17ArenaCapacity);
 +            mapper->rxBase = NULL;
 +            mapper->rwBase = NULL;
@@ -423,7 +434,7 @@ index 997d7a523e8..494d0e8a0a4 100644
  bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecutableCodeSize)
  {
      if (minipal_detect_rosetta())
-@@ -146,8 +457,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
+@@ -146,8 +468,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
      *pHandle = (void*)(size_t)fd;
  #else // !TARGET_APPLE
  
@@ -439,7 +450,7 @@ index 997d7a523e8..494d0e8a0a4 100644
  #endif // !TARGET_APPLE
  
      return true;
-@@ -157,6 +475,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
+@@ -157,6 +486,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
  {
  #ifndef TARGET_APPLE
      close((int)(size_t)mapperHandle);
@@ -451,7 +462,7 @@ index 997d7a523e8..494d0e8a0a4 100644
  #endif
  }
  
-@@ -197,6 +520,23 @@ bool IsMapJitFlagNeeded()
+@@ -197,6 +531,23 @@ bool IsMapJitFlagNeeded()
  
  void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offset, size_t size, const void *rangeStart, const void* rangeEnd)
  {
@@ -475,7 +486,7 @@ index 997d7a523e8..494d0e8a0a4 100644
      int fd = (int)(size_t)mapperHandle;
  
      bool isUnlimitedRange = (rangeStart == NULL) && (rangeEnd == NULL);
-@@ -246,20 +586,49 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
+@@ -246,20 +597,66 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
          result = NULL;
      }
      return result;
@@ -488,8 +499,25 @@ index 997d7a523e8..494d0e8a0a4 100644
 +    // Arena mode: the execution view flips between RX (code pages) and RW
 +    // (loader-heap data pages that must stay near the code). Single-mapping
 +    // mode keeps code pages RWX so writes through the shared view keep working.
++    if (s_rw17Mapper != NULL && !s_rw17Mapper->singleMapping)
++    {
++        // Debugger-granted arena: protection never changes (iOS 26 refuses
++        // mprotect on such pages). Data pages (isExecutable=false) commit
++        // through the always-writable RW alias - interleavedloaderheap
++        // writes its DataPageGenerator output through the returned pointer,
++        // and the bytes are visible through the arena view via physical-page
++        // D-cache coherence. Code pages commit as the arena view; all code
++        // bytes arrive via ExecutableWriterHolder (the same RW alias) with
++        // the instruction cache flushed on the arena view by the callers.
++        if (!isExecutable)
++        {
++            return s_rw17Mapper->rwBase + ((uint8_t*)pStart - s_rw17Mapper->rxBase);
++        }
++        return pStart;
++    }
++
 +    int protection;
-+    if (s_rw17Mapper != NULL && s_rw17Mapper->singleMapping)
++    if (s_rw17Mapper->singleMapping)
 +    {
 +        protection = isExecutable ? (PROT_READ | PROT_WRITE | PROT_EXEC) : (PROT_READ | PROT_WRITE);
 +    }
@@ -525,7 +553,7 @@ index 997d7a523e8..494d0e8a0a4 100644
  #ifndef TARGET_APPLE
      int fd = (int)(size_t)mapperHandle;
      if (mmap(pStart, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, offset) == MAP_FAILED)
-@@ -269,6 +638,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
+@@ -269,6 +666,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
      memset(pStart, 0, size);
  #endif // TARGET_APPLE
      return munmap(pStart, size) != -1;
@@ -533,7 +561,7 @@ index 997d7a523e8..494d0e8a0a4 100644
  }
  
  void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t offset, size_t size)
-@@ -302,16 +672,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
+@@ -302,16 +700,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
  
      return (void*)startRW;
  #else // TARGET_AMD64
