@@ -124,16 +124,30 @@ static void run_probe_on_bg(void)
         forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:again];
 
-    UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
-    [NSLayoutConstraint activateConstraints:@[
-        [again.topAnchor constraintEqualToAnchor:safe.topAnchor],
-        [again.centerXAnchor constraintEqualToAnchor:safe.centerXAnchor],
-        [g_text.topAnchor constraintEqualToAnchor:again.bottomAnchor],
-        [g_text.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
-        [g_text.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor],
-        [g_text.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor],
-    ]];
-}
+        UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
+        [NSLayoutConstraint activateConstraints:@[
+            [again.topAnchor constraintEqualToAnchor:safe.topAnchor],
+            [again.centerXAnchor constraintEqualToAnchor:safe.centerXAnchor],
+            [g_text.topAnchor constraintEqualToAnchor:again.bottomAnchor],
+            [g_text.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
+            [g_text.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor],
+            [g_text.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor],
+        ]];
+
+        // 启动即回放既有 ui 日志：崩溃后的上一次会话（含抢救出的 stderr
+        // 尾部/backtrace）直接可见，不依赖 Files app（容器重置、文件共享
+        // 偶发失效时照样能取证）。回放必须先于 viewDidAppear 的探针启动。
+        NSString *uiPath = [NSHomeDirectory()
+            stringByAppendingPathComponent:@"Documents/port17-ui.log"];
+        NSString *prev = [NSString stringWithContentsOfFile:uiPath
+                                                   encoding:NSUTF8StringEncoding
+                                                      error:nil];
+        if (prev.length > 0) {
+            g_text.text = prev;
+            NSRange end = { g_text.text.length - 1, 1 };
+            [g_text scrollRangeToVisible:end];
+        }
+    }
 
 - (void)viewDidAppear:(BOOL)animated
 {
@@ -170,8 +184,10 @@ static void run_probe_on_bg(void)
 
 @end
 
-// 崩溃信号：落一行打点后交还系统默认处理——iOS 会写完整崩溃报告（.ips，
-// 含调用栈），Settings → 隐私与安全性 → 分析与改进 → 分析数据 里可取。
+// 崩溃信号：落一行打点 + 把 coreclr-stderr.log 尾部（CoreCLR crash report
+// 的 native backtrace 就在里面）抢救进持久化的 port17-ui.log——进程快死了，
+// 这一步是 best-effort，抢到多少是多少；然后交还系统默认处理写 .ips 崩溃
+// 报告（Settings → 隐私与安全性 → 分析与改进 → 分析数据 里可取）。
 // 没有任何信号行而进程消失 = SIGKILL（jetsam/看门狗），同样会有 JetsamEvent 报告。
 static void crash_handler(int sig)
 {
@@ -179,8 +195,30 @@ static void crash_handler(int sig)
     snprintf(buf, sizeof(buf),
              "收到信号 %d（SIGSEGV=11, SIGBUS=10, SIGABRT=6, SIGTRAP=5, SIGILL=4），转系统写崩溃报告",
              sig);
-    NSString *line = [NSString stringWithUTF8String:buf];
-    boot_log(line);
+    boot_log([NSString stringWithUTF8String:buf]);
+    NSString *errPath = [NSHomeDirectory()
+        stringByAppendingPathComponent:@"Documents/coreclr-stderr.log"];
+    NSString *uiPath = [NSHomeDirectory()
+        stringByAppendingPathComponent:@"Documents/port17-ui.log"];
+    NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:errPath];
+    if (fh != nil) {
+        unsigned long long len = [fh seekToEndOfFile];
+        unsigned long long tail = len > 8192 ? 8192 : len;
+        [fh seekToFileOffset:len - tail];
+        NSData *data = [fh readDataToEndOfFile];
+        [fh closeFile];
+        NSString *tailStr = [[NSString alloc] initWithData:data
+                                                  encoding:NSUTF8StringEncoding];
+        if (tailStr.length > 0) {
+            NSString *out = [NSString stringWithFormat:
+                @"---- 崩溃时 stderr 尾部（抢救）----\n%@\n---- 抢救完毕 ----\n", tailStr];
+            FILE *f = fopen(uiPath.fileSystemRepresentation, "a");
+            if (f != NULL) {
+                fputs(out.UTF8String, f);
+                fclose(f);
+            }
+        }
+    }
     signal(sig, SIG_DFL);
     raise(sig);
 }
