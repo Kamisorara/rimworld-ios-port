@@ -3,6 +3,7 @@
 #include <dlfcn.h>
 #include <dirent.h>
 #include <mach/mach.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +11,7 @@
 #include <sys/errno.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
 // mach_vm_region_recurse 的头文件 mach/mach_vm.h 在 iOS SDK 里被 #error 挡住；
@@ -163,6 +165,79 @@ static void dump_coreclr_stderr(void)
     host_log("---- CoreCLR stderr 结束 ----");
 }
 
+// ---- stderr 跟随线程：[rw17-arena] 进度实时上屏 ----
+// runtime 的 [rw17-arena] 行只写 stderr 文件；屏幕日志此前只在
+// coreclr_initialize 失败返回后才回放（dump_coreclr_stderr 在 hr!=0 分支）
+// ——初始化若卡住，屏幕停在"初始化 CoreCLR…"，分不清正常等待（等脚本
+// ≤120 秒 + 逐页扫写 1–2 分钟）还是真死。此线程每 2 秒把文件里新增的
+// 完整 [rw17-arena] 行转 host_log 上屏。
+// 只转发该前缀：host_log 会把 "[probe] ..." 行写回同一个文件，不转发
+// 它们就永远不会把自己刚打过的行再读出来打一遍（自激死循环的根）。
+static volatile int g_tailer_run = 0;
+static pthread_t g_tailer_tid;
+
+static void *stderr_tailer_main(void *unused)
+{
+    (void)unused;
+    const char *home = getenv("HOME");
+    if (home == NULL)
+        return NULL;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/Documents/coreclr-stderr.log", home);
+    FILE *f = fopen(path, "r");
+    if (f == NULL)
+        return NULL;
+    char pending[1024];
+    size_t pendingLen = 0;
+    while (g_tailer_run) {
+        char buf[2048];
+        size_t got = fread(buf, 1, sizeof(buf), f);
+        clearerr(f); // 文件增长后 stdio 的 EOF 指示要清掉才能继续读
+        size_t pos = 0;
+        while (pos < got) {
+            char *nl = memchr(buf + pos, '\n', got - pos);
+            size_t chunk = (nl != NULL) ? (size_t)(nl - (buf + pos)) + 1 : got - pos;
+            if (pendingLen + chunk < sizeof(pending)) {
+                memcpy(pending + pendingLen, buf + pos, chunk);
+                pendingLen += chunk;
+            } else {
+                pendingLen = 0; // 异常长的行直接丢弃（[rw17-arena] 行都很短）
+            }
+            pos += chunk;
+            if (nl != NULL) {
+                if (pendingLen > 0)
+                    pending[pendingLen - 1] = '\0';
+                else
+                    pending[0] = '\0';
+                if (strncmp(pending, "[rw17-arena]", 12) == 0)
+                    host_log(pending);
+                pendingLen = 0;
+            }
+        }
+        struct timespec ts = {2, 0}; // 2 秒一轮，够实时也不抢 CPU
+        nanosleep(&ts, NULL);
+    }
+    fclose(f);
+    return NULL;
+}
+
+static void stderr_tailer_start(void)
+{
+    if (g_tailer_run)
+        return;
+    g_tailer_run = 1;
+    if (pthread_create(&g_tailer_tid, NULL, stderr_tailer_main, NULL) != 0)
+        g_tailer_run = 0;
+}
+
+static void stderr_tailer_stop(void)
+{
+    if (!g_tailer_run)
+        return;
+    g_tailer_run = 0;
+    pthread_join(g_tailer_tid, NULL);
+}
+
 int run_probe(const char *bundle_dir)
 {
     // 拍平布局：托管 dll 与 libcoreclr.dylib 同在 .app 根目录——CoreCLR 初始化
@@ -267,7 +342,8 @@ int run_probe(const char *bundle_dir)
     const char *values[7] = {tpa, managed_dir, managed_dir, (char *)bundle_dir,
                              (char *)bundle_dir, "ios-arm64", ""};
 
-    host_log("初始化 CoreCLR…");
+    stderr_tailer_start();
+    host_log("初始化 CoreCLR…（JIT26 握手在初始化内进行：等脚本 ≤120 秒 + 逐页扫写 1–2 分钟；期间 [rw17-arena] 进度实时滚动）");
     void *host = NULL;
     unsigned int domain = 0;
     // exePath 契约 = 原生宿主可执行文件路径（hostpolicy 传 host_path，不是托管 dll）
@@ -277,7 +353,8 @@ int run_probe(const char *bundle_dir)
         char buf[64];
         snprintf(buf, sizeof(buf), "coreclr_initialize 失败：0x%08x", hr);
         host_log(buf);
-        dump_coreclr_stderr(); // [rw17-arena] 扫描日志在这里上屏
+        stderr_tailer_stop();
+        dump_coreclr_stderr(); // 全量回放（[rw17-arena] 已实时上屏，这里是完整留档）
         return -4;
     }
     host_log("CoreCLR 就绪");
@@ -291,11 +368,13 @@ int run_probe(const char *bundle_dir)
         char buf[64];
         snprintf(buf, sizeof(buf), "coreclr_execute_assembly 失败：0x%08x", hr);
         host_log(buf);
+        stderr_tailer_stop();
         return -5;
     }
 
     scan_exec_regions("执行后");
 
+    stderr_tailer_stop();
     char buf[96];
     snprintf(buf, sizeof(buf), "Hello 退出码：%u", exit_code);
     host_log(buf);
