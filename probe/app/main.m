@@ -82,7 +82,7 @@ static void *probe_thread(void *arg)
 static void run_probe_on_bg(void)
 {
     append_log("==== Port17 iOS 探针 ====");
-    append_log("JIT26 协议：经 StikDebug 拉起并运行 rw17-jit26.js；runtime 在初始化里 brk 请求、脚本应答后即分离");
+    append_log("JIT26 协议（宿主拿内存）：经 StikDebug 拉起并运行 rw17-jit26.js；本进程 brk 请求、脚本应答、别名/分离/探针全在宿主，runtime 只消费");
     boot_log(@"创建 probe 线程");
     pthread_attr_t attr;
     pthread_attr_init(&attr);

@@ -98,7 +98,7 @@ diff --git a/src/coreclr/minipal/Unix/doublemapping.cpp b/src/coreclr/minipal/Un
 index 997d7a523e8..82d841e7297 100644
 --- a/src/coreclr/minipal/Unix/doublemapping.cpp
 +++ b/src/coreclr/minipal/Unix/doublemapping.cpp
-@@ -42,6 +42,15 @@
+@@ -42,6 +42,13 @@
  #ifdef TARGET_APPLE
  
  #include <mach/mach.h>
@@ -106,62 +106,38 @@ index 997d7a523e8..82d841e7297 100644
 +#include <libkern/OSCacheControl.h> // sys_icache_invalidate
 +#include <signal.h>
 +#include <setjmp.h>
-+#include <TargetConditionals.h> // TARGET_OS_SIMULATOR (never brk there)
-+#include <sys/sysctl.h>   // P_TRACED via kern.proc.pid (the JIT26 gate)
-+#include <time.h>         // nanosleep (waiting for the serving script)
++#include <TargetConditionals.h> // TARGET_OSX (macOS keeps the seeded-arena scan)
 +#include <unistd.h>       // getpid
 +#endif
  
  #else // TARGET_APPLE
  
-@@ -53,6 +62,530 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
+@@ -53,6 +60,384 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
  
  #endif // TARGET_APPLE
  
 +#if defined(TARGET_APPLE) && defined(TARGET_ARM64)
 +
 +// ---------------------------------------------------------------------------
-+// Port17 JIT26 backend (iOS device / macOS CI), playport-shaped: a
-+// synchronous brk handshake with an early detach.
++// Port17 JIT26 backend (iOS device / macOS CI), playport-shaped ownership:
++// the HOST acquires the arena, this side only consumes pointers.
 +//
 +// iOS does not export pthread_jit_write_protect_np, so a MAP_JIT mapping can
 +// never be made writable in-process; iOS 26+ additionally refuses to execute
 +// self-created RWX mappings. Executable memory is granted only through a
-+// debugger, so on iOS the runtime ASKS for it instead of scanning for it:
++// debugger, so the acquisition (live-debugger gate, the brk handshake with
++// the StikDebug serve script rw17-jit26.js, the vm_remap RW alias, the early
++// detach, the execution probe) lives in the APP - probe/app/host.c, shared
++// by the future game host - which then hands the arena over through
++// PORT17_JIT_RX / PORT17_JIT_RW / PORT17_JIT_SIZE (playport's
++// WINE_IOS_JIT_* pattern). This side runs zero OS calls on the device path,
++// so the patch stays stable and host-side iteration never rebuilds it.
 +//
-+//   Rw17Jit26PrepareRegion(len)   mov x16, #1 ; brk #0xf00d ; ret
-+//   Rw17Jit26Detach()             mov x16, #0 ; brk #0xf00d ; ret
-+//
-+// The StikDebug serve script (probe/stikdebug/rw17-jit26.js) catches each
-+// brk, skips it, allocates the requested bytes RX with the private "_M,rx"
-+// packet, writes one byte to every 16 KiB page of it (the blessing that
-+// keeps the pages executable once the debugger is gone) and returns the
-+// address in x0; for a detach it sends "D" and the session ends - the
-+// script window can be closed. The runtime maps one vm_remap RW alias for
-+// writing, executes through the granted RX view, and DETACHES BEFORE
-+// ANYTHING EXECUTES. That ordering is the fix for the probe-window freeze
-+// of the scan-based design: while a debugserver session is attached, Mach
-+// exceptions reach the debugger first, a faulting instruction stops the
-+// process, and in-process handlers (the sigsetjmp probe below, later
-+// CoreCLR's own exception dispatch on every managed exception) never run -
-+// the process only stop/continue-loops under the script. Detached, the
-+// probe below runs normally, and startup owns its faults.
-+//
-+// A brk with nobody behind it is SIGTRAP and death, so every brk is gated:
-+// CS_DEBUGGED (csops) plus P_TRACED (sysctl kern.proc.pid) checked
-+// immediately before issuing it; short or failed queries fail closed. The
-+// gate waits up to 120 s for the user to run the serve script (progress in
-+// stderr every 15 s, surfaced by the host's log dump), then fails cleanly:
-+// coreclr_initialize reports it and stderr says to launch via StikDebug
-+// with rw17-jit26.js.
-+//
-+// macOS has no StikDebug; it keeps the previous flow for CI coverage: the
-+// seeded-arena scan below (macprobe-osx with RW17_SEED_ARENA=1 exercises
-+// the alias/probe/Commit machinery through the same Rw17MapAliasRW /
-+// Rw17ProbeExecute / Reserve / Commit code the device uses) and, with no
-+// seed, the self-allocated RWX arena. The iOS simulator likewise never
-+// issues a brk: nothing serves it there, and CI expects a fast clean
-+// degrade.
++// macOS has no StikDebug and keeps its CI flow: the seeded-arena scan below
++// (macprobe-osx with RW17_SEED_ARENA=1 exercises the alias/probe/Commit
++// machinery through the same Rw17MapAliasRW / Rw17ProbeExecute / Reserve /
++// Commit code) and, with no seed, the self-allocated RWX arena. The iOS
++// simulator sets no env either and degrades fast and clean (CI expects it).
 +// ---------------------------------------------------------------------------
 +
 +// 16-byte magic without NUL; the array keeps one extra byte for the C++ rule
@@ -170,78 +146,22 @@ index 997d7a523e8..82d841e7297 100644
 +static const char s_rw17ArenaMagic[17] = "RW17-JIT-ARENA1!";
 +static const size_t Rw17ArenaMagicLen = sizeof(s_rw17ArenaMagic) - 1; // == 16
 +
-+static const size_t Rw17ArenaCapacity = 0x8000000;  // 128 MiB; keep in sync with rw17-jit26.js (the brk carries it in x1)
++static const size_t Rw17ArenaCapacity = 0x8000000;  // 128 MiB; keep in sync with the host and rw17-jit26.js
 +static const size_t Rw17ArenaPageSize = 0x4000;     // arm64 Apple device page size
-+static const size_t Rw17ArenaHeaderSize = 0x4000;   // seeded/self arenas: page 0 holds the handshake header; brk arenas skip nothing
-+
-+#ifndef P_TRACED
-+#define P_TRACED 0x00000800
-+#endif
++static const size_t Rw17ArenaHeaderSize = 0x4000;   // seeded/self arenas: page 0 holds the handshake header; host arenas skip nothing
 +
 +struct Rw17ArenaMapper
 +{
 +    uint8_t* rxBase;        // execution view (debugger-granted, RX as granted)
 +    uint8_t* rwBase;        // write view; == rxBase in single-mapping mode
 +    size_t capacity;
-+    size_t headerSize;      // 0x4000 for seeded/self arenas (handshake page), 0 for brk-granted
++    size_t headerSize;      // 0x4000 for seeded/self arenas (handshake page), 0 for host-granted
 +    bool singleMapping;     // self-allocated RWX arena: no aliases
 +};
 +
 +static Rw17ArenaMapper* s_rw17Mapper = NULL;
 +
 +#define RW17_LOG(...) do { fprintf(stderr, "[rw17-arena] " __VA_ARGS__); } while (0)
-+
-+// The slim Apple SDKs ship neither <sys/codesign.h> nor the CS_* values (the
-+// csops syscall itself lives in libSystem), so the gate declares what it
-+// needs locally - values per XNU's cs_builtins.h.
-+#ifndef CS_OPS_STATUS
-+#define CS_OPS_STATUS 0
-+#endif
-+#ifndef CS_DEBUGGED
-+#define CS_DEBUGGED 0x10000000 // set at debugger launch/attach; survives a detach
-+#endif
-+extern "C" int csops(pid_t pid, unsigned int ops, void* useraddr, size_t usersize);
-+
-+// CS_DEBUGGED and P_TRACED, both, or nothing. CS_DEBUGGED survives a detach
-+// (playport's wine_host.c lesson: it is launch state, not liveness); P_TRACED
-+// is the live-tracer bit. A short or failed query is "no debugger" - an
-+// unserved brk kills the process, so the gate fails closed.
-+static bool Rw17DebuggerAttached()
-+{
-+    const pid_t pid = getpid();
-+    uint32_t flags = 0;
-+    if (csops(pid, CS_OPS_STATUS, &flags, sizeof(flags)) != 0 || !(flags & CS_DEBUGGED))
-+    {
-+        return false;
-+    }
-+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, pid };
-+    struct kinfo_proc info;
-+    size_t size = sizeof(info);
-+    memset(&info, 0, sizeof(info));
-+    if (sysctl(mib, 4, &info, &size, NULL, 0) != 0 || size != sizeof(info))
-+    {
-+        return false;
-+    }
-+    return (info.kp_proc.p_flag & P_TRACED) != 0;
-+}
-+
-+// The app asks for the region by trapping; the serve script has debugserver
-+// allocate it RX and bless every page, and answers with the address in x0.
-+// The parameter is unnamed on purpose: the ABI carries it in x1 for the
-+// script to read, and a naked function has no body to silence a warning in.
-+__attribute__((noinline, optnone, naked)) static void* Rw17Jit26PrepareRegion(size_t)
-+{
-+    __asm__("mov x16, #1\n"
-+            "brk #0xf00d\n"
-+            "ret\n");
-+}
-+
-+__attribute__((noinline, optnone, naked)) static void Rw17Jit26Detach()
-+{
-+    __asm__("mov x16, #0\n"
-+            "brk #0xf00d\n"
-+            "ret\n");
-+}
 +
 +// Read the 20-byte handshake header (magic + pid) at the start of a region.
 +static bool Rw17ReadArenaHeader(void* regionStart, uint32_t* pPid)
@@ -433,37 +353,36 @@ index 997d7a523e8..82d841e7297 100644
 +    return NULL;
 +}
 +
-+// Wait for the serving script. iOS device only: macOS and the iOS simulator
-+// never brk (macOS has the seeded scan and the RWX fallback below; the
-+// simulator must degrade fast because nothing serves it there).
-+// VALUE test, not defined(): TargetConditionals.h defines TARGET_OS_SIMULATOR
-+// unconditionally (to 0 on device!), so defined() once sent a real device
-+// down the simulator's instant-degrade path.
-+static bool Rw17WaitForDebugger(int waitMs)
++// Consume what the host acquired. Hex strings, set before coreclr_initialize;
++// wrong/absent env fails cleanly (the host has already logged its own chain).
++static bool Rw17AdoptHostArena(void** pHandle, size_t* pMaxExecutableCodeSize, Rw17ArenaMapper* mapper)
 +{
-+#if TARGET_OSX || TARGET_OS_SIMULATOR
-+    (void)waitMs;
-+    return false;
-+#else
-+    RW17_LOG("waiting for a live debugger - launch via StikDebug and run probe/stikdebug/rw17-jit26.js (%d s budget)\n", waitMs / 1000);
-+    int waited = 0;
-+    while (!Rw17DebuggerAttached())
++    const char* rx = getenv("PORT17_JIT_RX");
++    const char* rw = getenv("PORT17_JIT_RW");
++    const char* sz = getenv("PORT17_JIT_SIZE");
++    if (rx == NULL || rw == NULL || sz == NULL)
 +    {
-+        if (waited >= waitMs)
-+        {
-+            RW17_LOG("no live debugger after %d s; no usable JIT memory\n", waitMs / 1000);
-+            return false;
-+        }
-+        struct timespec ts = { 0, 50 * 1000 * 1000 }; // 50 ms
-+        nanosleep(&ts, NULL);
-+        waited += 50;
-+        if (waited % (15 * 1000) == 0)
-+        {
-+            RW17_LOG("still waiting for a live debugger (%d/%d s)\n", waited / 1000, waitMs / 1000);
-+        }
++        return false;
 +    }
++    unsigned long long rxv = strtoull(rx, NULL, 16);
++    unsigned long long rwv = strtoull(rw, NULL, 16);
++    unsigned long long szv = strtoull(sz, NULL, 16);
++    if (rxv == 0 || rwv == 0 || rxv == rwv || szv < Rw17ArenaPageSize || (szv & (Rw17ArenaPageSize - 1)) != 0)
++    {
++        RW17_LOG("host arena env looks wrong (rx=%s rw=%s size=%s); ignoring\n", rx, rw, sz);
++        return false;
++    }
++    mapper->rxBase = (uint8_t*)rxv;
++    mapper->rwBase = (uint8_t*)rwv;
++    mapper->capacity = (size_t)szv;
++    mapper->headerSize = 0;      // the host hands over the first byte, no handshake page
++    mapper->singleMapping = false;
++    s_rw17Mapper = mapper;       // the Commit path consults this
++    *pHandle = mapper;
++    *pMaxExecutableCodeSize = mapper->capacity;
++    RW17_LOG("host arena adopted: rx=%p rw=%p capacity=%llu (debugger-granted, host-probed, already detached)\n",
++             mapper->rxBase, mapper->rwBase, szv);
 +    return true;
-+#endif
 +}
 +
 +static bool Rw17CreateArenaMapper(void** pHandle, size_t* pMaxExecutableCodeSize)
@@ -474,108 +393,41 @@ index 997d7a523e8..82d841e7297 100644
 +        return false;
 +    }
 +
-+    void* arena = NULL;
-+    uint8_t* rwAlias = NULL;
-+
-+    if (Rw17WaitForDebugger(120 * 1000))
++#if defined(TARGET_OSX)
++    // macOS CI: the seeded-arena scan (macprobe-osx with RW17_SEED_ARENA=1
++    // stamps magic+pid into a real RX mapping) exercises the alias/probe/
++    // Commit machinery; without a seed, the self-made RWX arena below.
++    void* arena = Rw17FindArena();
++    if (arena != NULL)
 +    {
-+        // Re-check immediately before each brk (playport discipline):
-+        // liveness can change between the wait and the call - the script
-+        // window closing, a stale StikDebug session.
-+        if (!Rw17DebuggerAttached())
-+        {
-+            RW17_LOG("debugger vanished before the prepare brk; no usable JIT memory\n");
-+            free(mapper);
-+            return false;
-+        }
-+        RW17_LOG("live debugger confirmed; prepare brk incoming (%zu MiB; the page sweep takes 1-2 min inside the stop)\n",
-+                 Rw17ArenaCapacity >> 20);
-+        arena = Rw17Jit26PrepareRegion(Rw17ArenaCapacity);
-+        if (arena == NULL)
-+        {
-+            RW17_LOG("prepare brk returned NULL; no usable JIT memory\n");
-+            free(mapper);
-+            return false;
-+        }
-+        RW17_LOG("arena granted at %p\n", arena);
-+        // Kernel's view of the granted region: extent and protections as
-+        // vm_region reports them (the debugserver _M product - on iOS 26
-+        // these are known to enumerate submap-backed, sometimes as a single
-+        // 16 KiB entry despite the full capacity).
-+        {
-+            vm_address_t q = (vm_address_t)arena;
-+            vm_size_t qSize = 0;
-+            vm_region_basic_info_data_64_t qInfo;
-+            mach_msg_type_number_t qCnt = VM_REGION_BASIC_INFO_COUNT_64;
-+            mach_port_t qObj = MACH_PORT_NULL;
-+            if (vm_region_64(mach_task_self(), &q, &qSize, VM_REGION_BASIC_INFO_64,
-+                             (vm_region_info_t)&qInfo, &qCnt, &qObj) == KERN_SUCCESS)
-+            {
-+                if (qObj != MACH_PORT_NULL)
-+                    mach_port_deallocate(mach_task_self(), qObj);
-+                RW17_LOG("granted region: start=%p size=%llu cur=%x max=%x\n",
-+                         (void*)q, (unsigned long long)qSize,
-+                         (unsigned)qInfo.protection, (unsigned)qInfo.max_protection);
-+            }
-+        }
-+
-+        rwAlias = Rw17MapAliasRW(arena, Rw17ArenaCapacity);
++        RW17_LOG("arena found at %p (seeded)\n", arena);
++        uint8_t* rwAlias = Rw17MapAliasRW(arena, Rw17ArenaCapacity);
 +        if (rwAlias == NULL)
 +        {
-+            RW17_LOG("RW alias of the arena failed; no usable JIT memory\n");
-+            free(mapper);
-+            return false;
-+        }
-+        RW17_LOG("RW alias at %p; detaching before anything executes\n", (void*)rwAlias);
-+
-+        if (Rw17DebuggerAttached())
-+        {
-+            Rw17Jit26Detach();
-+            RW17_LOG("debugger detached - the blessing keeps the pages executable; the probe below runs unattached\n");
++            RW17_LOG("RW alias of the seeded arena failed; falling through to the RWX arena\n");
 +        }
 +        else
 +        {
-+            // The script died between prepare and detach. Issuing the detach
-+            // brk now would be an unserved brk (SIGTRAP death); skip it and
-+            // let the probe decide whether the arena outlived its session.
-+            RW17_LOG("debugger already gone before the detach brk; probing the arena as-is\n");
++            mapper->rxBase = (uint8_t*)arena;
++            mapper->rwBase = rwAlias;
++            mapper->capacity = Rw17ArenaCapacity;
++            mapper->headerSize = Rw17ArenaHeaderSize;
++            mapper->singleMapping = false;
 +        }
-+
-+        mapper->rxBase = (uint8_t*)arena;
-+        mapper->rwBase = rwAlias;
-+        mapper->capacity = Rw17ArenaCapacity;
-+        mapper->headerSize = 0;      // x0 is the first byte; no handshake page
-+        mapper->singleMapping = false;
 +    }
-+    else
-+    {
-+#if defined(TARGET_OSX)
-+        // macOS CI: the seeded-arena scan (macprobe-osx with RW17_SEED_ARENA=1
-+        // stamps magic+pid into a real RX mapping) exercises the alias/probe/
-+        // Commit machinery; without a seed, the self-made RWX arena below.
-+        arena = Rw17FindArena();
-+        if (arena != NULL)
-+        {
-+            rwAlias = Rw17MapAliasRW(arena, Rw17ArenaCapacity);
-+            if (rwAlias == NULL)
-+            {
-+                RW17_LOG("RW alias of the seeded arena failed; falling through to the RWX arena\n");
-+            }
-+            else
-+            {
-+                mapper->rxBase = (uint8_t*)arena;
-+                mapper->rwBase = rwAlias;
-+                mapper->capacity = Rw17ArenaCapacity;
-+                mapper->headerSize = Rw17ArenaHeaderSize;
-+                mapper->singleMapping = false;
-+            }
-+        }
 +#else
-+        // iOS simulator: nothing serves the brk and there is no fallback;
-+        // degrade fast and clean (CI expects exactly this).
-+        RW17_LOG("iOS: no debugger-served arena and no fallback - run rw17-jit26.js via StikDebug on device\n");
-+#endif
++    // iOS device AND simulator: no env, no JIT - the host acquires; nothing
++    // here waits or brks (an unserved brk is SIGTRAP death, and the host owns
++    // the gate). Degrade clean and let coreclr_initialize report it.
++    if (!Rw17AdoptHostArena(pHandle, pMaxExecutableCodeSize, mapper))
++    {
++        RW17_LOG("no host arena (PORT17_JIT_* unset) - launch via StikDebug with rw17-jit26.js; the host acquires the arena\n");
++        free(mapper);
++        return false;
 +    }
++    RW17_LOG("JIT26 backend done - allocation is pointer math over the host-granted arena\n");
++    return true;
++#endif
 +
 +    if (mapper->rxBase != NULL)
 +    {
@@ -589,7 +441,7 @@ index 997d7a523e8..82d841e7297 100644
 +            s_rw17Mapper = mapper;
 +            *pHandle = mapper;
 +            *pMaxExecutableCodeSize = mapper->capacity - mapper->headerSize;
-+            RW17_LOG("JIT26 backend done - handing back to CoreCLR init (a hang below this line is CoreCLR itself, not the JIT backend)\n");
++            RW17_LOG("JIT26 backend done - handing back to CoreCLR init\n");
 +            return true;
 +        }
 +        RW17_LOG("execution probe failed (values logged above); no usable JIT memory\n");
@@ -645,7 +497,7 @@ index 997d7a523e8..82d841e7297 100644
  bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecutableCodeSize)
  {
      if (minipal_detect_rosetta())
-@@ -146,8 +679,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
+@@ -146,8 +531,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
      *pHandle = (void*)(size_t)fd;
  #else // !TARGET_APPLE
  
@@ -661,7 +513,7 @@ index 997d7a523e8..82d841e7297 100644
  #endif // !TARGET_APPLE
  
      return true;
-@@ -157,6 +697,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
+@@ -157,6 +549,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
  {
  #ifndef TARGET_APPLE
      close((int)(size_t)mapperHandle);
@@ -673,7 +525,7 @@ index 997d7a523e8..82d841e7297 100644
  #endif
  }
  
-@@ -197,6 +742,24 @@ bool IsMapJitFlagNeeded()
+@@ -197,6 +594,24 @@ bool IsMapJitFlagNeeded()
  
  void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offset, size_t size, const void *rangeStart, const void* rangeEnd)
  {
@@ -698,7 +550,7 @@ index 997d7a523e8..82d841e7297 100644
      int fd = (int)(size_t)mapperHandle;
  
      bool isUnlimitedRange = (rangeStart == NULL) && (rangeEnd == NULL);
-@@ -246,20 +809,66 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
+@@ -246,20 +661,66 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
          result = NULL;
      }
      return result;
@@ -765,7 +617,7 @@ index 997d7a523e8..82d841e7297 100644
  #ifndef TARGET_APPLE
      int fd = (int)(size_t)mapperHandle;
      if (mmap(pStart, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, offset) == MAP_FAILED)
-@@ -269,6 +878,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
+@@ -269,6 +730,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
      memset(pStart, 0, size);
  #endif // TARGET_APPLE
      return munmap(pStart, size) != -1;
@@ -773,7 +625,7 @@ index 997d7a523e8..82d841e7297 100644
  }
  
  void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t offset, size_t size)
-@@ -302,16 +912,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
+@@ -302,16 +764,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
  
      return (void*)startRW;
  #else // TARGET_AMD64
