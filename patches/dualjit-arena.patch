@@ -98,7 +98,7 @@ diff --git a/src/coreclr/minipal/Unix/doublemapping.cpp b/src/coreclr/minipal/Un
 index 997d7a523e8..82d841e7297 100644
 --- a/src/coreclr/minipal/Unix/doublemapping.cpp
 +++ b/src/coreclr/minipal/Unix/doublemapping.cpp
-@@ -42,6 +42,16 @@
+@@ -42,6 +42,15 @@
  #ifdef TARGET_APPLE
  
  #include <mach/mach.h>
@@ -107,7 +107,6 @@ index 997d7a523e8..82d841e7297 100644
 +#include <signal.h>
 +#include <setjmp.h>
 +#include <TargetConditionals.h> // TARGET_OS_SIMULATOR (never brk there)
-+#include <sys/codesign.h> // csops / CS_DEBUGGED (the JIT26 gate)
 +#include <sys/sysctl.h>   // P_TRACED via kern.proc.pid (the JIT26 gate)
 +#include <time.h>         // nanosleep (waiting for the serving script)
 +#include <unistd.h>       // getpid
@@ -115,7 +114,7 @@ index 997d7a523e8..82d841e7297 100644
  
  #else // TARGET_APPLE
  
-@@ -53,6 +63,476 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
+@@ -53,6 +62,487 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
  
  #endif // TARGET_APPLE
  
@@ -185,6 +184,17 @@ index 997d7a523e8..82d841e7297 100644
 +static Rw17ArenaMapper* s_rw17Mapper = NULL;
 +
 +#define RW17_LOG(...) do { fprintf(stderr, "[rw17-arena] " __VA_ARGS__); } while (0)
++
++// The slim Apple SDKs ship neither <sys/codesign.h> nor the CS_* values (the
++// csops syscall itself lives in libSystem), so the gate declares what it
++// needs locally - values per XNU's cs_builtins.h.
++#ifndef CS_OPS_STATUS
++#define CS_OPS_STATUS 0
++#endif
++#ifndef CS_DEBUGGED
++#define CS_DEBUGGED 0x10000000 // set at debugger launch/attach; survives a detach
++#endif
++extern "C" int csops(pid_t pid, unsigned int ops, void* useraddr, size_t usersize);
 +
 +// CS_DEBUGGED and P_TRACED, both, or nothing. CS_DEBUGGED survives a detach
 +// (playport's wine_host.c lesson: it is launch state, not liveness); P_TRACED
@@ -383,7 +393,8 @@ index 997d7a523e8..82d841e7297 100644
 +// Create an RW alias of [source, source+size): remap the same physical pages
 +// and drop EXEC on the alias. Aliasing debugger-created pages bypasses the
 +// W^X provenance check that blocks a direct mprotect of the arena itself.
-+// mach_vm_protect first (the playport reference), mprotect as the fallback.
++// Plain mprotect on the alias (mach_vm_protect would need manual prototypes
++// on the slim SDK; add it back only if a device ever refuses the mprotect).
 +static uint8_t* Rw17MapAliasRW(void* source, size_t size)
 +{
 +    vm_address_t alias = 0;
@@ -395,8 +406,7 @@ index 997d7a523e8..82d841e7297 100644
 +    {
 +        return NULL;
 +    }
-+    kern_return_t pr = mach_vm_protect(mach_task_self(), alias, size, FALSE, VM_PROT_READ | VM_PROT_WRITE);
-+    if (pr != KERN_SUCCESS && mprotect((void*)alias, size, PROT_READ | PROT_WRITE) == -1)
++    if (mprotect((void*)alias, size, PROT_READ | PROT_WRITE) == -1)
 +    {
 +        vm_deallocate(mach_task_self(), alias, size);
 +        return NULL;
@@ -592,7 +602,7 @@ index 997d7a523e8..82d841e7297 100644
  bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecutableCodeSize)
  {
      if (minipal_detect_rosetta())
-@@ -146,8 +626,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
+@@ -146,8 +636,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
      *pHandle = (void*)(size_t)fd;
  #else // !TARGET_APPLE
  
@@ -608,7 +618,7 @@ index 997d7a523e8..82d841e7297 100644
  #endif // !TARGET_APPLE
  
      return true;
-@@ -157,6 +644,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
+@@ -157,6 +654,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
  {
  #ifndef TARGET_APPLE
      close((int)(size_t)mapperHandle);
@@ -620,7 +630,7 @@ index 997d7a523e8..82d841e7297 100644
  #endif
  }
  
-@@ -197,6 +689,24 @@ bool IsMapJitFlagNeeded()
+@@ -197,6 +699,24 @@ bool IsMapJitFlagNeeded()
  
  void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offset, size_t size, const void *rangeStart, const void* rangeEnd)
  {
@@ -645,7 +655,7 @@ index 997d7a523e8..82d841e7297 100644
      int fd = (int)(size_t)mapperHandle;
  
      bool isUnlimitedRange = (rangeStart == NULL) && (rangeEnd == NULL);
-@@ -246,20 +756,66 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
+@@ -246,20 +766,66 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
          result = NULL;
      }
      return result;
@@ -712,7 +722,7 @@ index 997d7a523e8..82d841e7297 100644
  #ifndef TARGET_APPLE
      int fd = (int)(size_t)mapperHandle;
      if (mmap(pStart, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, offset) == MAP_FAILED)
-@@ -269,6 +825,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
+@@ -269,6 +835,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
      memset(pStart, 0, size);
  #endif // TARGET_APPLE
      return munmap(pStart, size) != -1;
@@ -720,7 +730,7 @@ index 997d7a523e8..82d841e7297 100644
  }
  
  void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t offset, size_t size)
-@@ -302,16 +859,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
+@@ -302,16 +869,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
  
      return (void*)startRW;
  #else // TARGET_AMD64
