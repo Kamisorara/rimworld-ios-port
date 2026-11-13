@@ -525,32 +525,52 @@ index 997d7a523e8..82d841e7297 100644
  #endif
  }
  
-@@ -197,6 +594,24 @@ bool IsMapJitFlagNeeded()
+@@ -197,6 +594,44 @@ bool IsMapJitFlagNeeded()
  
  void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offset, size_t size, const void *rangeStart, const void* rangeEnd)
  {
 +#if defined(TARGET_APPLE) && defined(TARGET_ARM64)
-+    // Arena mode: offsets live in the adopted (or self-allocated) arena.
-+    // headerSize is 0x4000 for the macOS seeded/self arenas (their page 0
-+    // is the handshake header), 0 for a brk-granted arena (x0 is the first
-+    // byte). No OS calls are involved - the aliases were created once.
++    // Arena mode, fd-mapper semantics: every reservation gets a fresh
++    // vm_remap alias of arena[headerSize+offset .. +size). Commit flips that
++    // view IN PLACE between RX and RW - protection changes on remapped
++    // copies of debugger-granted pages are allowed, unlike on the granted
++    // pages themselves - and GetRWMapping hands out short-lived extra
++    // aliases. The interleaved loader heap writes its data through the SAME
++    // VA it reserved, so the reserved view must be the flippable one: a
++    // fixed alias pair (the first attempt) left its data writes landing on
++    // the read-only execution view, dying with SIGBUS in Module::Create.
 +    Rw17ArenaMapper* mapper = (Rw17ArenaMapper*)mapperHandle;
-+    uint8_t* addr = (mapper != NULL ? mapper->rxBase : NULL) + (mapper != NULL ? mapper->headerSize : 0) + offset;
++    if (mapper == NULL)
++    {
++        return NULL;
++    }
++    uint8_t* src = mapper->rxBase + mapper->headerSize + offset;
 +    if ((rangeStart != NULL || rangeEnd != NULL) &&
-+        ((uintptr_t)addr < (uintptr_t)rangeStart || (uintptr_t)(addr + size) > (uintptr_t)rangeEnd))
++        ((uintptr_t)src < (uintptr_t)rangeStart || (uintptr_t)(src + size) > (uintptr_t)rangeEnd))
 +    {
 +        // Jump-stub windows are computed around existing code heaps. Since all
 +        // JIT code lives in one 128 MiB arena, arm64's ±128 MiB direct branch
 +        // range still holds; grant the allocation but say so.
 +        RW17_LOG("range-restricted reserve at %p (%zu bytes) outside [%p, %p) - granting anyway\n",
-+                 (void*)addr, size, rangeStart, rangeEnd);
++                 (void*)src, size, rangeStart, rangeEnd);
 +    }
-+    return addr;
++    vm_address_t va = 0;
++    vm_prot_t curProtection = VM_PROT_NONE, maxProtection = VM_PROT_NONE;
++    kern_return_t kr = vm_remap(mach_task_self(), &va, size, 0, VM_FLAGS_ANYWHERE,
++                                mach_task_self(), (vm_address_t)src, FALSE,
++                                &curProtection, &maxProtection, VM_INHERIT_NONE);
++    if (kr != KERN_SUCCESS)
++    {
++        RW17_LOG("reserve vm_remap of %p (%zu bytes) failed: kr=%d (0x%x)\n",
++                 (void*)src, size, (int)kr, (unsigned)kr);
++        return NULL;
++    }
++    return (void*)va;
 +#else
      int fd = (int)(size_t)mapperHandle;
  
      bool isUnlimitedRange = (rangeStart == NULL) && (rangeEnd == NULL);
-@@ -246,20 +661,66 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
+@@ -246,20 +681,44 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
          result = NULL;
      }
      return result;
@@ -560,36 +580,14 @@ index 997d7a523e8..82d841e7297 100644
  void *VMToOSInterface::CommitDoubleMappedMemory(void* pStart, size_t size, bool isExecutable)
  {
 +#if defined(TARGET_APPLE) && defined(TARGET_ARM64)
-+    // Arena mode: the execution view flips between RX (code pages) and RW
-+    // (loader-heap data pages that must stay near the code). Single-mapping
-+    // mode keeps code pages RWX so writes through the shared view keep working.
-+    if (s_rw17Mapper != NULL && !s_rw17Mapper->singleMapping)
-+    {
-+        // Debugger-granted arena: protection never changes (iOS 26 refuses
-+        // mprotect on such pages). Data pages (isExecutable=false) commit
-+        // through the always-writable RW alias - interleavedloaderheap
-+        // writes its DataPageGenerator output through the returned pointer,
-+        // and the bytes are visible through the arena view via physical-page
-+        // D-cache coherence. Code pages commit as the arena view; all code
-+        // bytes arrive via ExecutableWriterHolder (the same RW alias) with
-+        // the instruction cache flushed on the arena view by the callers.
-+        if (!isExecutable)
-+        {
-+            return s_rw17Mapper->rwBase + ((uint8_t*)pStart - s_rw17Mapper->rxBase);
-+        }
-+        return pStart;
-+    }
-+
-+    int protection;
-+    if (s_rw17Mapper->singleMapping)
-+    {
-+        protection = isExecutable ? (PROT_READ | PROT_WRITE | PROT_EXEC) : (PROT_READ | PROT_WRITE);
-+    }
-+    else
-+    {
-+        protection = isExecutable ? (PROT_READ | PROT_EXEC) : (PROT_READ | PROT_WRITE);
-+    }
-+    if (mprotect(pStart, size, protection) == -1)
++    // fd-mapper semantics: the reserved view flips protection IN PLACE.
++    // One code path serves every backend flavor - per-reservation aliases
++    // of the granted arena, seeded-arena aliases, and the self-made RWX
++    // arena alike. In-place flips are only possible because Reserve hands
++    // out remapped aliases: protection changes on remapped copies of
++    // debugger-granted pages are allowed, unlike on the granted pages
++    // themselves (verified on device - the full-alias mprotect RW passed).
++    if (mprotect(pStart, size, isExecutable ? (PROT_READ | PROT_EXEC) : (PROT_READ | PROT_WRITE)) == -1)
 +    {
 +        RW17_LOG("commit flip of %p (%llu bytes, %s) failed (errno=%d)\n",
 +                 pStart, (unsigned long long)size, isExecutable ? "rx" : "rw", errno);
@@ -617,7 +615,7 @@ index 997d7a523e8..82d841e7297 100644
  #ifndef TARGET_APPLE
      int fd = (int)(size_t)mapperHandle;
      if (mmap(pStart, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, offset) == MAP_FAILED)
-@@ -269,6 +730,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
+@@ -269,6 +728,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
      memset(pStart, 0, size);
  #endif // TARGET_APPLE
      return munmap(pStart, size) != -1;
@@ -625,21 +623,39 @@ index 997d7a523e8..82d841e7297 100644
  }
  
  void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t offset, size_t size)
-@@ -302,16 +764,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
+@@ -302,16 +762,46 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
  
      return (void*)startRW;
  #else // TARGET_AMD64
 -    // This method should not be called on OSX ARM64
 -    assert(false);
 -    return NULL;
-+    // Arena backend: the RW view is one whole-capacity alias created at
-+    // adoption time; individual mappings are plain address translations.
++    // Arena backend: hand out a short-lived RW alias of the same arena range
++    // the caller's reserved view maps (offset is the arena offset, exactly
++    // as with the fd-based mapper). ReleaseRWMapping munmaps it.
 +    Rw17ArenaMapper* mapper = (Rw17ArenaMapper*)mapperHandle;
 +    if (mapper == NULL)
 +    {
 +        return NULL;
 +    }
-+    return mapper->rwBase + mapper->headerSize + offset;
++    vm_address_t va = 0;
++    vm_prot_t curProtection = VM_PROT_NONE, maxProtection = VM_PROT_NONE;
++    kern_return_t kr = vm_remap(mach_task_self(), &va, size, 0, VM_FLAGS_ANYWHERE,
++                                mach_task_self(), (vm_address_t)(mapper->rxBase + mapper->headerSize + offset), FALSE,
++                                &curProtection, &maxProtection, VM_INHERIT_NONE);
++    if (kr != KERN_SUCCESS)
++    {
++        RW17_LOG("rw-mapping vm_remap (offset %zu, %zu bytes) failed: kr=%d (0x%x)\n",
++                 offset, size, (int)kr, (unsigned)kr);
++        return NULL;
++    }
++    if (mprotect((void*)va, size, PROT_READ | PROT_WRITE) == -1)
++    {
++        RW17_LOG("rw-mapping mprotect failed (errno=%d)\n", errno);
++        vm_deallocate(mach_task_self(), va, size);
++        return NULL;
++    }
++    return (void*)va;
  #endif // TARGET_AMD64
  #endif // TARGET_APPLE
  }
@@ -647,8 +663,10 @@ index 997d7a523e8..82d841e7297 100644
  bool VMToOSInterface::ReleaseRWMapping(void* pStart, size_t size)
  {
 +#if defined(TARGET_APPLE) && defined(TARGET_ARM64)
-+    // The RW view is one permanent alias; individual mappings are not unmapped.
-+    return true;
++    // Short-lived RW aliases from GetRWMapping are unmapped here. Reserved
++    // views are long-lived (Commit flips them in place) and never pass
++    // through this function.
++    return munmap(pStart, size) != -1;
 +#else
      return munmap(pStart, size) != -1;
 +#endif
