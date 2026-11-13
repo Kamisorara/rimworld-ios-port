@@ -82,7 +82,7 @@ static void *probe_thread(void *arg)
 static void run_probe_on_bg(void)
 {
     append_log("==== Port17 iOS 探针 ====");
-    append_log("JIT-only 构建：必须经 StikDebug 开 JIT，否则启动即被系统杀掉");
+    append_log("JIT26 协议：经 StikDebug 拉起并运行 rw17-jit26.js；runtime 在初始化里 brk 请求、脚本应答后即分离");
     boot_log(@"创建 probe 线程");
     pthread_attr_t attr;
     pthread_attr_init(&attr);

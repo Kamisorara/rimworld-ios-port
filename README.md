@@ -36,16 +36,16 @@
 
 手动触发或推送到 main 都会出包。产物在 Actions 的 Artifacts 里。
 
-## 真机测试（M1 验收）
+## 真机测试（M1 验收，JIT26 协议）
 
 1. 下载 IPA，经 SideStore（或 AltStore）侧载——侧载自动带 `get-task-allow`；
-2. 直接打开 app（无需 StikDebug 拉起）——它会停在"等待 JIT 竞技场"最长 600 秒，屏幕每 15 秒打印 RX 区域遥测；
-3. 运行脚本 [`probe/stikdebug/rw17-jit.js`](probe/stikdebug/rw17-jit.js)（StikDebug 里以本 app 为目标）——它在进程里逐页扫写预分配 128MiB RX JIT 竞技场（iOS 26+ 上这是 CoreCLR 能拿到的唯一可执行内存，约 1–2 分钟，有进度日志）；**脚本完成后保持 StikDebug 脚本窗口打开**（会话锚定竞技场），app 自动继续初始化；
-4. 日志应出现 `JIT 竞技场已就绪` → `[rw17-arena] arena found …` → `arena adopted …`，Hello 以几十毫秒执行，结论"JIT 生效"；屏幕同时打印 mach 匿名 RX 区域统计（JIT 开启时非零且变大）。
+2. 经 StikDebug 拉起本 app（带 JIT）；runtime 走到 `coreclr_initialize` 时会自己发 `brk #0xf00d` 请求竞技场，并最多等调试器 120 秒（`[rw17-arena]` 进度在 stderr 日志里，屏幕此时无新行是正常的）；
+3. 在 StikDebug 里以本 app 为目标运行应答脚本 [`probe/stikdebug/rw17-jit26.js`](probe/stikdebug/rw17-jit26.js)——它在 app 停在 brk 上的窗口里经 debugserver `_M,rx` 分配 128MiB RX 并逐页扫写祝福（约 1–2 分钟，有进度日志），把地址经 x0 还给 app，随后应答分离请求；**脚本分离完成后窗口可关**，竞技场照常可用；
+4. 日志应出现 `[rw17-arena] live debugger confirmed` → `arena granted at …` → `RW alias at …; detaching …` → `probe call #1 -> 42` → `probe call #2 -> 43` → `arena adopted …`，随后 `CoreCLR 就绪`，Hello 以几十毫秒执行，结论"JIT 生效"；屏幕同时打印 mach 匿名 RX 区域统计（JIT 开启时非零且变大）。
 
 > 日志位置：屏幕全量可读；文件在 Files app → 浏览 → 我的 iPhone → Port17 Probe（`port17-ui.log` / `coreclr-stderr.log`）。重装应用会清空数据容器，旧日志随之消失。
 
-> 机制说明：iOS 不导出 `pthread_jit_write_protect_np`，MAP_JIT 页永远无法在进程内翻转可写；iOS 26 起内核还拒绝执行自建的 RWX 映射。竞技场是 debugserver 在附着窗口内代建的（进程当时处于 CS_DEBUGGED 状态），运行时用 `vm_remap` 出 RX/RW 双视图绕过 W^X——思路来自杀戮尖塔2 社区 iOS 包（tools/ios-dualjit）的逆向，详见 [docs/PLAN.md](docs/PLAN.md) 决策表。
+> 机制说明：iOS 不导出 `pthread_jit_write_protect_np`，MAP_JIT 页永远无法在进程内翻转可写；iOS 26 起内核还拒绝执行自建的 RWX 映射。可执行内存只能由调试器授予：runtime 发 brk 请求，debugserver 的 `_M,rx` 在进程内代建 RX 区并逐页写"祝福"（分离后仍可执行的凭据），运行时 `vm_remap` 出 RW 别名写代码、走授权 RX 视图执行。请求-应答-分离的协议形态来自 playport（`playport-universal.js` + `wine_host.c`），最初的竞技场思路来自杀戮尖塔2 社区 iOS 包（tools/ios-dualjit）的逆向，详见 [docs/PLAN.md](docs/PLAN.md) 决策表与 [docs/PLAN-JIT26.md](docs/PLAN-JIT26.md)。
 
 ## 里程碑
 

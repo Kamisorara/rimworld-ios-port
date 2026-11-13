@@ -110,120 +110,10 @@ static void scan_exec_regions(const char *when)
     host_log(buf);
 }
 
-// ---- JIT 竞技场等待（与 runtime 补丁 Rw17FindArena 同款判定）----
-// rw17-jit.js 经 debugserver 在本进程里逐页扫写 128MiB（约 8 千个包，秒级），
-// 本进程毫秒级就跑到 coreclr_initialize——不等就永远扫不到竞技场（启动竞态）。
-// 竞技场判定：RX 且 size ≥ cap 的区域，页 0 开头是 16 字节魔数 + 4 字节小端 pid。
-#define RW17_ARENA_MAGIC "RW17-JIT-ARENA1!"
-#define RW17_ARENA_CAP 0x8000000u
-
-static bool rw17_arena_header_ok(const void *base)
-{
-    uint8_t header[20]; // 魔数 16 + pid 4
-    vm_size_t got = 0;
-    if (vm_read_overwrite(mach_task_self(), (vm_address_t)base, sizeof(header),
-                          (vm_address_t)header, &got) != KERN_SUCCESS ||
-        got != sizeof(header))
-        return false;
-    if (memcmp(header, RW17_ARENA_MAGIC, 16) != 0)
-        return false;
-    uint32_t pid;
-    memcpy(&pid, header + 16, sizeof(pid));
-    return pid == (uint32_t)getpid();
-}
-
-typedef struct {
-    const void *arena;      // 魔数+pid 握手全中的竞技场，未找到为 NULL
-    uint64_t arenaSize;     // 竞技场区域实际大小（可能小于 cap）
-    uint64_t largestRx;     // 本进程最大 RX（不可写）区域
-    uint64_t largestAny;    // 本进程最大区域（任意保护位）
-    unsigned rxRegions;     // RX 区域总数
-    unsigned bigRegions;    // ≥16MiB 区域数（任意保护位）
-} rw17_scan_t;
-
-static void rw17_scan(rw17_scan_t *out)
-{
-    memset(out, 0, sizeof(*out));
-    vm_address_t addr = 0;
-    for (;;) {
-        vm_size_t size = 0;
-        vm_region_basic_info_data_64_t info;
-        mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
-        mach_port_t obj = MACH_PORT_NULL;
-        if (vm_region_64(mach_task_self(), &addr, &size, VM_REGION_BASIC_INFO_64,
-                         (vm_region_info_t)&info, &count, &obj) != KERN_SUCCESS ||
-            size == 0)
-            break;
-        if (obj != MACH_PORT_NULL)
-            mach_port_deallocate(mach_task_self(), obj);
-        if (size > out->largestAny)
-            out->largestAny = size;
-        if (size >= 16u * 1024 * 1024)
-            out->bigRegions++;
-        if ((info.protection & VM_PROT_EXECUTE) && !(info.protection & VM_PROT_WRITE)) {
-            out->rxRegions++;
-            if (size > out->largestRx)
-                out->largestRx = size;
-            // STS2 ready_v1 同款：RX + 魔数头即可（size≥1 页），
-            // 不要求整段 cap 连续——vm_remap 仍按全容量映射。
-            if (size >= 0x4000 && rw17_arena_header_ok((const void *)addr)) {
-                out->arena = (const void *)addr;
-                out->arenaSize = size;
-            }
-        }
-        vm_address_t next = addr + size;
-        if (next <= addr)
-            break; // 地址空间回绕
-        addr = next;
-    }
-}
-
-// 竞技场由 debugserver 从进程外写入：本进程挂起也不影响生成，所以这个等待
-// 循环在 iOS 挂起/恢复之间来回没有副作用，用户随时可以切去 StikDebug 跑脚本。
-// vm_region 只能看到本进程内存：若脚本把竞技场建到了别的进程（JIT 会话目标
-// 不是本应用），这里永远等不到——侦察日志（本进程 pid、最大 RX 区域、候选数）
-// 就是为了把这种情况一眼钉死。
-static void wait_for_rw17_arena(void)
-{
-    const int kTimeoutSec = 600;
-    char buf[256];
-    snprintf(buf, sizeof(buf), "等待 JIT 竞技场就绪（本进程 pid=%d）…", (int)getpid());
-    host_log(buf);
-    host_log("提示：竞技场只在脚本 vAttach 的进程里、且只在调试器附着期间有效——脚本跑完后保持 StikDebug 开启");
-    for (int waited = 0; waited <= kTimeoutSec; waited++) {
-        rw17_scan_t scan;
-        rw17_scan(&scan);
-        if (scan.arena != NULL) {
-            snprintf(buf, sizeof(buf),
-                     "JIT 竞技场已就绪（等待 %d 秒，%llu MiB @ %p）",
-                     waited, (unsigned long long)(scan.arenaSize / (1024 * 1024)),
-                     scan.arena);
-            host_log(buf);
-            return;
-        }
-        if (waited == kTimeoutSec)
-            break;
-        usleep(1000 * 1000);
-        if (waited > 0 && waited % 15 == 0) {
-            snprintf(buf, sizeof(buf),
-                     "仍在等待…（%d/%d 秒；RX 区域 %u 个/最大 %llu MiB，≥16MiB 区域 %u 个/最大 %llu MiB）",
-                     waited, kTimeoutSec, scan.rxRegions,
-                     (unsigned long long)(scan.largestRx / (1024 * 1024)),
-                     scan.bigRegions,
-                     (unsigned long long)(scan.largestAny / (1024 * 1024)));
-            host_log(buf);
-        }
-    }
-    rw17_scan_t scan;
-    rw17_scan(&scan);
-    snprintf(buf, sizeof(buf),
-             "等待超时（600 秒）：竞技场未出现。RX 区域 %u 个/最大 %llu MiB，≥16MiB 区域 %u 个/最大 %llu MiB"
-             "——有大区域但无握手=竞技场盖在别的进程；有大区域但非 RX=保护位异常；都小=未建",
-             scan.rxRegions, (unsigned long long)(scan.largestRx / (1024 * 1024)),
-             scan.bigRegions, (unsigned long long)(scan.largestAny / (1024 * 1024)));
-    host_log(buf);
-    host_log("仍继续初始化 CoreCLR（预期失败，stderr 有扫描日志）");
-}
+// JIT 竞技场不再由本进程等待/扫描：runtime 补丁（patches/dualjit-arena.patch）
+// 的 JIT26 后端在 coreclr_initialize 里自己发 brk #0xf00d 请求，StikDebug 的
+// rw17-jit26.js 应答（分配 RX + 逐页祝福）后立即分离——启动竞态随协议消失，
+// 本文件只剩诊断与 CoreCLR 装载。
 
 // 把 stderr 强制落盘并逐行读回屏幕日志。Darwin libc 里 freopen 后的 stderr 是
 // 全缓冲，本应用不退出就永不落盘——coreclr-stderr.log 一直是 0 字节的根因
@@ -351,17 +241,18 @@ int run_probe(const char *bundle_dir)
         snprintf(buf, sizeof(buf), "写保护开关符号：%s（竞技场方案下仅作诊断）",
                  wprot != NULL ? "找到" : "未找到（iOS 正常现象）");
         host_log(buf);
-        host_log("提示：本应用可正常启动（无需 StikDebug 拉起）；等待期间去 StikDebug 运行 rw17-jit.js 即可");
-        (void)rwx_ok; // 授权探测仅作诊断显示；竞技场由脚本 attach 时创建，无需本地 RWX 授权
-        wait_for_rw17_arena();
+        host_log("提示：经 StikDebug 拉起本应用（带 JIT）并运行 probe/stikdebug/rw17-jit26.js（应答式脚本）");
+        host_log("提示：runtime 在 coreclr_initialize 里发 brk 请求竞技场（最多等调试器 120 秒），脚本应答并分离后窗口可关");
+        (void)rwx_ok; // 授权探测仅作诊断显示；竞技场由 runtime 的 brk 握手取得，无需本地 RWX 授权
     }
 
     // 正式属性组（对照安卓版 host.c 与官方 ios 运行时包布局）：
     // libSystem.Native 等类库原生 dylib 在 bundle 根目录，原生搜索目录指向那里，
     // 类库按名字 dlopen 失败后会用这里给的路径按全路径重试。
-    // JIT 内存由 runtime 补丁（patches/dualjit-arena.patch）里的竞技场后端接管：
-    // 先在 StikDebug 运行 probe/stikdebug/rw17-jit.js 预分配 RX 竞技场，
-    // 运行时扫描命中后走 vm_remap RX/RW 双视图；未命中时运行时自建 RWX 后备。
+    // JIT 内存由 runtime 补丁（patches/dualjit-arena.patch）的 JIT26 后端接管：
+    // runtime 在初始化里 brk 请求，StikDebug 的 rw17-jit26.js 应答（_M 分配 +
+    // 逐页祝福），拿到 vm_remap RW 别名后立即分离——初始化与游戏全程无调试器
+    // 附着，fault 归本进程自己的 handler。
     // 注：System.Runtime.EnableWriteXorExecute 在 Apple arm64 上是死配置
     //（IsDoubleMappingEnabled/IsWXORXEnabled 曾硬编码），不再设置。
     const char *keys[7] = {

@@ -6,7 +6,7 @@
 |---|---|---|
 | 运行时基线 | dotnet/runtime `release/11.0` @ `86ee4f57ebc`（2026-11-05），见 `runtime-pin.txt` | ① v10.0.12 源码里 CoreCLR 没有 Apple mobile 支持（无 `APPLE_MOBILE`、无 MAP_JIT 执行内存路径），`-os ios` 只服务于 crossgen2 测试；② NuGet 上 ios-arm64 没有 10.x 正式包（6.0 preview 直接跳 11.0 preview），iOS CoreCLR 是 .NET 11 才有的；③ `release/11.0` 的 `doublemapping.cpp:174-179` 有完整的 RWX→EACCES→MAP_JIT 探测回退（macOS arm64 JIT 同款），`--dynamiccodecompiled true` 构建开关在。v11.0.0 GA tag 发布后升级 pin。 |
 | JIT 路线 | 构建带 JIT 的变体（`--dynamiccodecompiled true`），设备端经 StikDebug 开 JIT；解释器变体作后备 | StikDebug = 调试器 attach 使进程可执行自生成代码；宿主设备已验证可用。风险：iOS 大版本更新可能破坏（iOS 26 已破坏过一轮，2026-06 时仅部分 app 支持）。 |
-| JIT 内存（2026-11-11） | **DualJIT 竞技场**（`patches/dualjit-arena.patch`）：StikDebug 启动脚本 `probe/stikdebug/rw17-jit.js` 在调试器附着窗口内经 debugserver `_M,rx` 预分配 128MiB RX 竞技场并盖魔数+pid 握手头；CoreCLR 侧补丁把 `IsDoubleMappingEnabled` 翻回 true（Apple arm64 原为硬编码 false），`doublemapping.cpp` 的 Apple arm64 后端扫描竞技场 → `vm_remap` RX/RW 双视图 → 写执行探针 → Mono 式定额分配。无竞技场时自建 RWX 后备（macOS/CI 全功能；iOS 26 真机后备可能因代码签名不可执行 → 干净降级并日志提示先跑脚本）。**容量 128MiB（0x8000000）**：实测本体+移植层 17.9MB IL / 28.9 万方法，小于 STS2（21.6MB IL / 33 万方法，96MiB 实测可跑）；128MiB 是 arm64 bl ±128MB 直达范围内的最大安全竞技场直径，mod 溢出时再议窗口化扩容。| M1 真机 SIGBUS 链条已闭环：iOS 不导出 `pthread_jit_write_protect_np` → MAP_JIT 页永远不可写 → 写 JIT 代码页必死；`EnableWriteXorExecute` knob 在 Apple arm64 被硬编码绕过（死配置）。方案来源：杀戮尖塔2 社区 iOS 重打包（sts2.0.111.0.iOS.0.2.6.ipa）逆向，其 iOS≥26 分支强制走 debugserver 竞技场，实测可玩。 |
+| JIT 内存（2026-11-13 起，JIT26 协议；2026-11-11 初版为脚本预撒+扫描） | **brk 握手 + 提前分离**（`patches/dualjit-arena.patch`，playport 模式，详见 [PLAN-JIT26.md](PLAN-JIT26.md)）：runtime 在 `coreclr_initialize` 里执行 `mov x16,#1 ; brk #0xf00d`，StikDebug 应答脚本 `rw17-jit26.js` 经 debugserver `_M,rx` 分配 128MiB RX、逐页写"祝福"（分离后仍可执行的凭据）、`x0` 回传地址；runtime `vm_remap` RW 别名后立即 `brk`（`x16=0`）请求分离——**初始化与游戏全程无调试器附着**，fault 归本进程 handler（带调试器时 first-chance 异常先到 debugserver，进程内 sigsetjmp 兜底永远不跑，这就是此前"探针窗口 3ms 死点"的机理）。每次发 brk 前双查 `CS_DEBUGGED`（csops）+ `P_TRACED`（sysctl），无调试器则有界等待 120 秒后干净失败（无人接的 brk = SIGTRAP 杀进程，门必须 fail-closed）。macOS CI 保留种子竞技场扫描 + 自建 RWX 两条路径不动（`RW17_SEED_ARENA=1` 全链路验证别名/探针/Commit）；iOS 模拟器不发 brk、快速干净降级。**容量 128MiB（0x8000000）**：实测本体+移植层 17.9MB IL / 28.9 万方法，小于 STS2（21.6MB IL / 33 万方法，96MiB 实测可跑）；128MiB 是 arm64 bl ±128MB 直达范围内的最大安全竞技场直径，mod 溢出时再议窗口化扩容。| CoreCLR 初始化必须活在自己拥有 fault 派发的世界里（长会话模型已证死锁）；生态三证（universal.js 应用群、STS2 的 sigsetjmp 探针形态、playport "the pool stays executable"）表明逐页祝福在调试器分离后存续。方案参照：playport（`app/PlayportJIT/playport-universal.js` + `wine_host.c` 的 `wine_host_jit_pool_acquire`）；竞技场思路源头：杀戮尖塔2 社区 iOS 重打包逆向。 |
 | 构建 | Windows 本地写码 + GitHub Actions `macos-15` 编译，公开仓库 | Apple 目标必须 macOS 宿主（runtime 仓库 CI 注释原话："the iOS jobs run on macOS"）。公开仓库 macOS runner 免费不限量。 |
 | 分发 | 未签名 IPA + SideStore 自签侧载 | 无需 Apple 开发者账号；SideStore 签名自动带 `get-task-allow`（StikDebug 列表的准入条件）。 |
 | 仓库 | 本仓库独立于安卓仓库，托管层源码 M4 起共享 | M1–M3 用不到安卓仓库的托管层。 |
@@ -17,14 +17,17 @@
 runtime 基线选型、CI 方案、分发路线（本文档）。
 
 ### M1 运行时探针（进行中，本仓库当前状态）
+
+**改造计划（2026-11-13 起，进行中）**：JIT 授予协议转 playport 模式——`brk #0xf00d` 同步握手 + 提前分离（不再长挂调试会话），见 [PLAN-JIT26.md](PLAN-JIT26.md)。
+
 最小宿主 app + 自建 iOS CoreCLR + `Hello.dll`（Reflection.Emit 计时探针）+ mach RX 区域扫描。
-**验收**：真机上，按下方流程开 JIT 后探针报"JIT 生效"（几十毫秒），RX 私有区域非零；port17-ui.log 里出现 `[rw17-arena] arena found / arena adopted`（竞技场模式命中）。
+**验收**：真机上，按下方流程开 JIT 后探针报"JIT 生效"（几十毫秒），RX 私有区域非零；port17-ui.log 里出现 `[rw17-arena] arena adopted`（brk 握手命中）。
 **产出**：可下载的 `port17probe.ipa`。
-**真机 JIT 流程（2026-11-11 起）**：
+**真机 JIT 流程（2026-11-13 起，JIT26 协议）**：
 1. SideStore 安装 IPA（自签带 `get-task-allow`）；
-2. 直接打开探针 app（无需 StikDebug 拉起）——app 自动等待竞技场（最长 600 秒，每 15 秒打印 RX 区域遥测）；
-3. StikDebug 以本 app 为目标运行脚本 `probe/stikdebug/rw17-jit.js`（128MiB RX 竞技场 + 魔数握手，逐页扫写约 1–2 分钟）——**脚本尾部保持会话打开（universal.js 模型）**，app 检测到竞技场后自动继续；
-4. 日志期待链：`JIT 竞技场已就绪` → `arena found at …` → `arena adopted: rx=… rw=…` → `CoreCLR 就绪` → `JIT 生效` → `exit 42`。
+2. 经 StikDebug 拉起探针 app（带 JIT）——runtime 在 `coreclr_initialize` 里发 `brk #0xf00d` 请求竞技场，最多等活调试器 120 秒（`[rw17-arena]` 进度在 stderr 日志）；
+3. StikDebug 以本 app 为目标运行应答脚本 `probe/stikdebug/rw17-jit26.js`——在 app 停在 brk 上的窗口里经 debugserver `_M,rx` 分配 128MiB RX 并逐页扫写祝福（约 1–2 分钟），x0 回传地址，随后应答 `x16=0` 分离请求；**分离完成后脚本窗口可关**（祝福存续），app 在无调试器状态下继续初始化；
+4. 日志期待链：`live debugger confirmed` → `arena granted at …` → `RW alias at …; detaching …` → `probe call #1 -> 42` → `probe call #2 -> 43` → `arena adopted: rx=… rw=…` → `CoreCLR 就绪` → `JIT 生效` → `exit 42`。
 
 ### M2 宿主层成型
 - UIKit 宿主（从 M1 探针 app 长出来）：窗口、触摸原始事件、软键盘桥（iOS 版 TextInputView 等价物）；

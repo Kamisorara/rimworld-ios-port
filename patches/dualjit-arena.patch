@@ -98,7 +98,7 @@ diff --git a/src/coreclr/minipal/Unix/doublemapping.cpp b/src/coreclr/minipal/Un
 index 997d7a523e8..82d841e7297 100644
 --- a/src/coreclr/minipal/Unix/doublemapping.cpp
 +++ b/src/coreclr/minipal/Unix/doublemapping.cpp
-@@ -42,6 +42,11 @@
+@@ -42,6 +42,16 @@
  #ifdef TARGET_APPLE
  
  #include <mach/mach.h>
@@ -106,57 +106,126 @@ index 997d7a523e8..82d841e7297 100644
 +#include <libkern/OSCacheControl.h> // sys_icache_invalidate
 +#include <signal.h>
 +#include <setjmp.h>
++#include <TargetConditionals.h> // TARGET_OS_SIMULATOR (never brk there)
++#include <sys/codesign.h> // csops / CS_DEBUGGED (the JIT26 gate)
++#include <sys/sysctl.h>   // P_TRACED via kern.proc.pid (the JIT26 gate)
++#include <time.h>         // nanosleep (waiting for the serving script)
++#include <unistd.h>       // getpid
 +#endif
  
  #else // TARGET_APPLE
  
-@@ -53,6 +58,323 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
+@@ -53,6 +63,476 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
  
  #endif // TARGET_APPLE
  
 +#if defined(TARGET_APPLE) && defined(TARGET_ARM64)
 +
 +// ---------------------------------------------------------------------------
-+// Port17 dual-JIT arena backend (iOS device / macOS CI).
++// Port17 JIT26 backend (iOS device / macOS CI), playport-shaped: a
++// synchronous brk handshake with an early detach.
 +//
 +// iOS does not export pthread_jit_write_protect_np, so a MAP_JIT mapping can
-+// never be made writable in-process; on iOS 26+ the kernel additionally
-+// refuses to execute self-created RWX mappings even when mmap succeeds.
-+// Debugger-granted JIT (StikDebug) works in two steps:
-+//   1. while the process is CS_DEBUGGED, a debugserver launch script
-+//      (rw17-jit.js) allocates one fixed-size RX arena through the private
-+//      "_M<size>,rx" packet, touches every page, and stamps a handshake
-+//      header (magic + pid) at offset 0;
-+//   2. this backend scans the VM regions for that arena (it enumerates as a
-+//      single 16 KiB submap entry - match by magic+pid, never by capacity),
-+//      verifies the handshake, creates ONE vm_remap(copy=FALSE) RW alias for
-+//      writing, and executes through the granted arena itself (RX as granted,
-+//      the STS2-proven pattern; remapped copies are not proven executable).
-+// When no arena is found (macOS, a seeded CI arena is still found by scan, or
-+// devices where plain RWX execution is permitted) the backend falls back to a
-+// self-allocated RWX arena with the same execution probe. If nothing is
-+// usable it returns false and the allocator degrades to the legacy path.
++// never be made writable in-process; iOS 26+ additionally refuses to execute
++// self-created RWX mappings. Executable memory is granted only through a
++// debugger, so on iOS the runtime ASKS for it instead of scanning for it:
++//
++//   Rw17Jit26PrepareRegion(len)   mov x16, #1 ; brk #0xf00d ; ret
++//   Rw17Jit26Detach()             mov x16, #0 ; brk #0xf00d ; ret
++//
++// The StikDebug serve script (probe/stikdebug/rw17-jit26.js) catches each
++// brk, skips it, allocates the requested bytes RX with the private "_M,rx"
++// packet, writes one byte to every 16 KiB page of it (the blessing that
++// keeps the pages executable once the debugger is gone) and returns the
++// address in x0; for a detach it sends "D" and the session ends - the
++// script window can be closed. The runtime maps one vm_remap RW alias for
++// writing, executes through the granted RX view, and DETACHES BEFORE
++// ANYTHING EXECUTES. That ordering is the fix for the probe-window freeze
++// of the scan-based design: while a debugserver session is attached, Mach
++// exceptions reach the debugger first, a faulting instruction stops the
++// process, and in-process handlers (the sigsetjmp probe below, later
++// CoreCLR's own exception dispatch on every managed exception) never run -
++// the process only stop/continue-loops under the script. Detached, the
++// probe below runs normally, and startup owns its faults.
++//
++// A brk with nobody behind it is SIGTRAP and death, so every brk is gated:
++// CS_DEBUGGED (csops) plus P_TRACED (sysctl kern.proc.pid) checked
++// immediately before issuing it; short or failed queries fail closed. The
++// gate waits up to 120 s for the user to run the serve script (progress in
++// stderr every 15 s, surfaced by the host's log dump), then fails cleanly:
++// coreclr_initialize reports it and stderr says to launch via StikDebug
++// with rw17-jit26.js.
++//
++// macOS has no StikDebug; it keeps the previous flow for CI coverage: the
++// seeded-arena scan below (macprobe-osx with RW17_SEED_ARENA=1 exercises
++// the alias/probe/Commit machinery through the same Rw17MapAliasRW /
++// Rw17ProbeExecute / Reserve / Commit code the device uses) and, with no
++// seed, the self-allocated RWX arena. The iOS simulator likewise never
++// issues a brk: nothing serves it there, and CI expects a fast clean
++// degrade.
 +// ---------------------------------------------------------------------------
 +
-+// 16-byte magic without NUL; the array keeps one extra byte for the C++ rule
-+// that forbids truncating string initializers.
-+static const char s_rw17ArenaMagic[17] = "RW17-JIT-ARENA1!";
-+static const size_t Rw17ArenaMagicLen = sizeof(s_rw17ArenaMagic) - 1; // == 16
-+static const size_t Rw17ArenaCapacity = 0x8000000;  // 128 MiB; keep in sync with rw17-jit.js (max safe size: arena must stay within arm64 s ±128 MiB direct-branch reach)
-+static const size_t Rw17ArenaHeaderSize = 0x4000;   // page 0 holds the handshake header
++static const size_t Rw17ArenaCapacity = 0x8000000;  // 128 MiB; keep in sync with rw17-jit26.js (the brk carries it in x1)
 +static const size_t Rw17ArenaPageSize = 0x4000;     // arm64 Apple device page size
++static const size_t Rw17ArenaHeaderSize = 0x4000;   // seeded/self arenas: page 0 holds the handshake header; brk arenas skip nothing
++
++#ifndef P_TRACED
++#define P_TRACED 0x00000800
++#endif
 +
 +struct Rw17ArenaMapper
 +{
-+    uint8_t* rxBase;        // execution view
++    uint8_t* rxBase;        // execution view (debugger-granted, RX as granted)
 +    uint8_t* rwBase;        // write view; == rxBase in single-mapping mode
 +    size_t capacity;
++    size_t headerSize;      // 0x4000 for seeded/self arenas (handshake page), 0 for brk-granted
 +    bool singleMapping;     // self-allocated RWX arena: no aliases
 +};
 +
 +static Rw17ArenaMapper* s_rw17Mapper = NULL;
 +
 +#define RW17_LOG(...) do { fprintf(stderr, "[rw17-arena] " __VA_ARGS__); } while (0)
++
++// CS_DEBUGGED and P_TRACED, both, or nothing. CS_DEBUGGED survives a detach
++// (playport's wine_host.c lesson: it is launch state, not liveness); P_TRACED
++// is the live-tracer bit. A short or failed query is "no debugger" - an
++// unserved brk kills the process, so the gate fails closed.
++static bool Rw17DebuggerAttached()
++{
++    const pid_t pid = getpid();
++    uint32_t flags = 0;
++    if (csops(pid, CS_OPS_STATUS, &flags, sizeof(flags)) != 0 || !(flags & CS_DEBUGGED))
++    {
++        return false;
++    }
++    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, pid };
++    struct kinfo_proc info;
++    size_t size = sizeof(info);
++    memset(&info, 0, sizeof(info));
++    if (sysctl(mib, 4, &info, &size, NULL, 0) != 0 || size != sizeof(info))
++    {
++        return false;
++    }
++    return (info.kp_proc.p_flag & P_TRACED) != 0;
++}
++
++// The app asks for the region by trapping; the serve script has debugserver
++// allocate it RX and bless every page, and answers with the address in x0.
++// The parameter is unnamed on purpose: the ABI carries it in x1 for the
++// script to read, and a naked function has no body to silence a warning in.
++__attribute__((noinline, optnone, naked)) static void* Rw17Jit26PrepareRegion(size_t)
++{
++    __asm__("mov x16, #1\n"
++            "brk #0xf00d\n"
++            "ret\n");
++}
++
++__attribute__((noinline, optnone, naked)) static void Rw17Jit26Detach()
++{
++    __asm__("mov x16, #0\n"
++            "brk #0xf00d\n"
++            "ret\n");
++}
 +
 +// Read the 20-byte handshake header (magic + pid) at the start of a region.
 +static bool Rw17ReadArenaHeader(void* regionStart, uint32_t* pPid)
@@ -180,7 +249,9 @@ index 997d7a523e8..82d841e7297 100644
 +    return true;
 +}
 +
-+// Walk the VM regions and return the RX arena stamped by the launch script.
++// macOS-only: walk the VM regions and return the RX arena the CI harness
++// stamped (magic + pid at offset 0, page 0). Never used on iOS - the brk
++// handshake replaced the scan there, and a scan cannot prove liveness.
 +static void* Rw17FindArena()
 +{
 +    mach_port_t task = mach_task_self();
@@ -248,7 +319,9 @@ index 997d7a523e8..82d841e7297 100644
 +// writes through the RW view, each flushed on both views, each called via RX.
 +// A fault during the probe (code signing rejection, non-writable alias, ...)
 +// is caught by a temporary handler and reported as a clean false - the probe
-+// must never kill the process (same pattern as STS2's executeProbe).
++// must never kill the process (same pattern as STS2's executeProbe). This
++// only works AFTER the detach: with a debugger attached the fault stops the
++// process before any in-process handler can run.
 +static bool Rw17ProbeExecute(uint8_t* rxView, uint8_t* rwView)
 +{
 +    struct sigaction faultAction;
@@ -307,9 +380,10 @@ index 997d7a523e8..82d841e7297 100644
 +    return ok;
 +}
 +
-+// Create an RW alias of [source, source+size) via vm_remap (the aliasing of
-+// debugger-created pages bypasses the W^X provenance check that blocks a
-+// direct mprotect of the arena itself).
++// Create an RW alias of [source, source+size): remap the same physical pages
++// and drop EXEC on the alias. Aliasing debugger-created pages bypasses the
++// W^X provenance check that blocks a direct mprotect of the arena itself.
++// mach_vm_protect first (the playport reference), mprotect as the fallback.
 +static uint8_t* Rw17MapAliasRW(void* source, size_t size)
 +{
 +    vm_address_t alias = 0;
@@ -321,12 +395,43 @@ index 997d7a523e8..82d841e7297 100644
 +    {
 +        return NULL;
 +    }
-+    if (mprotect((void*)alias, size, PROT_READ | PROT_WRITE) == -1)
++    kern_return_t pr = mach_vm_protect(mach_task_self(), alias, size, FALSE, VM_PROT_READ | VM_PROT_WRITE);
++    if (pr != KERN_SUCCESS && mprotect((void*)alias, size, PROT_READ | PROT_WRITE) == -1)
 +    {
 +        vm_deallocate(mach_task_self(), alias, size);
 +        return NULL;
 +    }
 +    return (uint8_t*)alias;
++}
++
++// Wait for the serving script. iOS device only: macOS and the iOS simulator
++// never brk (macOS has the seeded scan and the RWX fallback below; the
++// simulator must degrade fast because nothing serves it there).
++static bool Rw17WaitForDebugger(int waitMs)
++{
++#if defined(TARGET_OSX) || defined(TARGET_OS_SIMULATOR)
++    (void)waitMs;
++    return false;
++#else
++    RW17_LOG("waiting for a live debugger - launch via StikDebug and run probe/stikdebug/rw17-jit26.js (%d s budget)\n", waitMs / 1000);
++    int waited = 0;
++    while (!Rw17DebuggerAttached())
++    {
++        if (waited >= waitMs)
++        {
++            RW17_LOG("no live debugger after %d s; no usable JIT memory\n", waitMs / 1000);
++            return false;
++        }
++        struct timespec ts = { 0, 50 * 1000 * 1000 }; // 50 ms
++        nanosleep(&ts, NULL);
++        waited += 50;
++        if (waited % (15 * 1000) == 0)
++        {
++            RW17_LOG("still waiting for a live debugger (%d/%d s)\n", waited / 1000, waitMs / 1000);
++        }
++    }
++    return true;
++#endif
 +}
 +
 +static bool Rw17CreateArenaMapper(void** pHandle, size_t* pMaxExecutableCodeSize)
@@ -337,59 +442,110 @@ index 997d7a523e8..82d841e7297 100644
 +        return false;
 +    }
 +
-+    void* arena = Rw17FindArena();
-+    if (arena != NULL)
++    void* arena = NULL;
++    uint8_t* rwAlias = NULL;
++
++    if (Rw17WaitForDebugger(120 * 1000))
 +    {
-+        // STS2-faithful single-remap structure (proven on iOS 26 devices):
-+        // - EXECUTE through the ORIGINAL debugger-granted arena: it is RX as
-+        //   granted and STS2 calls it directly (ready_v1 blr on arena+0x40);
-+        //   executing a vm_remap COPY of the pages is NOT a proven operation
-+        //   and faulted on device with a debugger session attached.
-+        // - WRITE through ONE vm_remap(copy=FALSE) alias made RW (STS2 does
-+        //   exactly this and its writes succeed).
-+        // - Loader-heap data pages (interleavedloaderheap writes through the
-+        //   Commit(false) pointer) commit via the always-writable RW alias; no
-+        //   mprotect touches the granted pages at all.
-+        // NOTE: while a debugserver session is attached, mach exceptions go to
-+        // the debugger FIRST - a faulting instruction stops the process and our
-+        // in-process handler never runs (the script continue loop then spins).
-+        // Every step is logged so a freeze pins to one line.
-+        RW17_LOG("creating the RW alias: full-capacity remap from %p\n", arena);
-+        uint8_t* rwAlias = Rw17MapAliasRW(arena, Rw17ArenaCapacity);
++        // Re-check immediately before each brk (playport discipline):
++        // liveness can change between the wait and the call - the script
++        // window closing, a stale StikDebug session.
++        if (!Rw17DebuggerAttached())
++        {
++            RW17_LOG("debugger vanished before the prepare brk; no usable JIT memory\n");
++            free(mapper);
++            return false;
++        }
++        RW17_LOG("live debugger confirmed; prepare brk incoming (%zu MiB; the page sweep takes 1-2 min inside the stop)\n",
++                 Rw17ArenaCapacity >> 20);
++        arena = Rw17Jit26PrepareRegion(Rw17ArenaCapacity);
++        if (arena == NULL)
++        {
++            RW17_LOG("prepare brk returned NULL; no usable JIT memory\n");
++            free(mapper);
++            return false;
++        }
++        RW17_LOG("arena granted at %p\n", arena);
++
++        rwAlias = Rw17MapAliasRW(arena, Rw17ArenaCapacity);
 +        if (rwAlias == NULL)
 +        {
 +            RW17_LOG("RW alias of the arena failed; no usable JIT memory\n");
++            free(mapper);
++            return false;
++        }
++        RW17_LOG("RW alias at %p; detaching before anything executes\n", (void*)rwAlias);
++
++        if (Rw17DebuggerAttached())
++        {
++            Rw17Jit26Detach();
++            RW17_LOG("debugger detached - the blessing keeps the pages executable; the probe below runs unattached\n");
 +        }
 +        else
 +        {
-+            RW17_LOG("RW alias at %p; execution uses the granted arena directly\n", (void*)rwAlias);
-+            mapper->rxBase = (uint8_t*)arena;
-+            mapper->rwBase = rwAlias;
-+            mapper->singleMapping = false;
-+
-+            RW17_LOG("running execution probes (writes via the RW alias, calls via the arena)\n");
-+            // No mprotect flips here: data pages commit through the always-
-+            // writable RW alias (Commit(false) returns it), so granted pages
-+            // never need their protection changed - iOS 26 refuses that.
-+            if (Rw17ProbeExecute(mapper->rxBase + Rw17ArenaHeaderSize, mapper->rwBase + Rw17ArenaHeaderSize))
-+            {
-+                RW17_LOG("arena adopted: rx=%p rw=%p capacity=%zu (debugger-granted)\n",
-+                         (void*)mapper->rxBase, (void*)mapper->rwBase, Rw17ArenaCapacity);
-+                s_rw17Mapper = mapper;
-+                *pHandle = mapper;
-+                *pMaxExecutableCodeSize = Rw17ArenaCapacity - Rw17ArenaHeaderSize;
-+                return true;
-+            }
-+
-+            RW17_LOG("execution probe failed (values logged above); no usable JIT memory\n");
-+            munmap(rwAlias, Rw17ArenaCapacity);
-+            mapper->rxBase = NULL;
-+            mapper->rwBase = NULL;
++            // The script died between prepare and detach. Issuing the detach
++            // brk now would be an unserved brk (SIGTRAP death); skip it and
++            // let the probe decide whether the arena outlived its session.
++            RW17_LOG("debugger already gone before the detach brk; probing the arena as-is\n");
 +        }
++
++        mapper->rxBase = (uint8_t*)arena;
++        mapper->rwBase = rwAlias;
++        mapper->capacity = Rw17ArenaCapacity;
++        mapper->headerSize = 0;      // x0 is the first byte; no handshake page
++        mapper->singleMapping = false;
 +    }
 +    else
 +    {
-+        RW17_LOG("no pre-allocated arena found - run the rw17-jit.js StikDebug launch script first\n");
++#if defined(TARGET_OSX)
++        // macOS CI: the seeded-arena scan (macprobe-osx with RW17_SEED_ARENA=1
++        // stamps magic+pid into a real RX mapping) exercises the alias/probe/
++        // Commit machinery; without a seed, the self-made RWX arena below.
++        arena = Rw17FindArena();
++        if (arena != NULL)
++        {
++            rwAlias = Rw17MapAliasRW(arena, Rw17ArenaCapacity);
++            if (rwAlias == NULL)
++            {
++                RW17_LOG("RW alias of the seeded arena failed; falling through to the RWX arena\n");
++            }
++            else
++            {
++                mapper->rxBase = (uint8_t*)arena;
++                mapper->rwBase = rwAlias;
++                mapper->capacity = Rw17ArenaCapacity;
++                mapper->headerSize = Rw17ArenaHeaderSize;
++                mapper->singleMapping = false;
++            }
++        }
++#else
++        // iOS simulator: nothing serves the brk and there is no fallback;
++        // degrade fast and clean (CI expects exactly this).
++        RW17_LOG("iOS: no debugger-served arena and no fallback - run rw17-jit26.js via StikDebug on device\n");
++#endif
++    }
++
++    if (mapper->rxBase != NULL)
++    {
++        RW17_LOG("running the execution probe (writes via %s, calls via the arena)\n",
++                 mapper->singleMapping ? "the shared view" : "the RW alias");
++        if (Rw17ProbeExecute(mapper->rxBase + mapper->headerSize, mapper->rwBase + mapper->headerSize))
++        {
++            RW17_LOG("arena adopted: rx=%p rw=%p capacity=%zu (debugger-granted)%s\n",
++                     (void*)mapper->rxBase, (void*)mapper->rwBase, mapper->capacity,
++                     mapper->singleMapping ? " [self-made RWX]" : "");
++            s_rw17Mapper = mapper;
++            *pHandle = mapper;
++            *pMaxExecutableCodeSize = mapper->capacity - mapper->headerSize;
++            return true;
++        }
++        RW17_LOG("execution probe failed (values logged above); no usable JIT memory\n");
++        if (mapper->rwBase != NULL && mapper->rwBase != mapper->rxBase)
++        {
++            munmap(mapper->rwBase, mapper->capacity);
++        }
++        free(mapper);
++        return false;
 +    }
 +
 +#if defined(TARGET_OSX)
@@ -407,9 +563,12 @@ index 997d7a523e8..82d841e7297 100644
 +        return false;
 +    }
 +
-+    mapper->rxBase = mapper->rwBase = (uint8_t*)self;
++    mapper->rxBase = (uint8_t*)self;
++    mapper->rwBase = (uint8_t*)self;
++    mapper->capacity = Rw17ArenaCapacity;
++    mapper->headerSize = Rw17ArenaHeaderSize;
 +    mapper->singleMapping = true;
-+    if (!Rw17ProbeExecute(mapper->rxBase + Rw17ArenaHeaderSize, mapper->rwBase + Rw17ArenaHeaderSize))
++    if (!Rw17ProbeExecute(mapper->rxBase + mapper->headerSize, mapper->rwBase + mapper->headerSize))
 +    {
 +        RW17_LOG("self-allocated RWX arena does not execute code (code signing?); no usable JIT memory\n");
 +        munmap(self, Rw17ArenaCapacity);
@@ -420,10 +579,9 @@ index 997d7a523e8..82d841e7297 100644
 +    RW17_LOG("self-allocated RWX arena at %p (single-mapping mode)\n", self);
 +    s_rw17Mapper = mapper;
 +    *pHandle = mapper;
-+    *pMaxExecutableCodeSize = Rw17ArenaCapacity - Rw17ArenaHeaderSize;
++    *pMaxExecutableCodeSize = mapper->capacity - mapper->headerSize;
 +    return true;
 +#else
-+    RW17_LOG("iOS: no arena and no fallback - run the rw17-jit.js StikDebug launch script first, then relaunch\n");
 +    free(mapper);
 +    return false;
 +#endif
@@ -434,7 +592,7 @@ index 997d7a523e8..82d841e7297 100644
  bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecutableCodeSize)
  {
      if (minipal_detect_rosetta())
-@@ -146,8 +468,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
+@@ -146,8 +626,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
      *pHandle = (void*)(size_t)fd;
  #else // !TARGET_APPLE
  
@@ -450,7 +608,7 @@ index 997d7a523e8..82d841e7297 100644
  #endif // !TARGET_APPLE
  
      return true;
-@@ -157,6 +486,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
+@@ -157,6 +644,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
  {
  #ifndef TARGET_APPLE
      close((int)(size_t)mapperHandle);
@@ -462,16 +620,17 @@ index 997d7a523e8..82d841e7297 100644
  #endif
  }
  
-@@ -197,6 +531,23 @@ bool IsMapJitFlagNeeded()
+@@ -197,6 +689,24 @@ bool IsMapJitFlagNeeded()
  
  void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offset, size_t size, const void *rangeStart, const void* rangeEnd)
  {
 +#if defined(TARGET_APPLE) && defined(TARGET_ARM64)
-+    // Arena mode: offsets live in the adopted (or self-allocated) arena; the
-+    // page-0 handshake header is skipped, so addresses are base + header + offset.
-+    // No OS calls are involved - the aliases were created once at adoption.
++    // Arena mode: offsets live in the adopted (or self-allocated) arena.
++    // headerSize is 0x4000 for the macOS seeded/self arenas (their page 0
++    // is the handshake header), 0 for a brk-granted arena (x0 is the first
++    // byte). No OS calls are involved - the aliases were created once.
 +    Rw17ArenaMapper* mapper = (Rw17ArenaMapper*)mapperHandle;
-+    uint8_t* addr = (mapper != NULL ? mapper->rxBase : NULL) + Rw17ArenaHeaderSize + offset;
++    uint8_t* addr = (mapper != NULL ? mapper->rxBase : NULL) + (mapper != NULL ? mapper->headerSize : 0) + offset;
 +    if ((rangeStart != NULL || rangeEnd != NULL) &&
 +        ((uintptr_t)addr < (uintptr_t)rangeStart || (uintptr_t)(addr + size) > (uintptr_t)rangeEnd))
 +    {
@@ -486,7 +645,7 @@ index 997d7a523e8..82d841e7297 100644
      int fd = (int)(size_t)mapperHandle;
  
      bool isUnlimitedRange = (rangeStart == NULL) && (rangeEnd == NULL);
-@@ -246,20 +597,66 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
+@@ -246,20 +756,66 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
          result = NULL;
      }
      return result;
@@ -553,7 +712,7 @@ index 997d7a523e8..82d841e7297 100644
  #ifndef TARGET_APPLE
      int fd = (int)(size_t)mapperHandle;
      if (mmap(pStart, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, offset) == MAP_FAILED)
-@@ -269,6 +666,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
+@@ -269,6 +825,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
      memset(pStart, 0, size);
  #endif // TARGET_APPLE
      return munmap(pStart, size) != -1;
@@ -561,7 +720,7 @@ index 997d7a523e8..82d841e7297 100644
  }
  
  void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t offset, size_t size)
-@@ -302,16 +700,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
+@@ -302,16 +859,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
  
      return (void*)startRW;
  #else // TARGET_AMD64
@@ -575,7 +734,7 @@ index 997d7a523e8..82d841e7297 100644
 +    {
 +        return NULL;
 +    }
-+    return mapper->rwBase + Rw17ArenaHeaderSize + offset;
++    return mapper->rwBase + mapper->headerSize + offset;
  #endif // TARGET_AMD64
  #endif // TARGET_APPLE
  }
@@ -627,7 +786,7 @@ index f982fa1f940..4e366290b9b 100644
 +            // Port17: Apple mobile has no usable legacy path - the MAP_JIT write
 +            // toggle is an empty macro there, so continuing would SIGBUS inside
 +            // initialization. Fail loudly instead; the [rw17-arena] stderr lines
-+            // say what to do (run the rw17-jit.js StikDebug launch script).
++            // say what to do (run the rw17-jit26.js StikDebug serve script).
 +            return false;
 +#endif
              return true;

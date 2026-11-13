@@ -59,13 +59,14 @@ typedef int (*init_fn)(const char *, const char *, int, const char **,
 typedef int (*exec_fn)(void *, unsigned int, int, char **, const char *,
                        unsigned int *);
 
-// 伪造竞技场：魔数 + pid 与 patches/dualjit-arena.patch、rw17-jit.js 三方一致。
+// 伪造竞技场：魔数 + pid 与 patches/dualjit-arena.patch 的 macOS 扫描路径一致
+//（仅 mac 宿主 CI 用；iOS 设备端已改走 rw17-jit26.js 的 brk 握手，不再认魔数）。
 // 写完握手头后 mprotect 成 RX，模拟 debugserver "_M,rx" 产物的保护态。
 static void seed_arena_if_requested(void)
 {
     if (getenv("RW17_SEED_ARENA") == NULL)
         return;
-    const size_t cap = 0x8000000; // 128 MiB，与 rw17-jit.js / 运行时补丁一致
+    const size_t cap = 0x8000000; // 128 MiB，与运行时补丁的 Rw17ArenaCapacity 一致
     uint8_t *p = mmap(NULL, cap, PROT_READ | PROT_WRITE | PROT_EXEC,
                       MAP_ANON | MAP_PRIVATE, -1, 0);
     if (p == MAP_FAILED) {
