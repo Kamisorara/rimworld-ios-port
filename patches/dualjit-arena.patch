@@ -114,7 +114,7 @@ index 997d7a523e8..82d841e7297 100644
  
  #else // TARGET_APPLE
  
-@@ -53,6 +62,494 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
+@@ -53,6 +62,497 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
  
  #endif // TARGET_APPLE
  
@@ -423,9 +423,12 @@ index 997d7a523e8..82d841e7297 100644
 +// Wait for the serving script. iOS device only: macOS and the iOS simulator
 +// never brk (macOS has the seeded scan and the RWX fallback below; the
 +// simulator must degrade fast because nothing serves it there).
++// VALUE test, not defined(): TargetConditionals.h defines TARGET_OS_SIMULATOR
++// unconditionally (to 0 on device!), so defined() once sent a real device
++// down the simulator's instant-degrade path.
 +static bool Rw17WaitForDebugger(int waitMs)
 +{
-+#if defined(TARGET_OSX) || defined(TARGET_OS_SIMULATOR)
++#if TARGET_OSX || TARGET_OS_SIMULATOR
 +    (void)waitMs;
 +    return false;
 +#else
@@ -609,7 +612,7 @@ index 997d7a523e8..82d841e7297 100644
  bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecutableCodeSize)
  {
      if (minipal_detect_rosetta())
-@@ -146,8 +643,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
+@@ -146,8 +646,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
      *pHandle = (void*)(size_t)fd;
  #else // !TARGET_APPLE
  
@@ -625,7 +628,7 @@ index 997d7a523e8..82d841e7297 100644
  #endif // !TARGET_APPLE
  
      return true;
-@@ -157,6 +661,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
+@@ -157,6 +664,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
  {
  #ifndef TARGET_APPLE
      close((int)(size_t)mapperHandle);
@@ -637,7 +640,7 @@ index 997d7a523e8..82d841e7297 100644
  #endif
  }
  
-@@ -197,6 +706,24 @@ bool IsMapJitFlagNeeded()
+@@ -197,6 +709,24 @@ bool IsMapJitFlagNeeded()
  
  void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offset, size_t size, const void *rangeStart, const void* rangeEnd)
  {
@@ -662,7 +665,7 @@ index 997d7a523e8..82d841e7297 100644
      int fd = (int)(size_t)mapperHandle;
  
      bool isUnlimitedRange = (rangeStart == NULL) && (rangeEnd == NULL);
-@@ -246,20 +773,66 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
+@@ -246,20 +776,66 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
          result = NULL;
      }
      return result;
@@ -729,7 +732,7 @@ index 997d7a523e8..82d841e7297 100644
  #ifndef TARGET_APPLE
      int fd = (int)(size_t)mapperHandle;
      if (mmap(pStart, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, offset) == MAP_FAILED)
-@@ -269,6 +842,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
+@@ -269,6 +845,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
      memset(pStart, 0, size);
  #endif // TARGET_APPLE
      return munmap(pStart, size) != -1;
@@ -737,7 +740,7 @@ index 997d7a523e8..82d841e7297 100644
  }
  
  void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t offset, size_t size)
-@@ -302,16 +876,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
+@@ -302,16 +879,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
  
      return (void*)startRW;
  #else // TARGET_AMD64
