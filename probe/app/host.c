@@ -454,6 +454,22 @@ static bool jit26_acquire_arena(void)
         munmap(rwAlias, (size_t)RW17_CAP);
         return false;
     }
+    // 深页抽查：vm_region 只报 16KiB 子图入口（"内核视角 size=16384"），但
+    // vm_remap(copy=FALSE) 是整段 128MiB 共享映射、脚本逐页扫写覆盖全部
+    // 8192 页——对别名深处写、竞技场深处读回抽查，把"深处实际没映射"的
+    // 怀疑直接排除或坐实。
+    {
+        static const size_t offs[] = {0x400000, 0x2000000, 0x7ff0000}; // +4MiB、+32MiB、尾部-64KiB
+        const uint32_t mark = 0x4a554e4bu; // "JUNK"
+        for (int i = 0; i < 3; i++) {
+            memcpy(rwAlias + offs[i], &mark, sizeof(mark));
+            uint32_t back = 0;
+            memcpy(&back, (uint8_t *)arena + offs[i], sizeof(mark));
+            snprintf(buf, sizeof(buf), "[jit26] 深页 0x%llx：别名写/竞技场读 %s",
+                     (unsigned long long)offs[i], back == mark ? "一致" : "不一致！");
+            host_log(buf);
+        }
+    }
     char rx[32], rwb[32], szb[32];
     snprintf(rx, sizeof(rx), "%llx", (unsigned long long)(uintptr_t)arena);
     snprintf(rwb, sizeof(rwb), "%llx", (unsigned long long)(uintptr_t)rwAlias);
@@ -578,6 +594,10 @@ int run_probe(const char *bundle_dir)
     const char *values[7] = {tpa, managed_dir, managed_dir, (char *)bundle_dir,
                              (char *)bundle_dir, "ios-arm64", ""};
 
+    // 崩溃自取证：CoreCLR 内部 Fatal error + SIGBUS 只有 PAL 的通用文案，
+    // 开启 crash report 让它把 native backtrace 直接打到 stderr（上屏+落盘）
+    setenv("COMPlus_EnableCrashReport", "1", 1);
+    setenv("COMPlus_EnableDiagnostics", "1", 1);
     stderr_tailer_start();
     host_log("初始化 CoreCLR…（JIT26 握手在初始化内进行：等脚本 ≤120 秒 + 逐页扫写 1–2 分钟；期间 [rw17-arena] 进度实时滚动）");
     void *host = NULL;
