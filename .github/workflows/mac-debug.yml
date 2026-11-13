@@ -33,7 +33,7 @@ jobs:
           echo "pin=$PIN" >> "$GITHUB_OUTPUT"
           # c2 = 双JIT竞技场补丁（替换 jit-write-protect-ios.patch，随补丁缓存键 c5 一同升位）
           # c9 = JIT26 协议（设备端扫描 → brk 握手 + 提前分离；模拟器不发 brk、快速降级）
-          echo "key=runtime-sim-arm64-$PIN-c10" >> "$GITHUB_OUTPUT"
+          echo "key=runtime-sim-arm64-$PIN-c11" >> "$GITHUB_OUTPUT"
 
       - name: 查缓存
         id: cache
@@ -187,7 +187,7 @@ jobs:
           PIN="$(head -n1 runtime-pin.txt | tr -d '[:space:]')"
           echo "pin=$PIN" >> "$GITHUB_OUTPUT"
           # c8 = JIT26 协议（macOS 保留种子竞技场扫描 + RWX 后备，共享补丁随设备端一同升位）
-          echo "key=runtime-osx-arm64-$PIN-c9" >> "$GITHUB_OUTPUT"
+          echo "key=runtime-osx-arm64-$PIN-c10" >> "$GITHUB_OUTPUT"
 
       - name: 查缓存
         id: cache

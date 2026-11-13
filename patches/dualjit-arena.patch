@@ -114,7 +114,7 @@ index 997d7a523e8..82d841e7297 100644
  
  #else // TARGET_APPLE
  
-@@ -53,6 +62,497 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
+@@ -53,6 +62,530 @@ static const off_t MaxDoubleMappedSize = UINT_MAX;
  
  #endif // TARGET_APPLE
  
@@ -399,25 +399,38 @@ index 997d7a523e8..82d841e7297 100644
 +// Create an RW alias of [source, source+size): remap the same physical pages
 +// and drop EXEC on the alias. Aliasing debugger-created pages bypasses the
 +// W^X provenance check that blocks a direct mprotect of the arena itself.
-+// Plain mprotect on the alias (mach_vm_protect would need manual prototypes
-+// on the slim SDK; add it back only if a device ever refuses the mprotect).
++// BSD mprotect first, then vm_protect (the Mach-semantics wrapper, declared
++// in the same header as vm_remap; the playport reference protects through
++// the Mach path - on some iOS builds the BSD path refuses the very change
++// the Mach one grants). Every failure logs its exact code; this stretch was
++// once a silent one.
 +static uint8_t* Rw17MapAliasRW(void* source, size_t size)
 +{
 +    vm_address_t alias = 0;
-+    vm_prot_t curProtection, maxProtection;
++    vm_prot_t curProtection = VM_PROT_NONE, maxProtection = VM_PROT_NONE;
 +    kern_return_t kr = vm_remap(mach_task_self(), &alias, size, 0, VM_FLAGS_ANYWHERE,
 +                                mach_task_self(), (vm_address_t)source, FALSE,
 +                                &curProtection, &maxProtection, VM_INHERIT_NONE);
 +    if (kr != KERN_SUCCESS)
 +    {
++        RW17_LOG("vm_remap of the arena failed: kr=%d (0x%x)\n", (int)kr, (unsigned)kr);
 +        return NULL;
 +    }
-+    if (mprotect((void*)alias, size, PROT_READ | PROT_WRITE) == -1)
++    RW17_LOG("alias at %p (cur=%x max=%x straight from the remap)\n",
++             (void*)alias, (unsigned)curProtection, (unsigned)maxProtection);
++    if (mprotect((void*)alias, size, PROT_READ | PROT_WRITE) == 0)
 +    {
-+        vm_deallocate(mach_task_self(), alias, size);
-+        return NULL;
++        return (uint8_t*)alias;
 +    }
-+    return (uint8_t*)alias;
++    RW17_LOG("mprotect RW on the alias failed: errno=%d - trying vm_protect (Mach path)\n", errno);
++    kr = vm_protect(mach_task_self(), alias, size, FALSE, VM_PROT_READ | VM_PROT_WRITE);
++    if (kr == KERN_SUCCESS)
++    {
++        return (uint8_t*)alias;
++    }
++    RW17_LOG("vm_protect RW on the alias failed too: kr=%d (0x%x)\n", (int)kr, (unsigned)kr);
++    vm_deallocate(mach_task_self(), alias, size);
++    return NULL;
 +}
 +
 +// Wait for the serving script. iOS device only: macOS and the iOS simulator
@@ -485,6 +498,26 @@ index 997d7a523e8..82d841e7297 100644
 +            return false;
 +        }
 +        RW17_LOG("arena granted at %p\n", arena);
++        // Kernel's view of the granted region: extent and protections as
++        // vm_region reports them (the debugserver _M product - on iOS 26
++        // these are known to enumerate submap-backed, sometimes as a single
++        // 16 KiB entry despite the full capacity).
++        {
++            vm_address_t q = (vm_address_t)arena;
++            vm_size_t qSize = 0;
++            vm_region_basic_info_data_64_t qInfo;
++            mach_msg_type_number_t qCnt = VM_REGION_BASIC_INFO_COUNT_64;
++            mach_port_t qObj = MACH_PORT_NULL;
++            if (vm_region_64(mach_task_self(), &q, &qSize, VM_REGION_BASIC_INFO_64,
++                             (vm_region_info_t)&qInfo, &qCnt, &qObj) == KERN_SUCCESS)
++            {
++                if (qObj != MACH_PORT_NULL)
++                    mach_port_deallocate(mach_task_self(), qObj);
++                RW17_LOG("granted region: start=%p size=%llu cur=%x max=%x\n",
++                         (void*)q, (unsigned long long)qSize,
++                         (unsigned)qInfo.protection, (unsigned)qInfo.max_protection);
++            }
++        }
 +
 +        rwAlias = Rw17MapAliasRW(arena, Rw17ArenaCapacity);
 +        if (rwAlias == NULL)
@@ -612,7 +645,7 @@ index 997d7a523e8..82d841e7297 100644
  bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecutableCodeSize)
  {
      if (minipal_detect_rosetta())
-@@ -146,8 +646,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
+@@ -146,8 +679,15 @@ bool VMToOSInterface::CreateDoubleMemoryMapper(void** pHandle, size_t *pMaxExecu
      *pHandle = (void*)(size_t)fd;
  #else // !TARGET_APPLE
  
@@ -628,7 +661,7 @@ index 997d7a523e8..82d841e7297 100644
  #endif // !TARGET_APPLE
  
      return true;
-@@ -157,6 +664,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
+@@ -157,6 +697,11 @@ void VMToOSInterface::DestroyDoubleMemoryMapper(void *mapperHandle)
  {
  #ifndef TARGET_APPLE
      close((int)(size_t)mapperHandle);
@@ -640,7 +673,7 @@ index 997d7a523e8..82d841e7297 100644
  #endif
  }
  
-@@ -197,6 +709,24 @@ bool IsMapJitFlagNeeded()
+@@ -197,6 +742,24 @@ bool IsMapJitFlagNeeded()
  
  void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offset, size_t size, const void *rangeStart, const void* rangeEnd)
  {
@@ -665,7 +698,7 @@ index 997d7a523e8..82d841e7297 100644
      int fd = (int)(size_t)mapperHandle;
  
      bool isUnlimitedRange = (rangeStart == NULL) && (rangeEnd == NULL);
-@@ -246,20 +776,66 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
+@@ -246,20 +809,66 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
          result = NULL;
      }
      return result;
@@ -732,7 +765,7 @@ index 997d7a523e8..82d841e7297 100644
  #ifndef TARGET_APPLE
      int fd = (int)(size_t)mapperHandle;
      if (mmap(pStart, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, offset) == MAP_FAILED)
-@@ -269,6 +845,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
+@@ -269,6 +878,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
      memset(pStart, 0, size);
  #endif // TARGET_APPLE
      return munmap(pStart, size) != -1;
@@ -740,7 +773,7 @@ index 997d7a523e8..82d841e7297 100644
  }
  
  void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t offset, size_t size)
-@@ -302,16 +879,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
+@@ -302,16 +912,26 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
  
      return (void*)startRW;
  #else // TARGET_AMD64
