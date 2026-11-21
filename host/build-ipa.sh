@@ -88,7 +88,49 @@ xcrun -sdk "$SDK" clang \
     -o "$APP/libstb.dylib" \
     "$ROOT/host/native/stb.c" -lm
 
-# 5) 宿主可执行（M2 骨架 + 三角形 + 音频自检 + .NET 探针诊断件）
+# gli：DDS/KTX/KMG 纹理库的 C 面（header-only + glm，单编译单元）
+xcrun -sdk "$SDK" clang++ \
+    -target "$TARGET" \
+    -std=c++17 -O2 -shared -fvisibility=default -Wno-unused-parameter \
+    -Wl,-install_name,@rpath/libgli.dylib \
+    -I "$NDEPS/gli-master" -I "$NDEPS/glm-1.0.1" \
+    -DGLM_ENABLE_EXPERIMENTAL -DGLM_FORCE_SILENT_WARNINGS \
+    -o "$APP/libgli.dylib" \
+    "$ROOT/host/native/gli_c.cpp"
+
+# ktx：Khronos libktx 4.4.0 的读+转码子集 + Brutal 的入口名（<函数>1），文件清单与宏照安卓
+KTX="$NDEPS/KTX-Software-4.4.0"
+KDEFS="-DLIBKTX -DKTX_FEATURE_KTX1 -DKTX_FEATURE_KTX2 -DKTX_OMIT_VULKAN=1 -DSUPPORT_SOFTWARE_ETC_UNPACK=1 -DBASISD_SUPPORT_FXT1=0"
+KINC="-I $KTX/include -I $KTX/lib -I $KTX/utils -I $KTX/other_include -I $KTX/external -I $KTX/external/basisu/transcoder -I $KTX/external/basisu/zstd -I $KTX/external/dfdutils -I $INC"
+KOBJ="$ROOT/build-m2/ktx"
+rm -rf "$KOBJ"
+mkdir -p "$KOBJ"
+for f in lib/checkheader.c lib/filestream.c lib/hashlist.c lib/info.c lib/memstream.c lib/strings.c lib/swap.c lib/texture.c lib/texture1.c lib/texture2.c lib/vkformat_check.c lib/vkformat_check_variant.c lib/vkformat_str.c lib/vkformat_typesize.c \
+         external/dfdutils/createdfd.c external/dfdutils/colourspaces.c external/dfdutils/interpretdfd.c external/dfdutils/printdfd.c external/dfdutils/queries.c external/dfdutils/vk2dfd.c external/basisu/zstd/zstd.c; do
+    xcrun -sdk "$SDK" clang -target "$TARGET" -std=c11 -O2 -fPIC -w $KDEFS $KINC \
+        -c "$KTX/$f" -o "$KOBJ/$(echo "$f" | tr '/' '_').o"
+done
+for f in lib/basis_transcode.cpp lib/miniz_wrapper.cpp external/basisu/transcoder/basisu_transcoder.cpp lib/etcunpack.cxx external/etcdec/etcdec.cxx; do
+    xcrun -sdk "$SDK" clang++ -target "$TARGET" -std=c++17 -O2 -fPIC -w $KDEFS $KINC \
+        -c "$KTX/$f" -o "$KOBJ/$(echo "$f" | tr '/' '_').o"
+done
+xcrun -sdk "$SDK" clang -target "$TARGET" -std=c11 -O2 -fPIC -w $KDEFS $KINC \
+    -c "$ROOT/host/native/ktx_c.c" -o "$KOBJ/ktx_c.o"
+xcrun -sdk "$SDK" clang++ -target "$TARGET" -shared -fvisibility=default \
+    -Wl,-install_name,@rpath/libKtx.dylib \
+    -o "$APP/libKtx.dylib" "$KOBJ"/*.o -lm
+
+# astc：ARM astcenc 5.7.0，NEON（arm64 全系），隐藏可见性只露 shim 的入口
+xcrun -sdk "$SDK" clang++ \
+    -target "$TARGET" \
+    -std=c++17 -O3 -shared -fvisibility=hidden \
+    -DASTCENC_NEON=1 -DASTCENC_SSE=0 -DASTCENC_AVX=0 -DASTCENC_SVE=0 -DASTCENC_POPCNT=0 -DASTCENC_F16C=0 -DASTCENC_NO_INVARIANCE=1 \
+    -Wl,-install_name,@rpath/libportastc.dylib \
+    -I "$NDEPS/astc-encoder-5.7.0/Source" \
+    -o "$APP/libportastc.dylib" \
+    "$ROOT/host/native/astc_shim.cpp" "$NDEPS/astc-encoder-5.7.0/Source"/astcenc_*.cpp -lm
+
+# 5) 宿主可执行（M2 骨架 + 三角形 + 音频/原生库自检 + .NET 探针诊断件）
 xcrun -sdk "$SDK" clang \
     -target "$TARGET" \
     -fobjc-arc -DPORT17_INTERP=1 \
@@ -97,7 +139,7 @@ xcrun -sdk "$SDK" clang \
     -L "$APP" -lglfw -lvulkan -lwaylithaudio \
     -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics -framework Metal \
     -o "$APP/Port17Host" \
-    "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/triangle.c" "$ROOT/host/app/audio_test.c"
+    "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/triangle.c" "$ROOT/host/app/audio_test.c" "$ROOT/host/app/libs_check.c"
 cp "$ROOT/host/app/Info.plist" "$APP/"
 
 # 6) .NET 探针诊断件（M1 全套：官方运行时 + Hello，平铺 .app 根——CoreLib 同目录原则）

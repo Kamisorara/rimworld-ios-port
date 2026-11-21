@@ -19,6 +19,7 @@
 
 int triangle_main(void);
 int audio_test(void);
+int libs_check(void);
 static int run_probe_thread(void);
 
 static UITextView *g_text = nil;
@@ -383,11 +384,14 @@ static void run_on_big_thread(int (*fn)(void))
     UIButton *audioBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [audioBtn setTitle:@"音频" forState:UIControlStateNormal];
     [audioBtn addTarget:self action:@selector(audioTapped:) forControlEvents:UIControlEventTouchUpInside];
+    UIButton *libsBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [libsBtn setTitle:@"库" forState:UIControlStateNormal];
+    [libsBtn addTarget:self action:@selector(libsTapped:) forControlEvents:UIControlEventTouchUpInside];
     UIStackView *bar = [[UIStackView alloc] initWithFrame:CGRectZero];
     bar.translatesAutoresizingMaskIntoConstraints = NO;
     bar.axis = UILayoutConstraintAxisHorizontal;
     bar.spacing = 12;
-    for (UIView *v in @[tri, probe, logBtn, kbBtn, audioBtn]) [bar addArrangedSubview:v];
+    for (UIView *v in @[tri, probe, logBtn, kbBtn, audioBtn, libsBtn]) [bar addArrangedSubview:v];
 
     [self.view addSubview:bar];
     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
@@ -516,6 +520,12 @@ static void run_on_big_thread(int (*fn)(void))
     // waylithaudio 的 CoreAudio 自检（引擎的 wa_* API 面；结束后可再跑）。
     append_log("音频自检启动（waylithaudio / CoreAudio）");
     run_on_big_thread(audio_test);
+}
+
+- (void)libsTapped:(id)sender
+{
+    // 全部引擎 dylib 的装载自检（install_name/依赖链在设备上是否成立）。
+    run_on_big_thread(libs_check);
 }
 
 @end
