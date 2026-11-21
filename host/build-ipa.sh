@@ -27,19 +27,24 @@ for s in vert frag; do
 done
 ls -la "$APP"/*.spv
 
-# 2) GLFW 垫片（UIKit/CAMetalLayer 后端；非 ARC——垫片持有的 view/layer 由宿主保活）
+# 2) GLFW 垫片（UIKit/CAMetalLayer 后端；非 ARC——垫片持有的 view/layer 由宿主保活）。
+#    install_name 必须钉 @rpath：默认值是构建机的绝对路径，宿主链接后记下的是那个路径，
+#    设备上 dyld 找不到就直接拒载（CI 上链接却全绿，这类错只有 install_name 能防）。
 xcrun -sdk "$SDK" clang \
     -target "$TARGET" \
     -shared -fvisibility=default \
+    -Wl,-install_name,@rpath/libglfw.dylib \
     -I "$INC" \
     -framework UIKit -framework Foundation -framework QuartzCore \
     -o "$APP/libglfw.dylib" \
     "$ROOT/host/glfw/glfw_ios.m"
 
-# 3) Vulkan 前向层（libvulkan.dylib → 同目录 MoltenVK.framework）
+# 3) Vulkan 前向层（libvulkan.dylib → 同目录 MoltenVK.framework；宿主按路径 dlopen，
+#    install_name 同样钉住只为整洁）
 xcrun -sdk "$SDK" clang \
     -target "$TARGET" \
     -shared -fvisibility=default \
+    -Wl,-install_name,@rpath/libvulkan.dylib \
     -I "$INC" \
     -o "$APP/libvulkan.dylib" \
     "$ROOT/host/vulkan/vulkan_ios.c"
