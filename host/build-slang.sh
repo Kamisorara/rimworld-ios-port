@@ -57,6 +57,7 @@ cmake -S "$SRC" -B "$BUILD" -G Ninja \
     -DSLANG_ENABLE_OPTIX=OFF \
     -DSLANG_ENABLE_NVAPI=OFF \
     -DSLANG_ENABLE_AFTERMATH=OFF \
+    -DSLANG_ENABLE_SPLIT_DEBUG_INFO=OFF \
     -DSLANG_IGNORE_ABORT_MSG=ON
 
 cmake --build "$BUILD" --target slang slang-glslang slang-glsl-module
