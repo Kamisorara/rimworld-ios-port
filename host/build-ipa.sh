@@ -70,6 +70,22 @@ cp "$ROOT"/runtime-out-official/*.dylib "$APP/"
 cp "$ROOT"/runtime-out-official/*.dll "$APP/"
 cp "$ROOT/build-m2/hello/Hello.dll" "$APP/"
 
+# 6.5) 出包自检：install_name 必须是 @rpath（默认值是构建机绝对路径，设备上 dyld 拒载而 CI 全绿）；
+#      宿主的依赖链也打印出来留档。任何一条不符合直接失败，不让坏包出门。
+for lib in libglfw.dylib libvulkan.dylib; do
+    NAME="$(otool -D "$APP/$lib" | tail -1)"
+    echo "otool -D $lib: ${NAME}"
+    case "$NAME" in
+        @rpath/*) ;;
+        *) echo "::error::$lib 的 install_name 是 ${NAME}（应为 @rpath/…）"; exit 1 ;;
+    esac
+done
+echo "---- otool -L Port17Host ----"
+otool -L "$APP/Port17Host"
+case "$(otool -L "$APP/Port17Host")" in
+    *runner*) echo "::error::宿主依赖里有构建机绝对路径"; exit 1 ;;
+esac
+
 # 7) ad-hoc 签名：先内嵌文件与 framework，后 bundle（顺序不能反）
 ENT="$ROOT/host/app/entitlements.plist"
 for f in "$APP"/*.dylib "$APP/MoltenVK.framework/MoltenVK" "$APP/Port17Host"; do

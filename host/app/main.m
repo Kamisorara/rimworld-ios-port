@@ -52,8 +52,8 @@ static void append_log(const char *msg)
     });
 }
 
-// triangle.c and host.c log through this (host.c's sink wraps it too).
-void host_log(const char *msg) { append_log(msg); }
+// triangle.c calls host_log — host.c defines it (routed through host_set_log_sink, which the app
+// delegate installs as append_log below); no definition here, or the link sees it twice.
 
 // ---- the window: a CAMetalLayer the whole screen ----
 
