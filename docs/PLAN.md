@@ -58,7 +58,14 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 - **坐标链**：UIKit 点 ×nativeScale=窗口像素 ×(渲染尺寸/窗口尺寸)=引擎像素，与安卓 scaleX/scaleY 同构。
 - **M1 探针进宿主**：同一 app 内按钮触发（CoreCLR 单实例，跑过一次就拒绝），官方运行时包平铺 .app 根不变。
 
-**当前状态**：骨架已推 `m2-host` 流水线出包 `port17host-m2.ipa`——三角形（引擎同款路径：GLFW 垫片→libvulkan→MoltenVK→CAMetalLayer）+ 触摸拖顶点 + 键盘字符上屏 + .NET 探针回归。待真机验收三角形后进 M2 后半：waylithaudio CoreAudio 后端、Slang/ImGui/FreeType/KTX/astcenc 的 iOS 构建、引擎程序集最小画面。
+**当前状态（2026-11-21 真机验收，M2 原生半边全绿）**：`port17host-m2.ipa`（run 44903873394）在测试设备（iPad，Apple M4 GPU / Metal 4 / 8GB / 2360×1640@2x / iOS 27）上：
+- **三角形全链路通**（GLFW 垫片→libvulkan 前向→MoltenVK 1.4.2→CAMetalLayer）：surface 2360×1640、BGRA8_UNORM、FIFO 呈现，锁 60.5 fps、1200+ 帧 0 失败；
+- **触摸路径通**：原始触摸队列拖动顶点，坐标链（点×nativeScale×渲染比）正确；
+- **软键盘桥通**（shown）；**.NET 探针回归通**：CoreCLR 就绪 → exit 42，**90.1 M 迭代/秒**（M1 基线 87.7 无回归）；
+- **前后台语义通**：inactive/background 的 TERM 事件按设计送达。
+- 真机实测注意：MoltenVK 1.4.2 在 iOS 上只给 FIFO 一种呈现模式（MAILBOX 不存在，偏好回退正常）；首测闪退的根因是 gipa 塞设备句柄（MoltenVK 把第一参解引用成 MVKInstance\*，已修并全文件审计）。
+
+待办（M2 后半）：waylithaudio CoreAudio 后端、Slang/ImGui/FreeType/KTX/astcenc 的 iOS 构建、引擎程序集最小画面（M2 总验收线）。
 
 ### M3 游戏程序集上机
 - `patch.dll` 增加 iOS 目标（平台检查改写、Harmony 适配 darwin）；
