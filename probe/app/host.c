@@ -570,8 +570,12 @@ int run_probe(const char *bundle_dir)
     }
 
 #if defined(PORT17_INTERP)
-    // 解释器路线：官方包无 JIT、无可执行内存分配——不需要竞技场握手。
-    host_log("解释器路线：跳过竞技场握手（无 JIT，官方支持配置）");
+    // 解释器路线：官方 ios 包是 JIT/解释器混合构建——设备持有动态代码授权时
+    //（SideStore 新版签名/系统行为，用户实测未经 StikDebug 也有 RWX）会自动选
+    // JIT 并撞上 W^X 写保护问题。COMPlus_InterpMode=1（clrconfigvalues.h 的
+    // 官方旋钮）强制全程解释器，绕开 JIT 加载路径。
+    setenv("COMPlus_InterpMode", "2", 1);  // 2=全程解释且禁 R2R（iOS 本就无 R2R，最确定）
+    host_log("解释器路线：跳过竞技场握手；COMPlus_InterpMode=1 强制纯解释器（官方旋钮）");
 #elif TARGET_OSX || TARGET_OS_SIMULATOR
     // macOS/模拟器：宿主不获取竞技场——macOS 走 runtime 的种子扫描/RWX 路径，
     // 模拟器无脚本可应答、快速干净降级。值判断勿用 defined()（TargetConditionals
