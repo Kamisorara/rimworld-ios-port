@@ -25,6 +25,11 @@ int libs_check(void)
         { "libgli.dylib", "createEmpty" },
         { "libKtx.dylib", "ktxErrorString1" },
         { "libportastc.dylib", "port_astc_encode" },
+        { "libslang.dylib", "slang_createGlobalSession" },
+        { "libslang-compiler.dylib", "slang_createGlobalSession" },
+        // Slang 的两个伴生库是它自己 dlopen 的（内部 C++ 符号，无稳定入口）：装载成功即算过。
+        { "libslang-glslang-2026.19.dylib", NULL },
+        { "libslang-glsl-module-2026.19.dylib", NULL },
     };
     char path[1024];
     uint32_t n = sizeof path - 1;
@@ -45,10 +50,14 @@ int libs_check(void)
             host_log(line);
             continue;
         }
-        void *sym = dlsym(lib, checks[i].sym);
+        void *sym = checks[i].sym ? dlsym(lib, checks[i].sym) : (void *)lib;
         char line[1400];
-        snprintf(line, sizeof line, "库自检：%-32s %s（%s）", checks[i].lib,
-                 sym ? "通过" : "符号缺失！", checks[i].sym);
+        if (checks[i].sym)
+            snprintf(line, sizeof line, "库自检：%-36s %s（%s）", checks[i].lib,
+                     sym ? "通过" : "符号缺失！", checks[i].sym);
+        else
+            snprintf(line, sizeof line, "库自检：%-36s %s（仅装载）", checks[i].lib,
+                     sym ? "通过" : "异常");
         host_log(line);
         if (sym) ok++;
     }

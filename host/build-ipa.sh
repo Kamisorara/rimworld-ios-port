@@ -130,6 +130,29 @@ xcrun -sdk "$SDK" clang++ \
     -o "$APP/libportastc.dylib" \
     "$ROOT/host/native/astc_shim.cpp" "$NDEPS/astc-encoder-5.7.0/Source"/astcenc_*.cpp -lm
 
+# 4.8) Slang 2026.19（PC 版游戏的着色器编译器版本，着色器缓存键与 build tag 绑定）：三件库 + 代理。
+#      产物由 host/fetch-slang.sh + host/build-slang.sh 备好（两段式：宿主 generators → iOS arm64）。
+SLANG="$ROOT/build-slang/out"
+[ -f "$ROOT/build-slang/.built-v1" ] || { echo "::error::Slang 未就位（host/fetch-slang.sh + host/build-slang.sh）"; exit 1; }
+for f in libslang-compiler.dylib libslang-glslang-2026.19.dylib libslang-glsl-module-2026.19.dylib; do
+    [ -f "$SLANG/$f" ] || { echo "::error::build-slang/out 缺 $f"; exit 1; }
+    cp "$SLANG/$f" "$APP/"
+done
+# Slang 的 cmake 给的 install_name 可能是构建机绝对路径：统一钉成 @rpath（代理链接与设备装载都靠它）。
+for f in libslang-compiler.dylib libslang-glslang-2026.19.dylib libslang-glsl-module-2026.19.dylib; do
+    install_name_tool -id "@rpath/$f" "$APP/$f"
+done
+# 代理（host/native/slang_proxy.c，自身无代码）：把 libslang-compiler.dylib 挂进依赖——dlsym 顺着依赖搜索，
+# 引擎 P/Invoke "slang" 即落进 Slang。-needed_library 让链接器保留这条没人直接引用的依赖。
+xcrun -sdk "$SDK" clang \
+    -target "$TARGET" \
+    -shared \
+    -Wl,-install_name,@rpath/libslang.dylib \
+    -Wl,-needed_library,libslang-compiler.dylib \
+    -L "$APP" \
+    -o "$APP/libslang.dylib" \
+    "$ROOT/host/native/slang_proxy.c"
+
 # 5) 宿主可执行（M2 骨架 + 三角形 + 音频/原生库自检 + .NET 探针诊断件）
 xcrun -sdk "$SDK" clang \
     -target "$TARGET" \
@@ -149,8 +172,27 @@ cp "$ROOT"/runtime-out-official/*.dll "$APP/"
 cp "$ROOT/build-m2/hello/Hello.dll" "$APP/"
 
 # 6.5) 出包自检：install_name 必须是 @rpath（默认值是构建机绝对路径，设备上 dyld 拒载而 CI 全绿）；
-#      宿主的依赖链也打印出来留档。任何一条不符合直接失败，不让坏包出门。
-for lib in libglfw.dylib libvulkan.dylib; do
+#      所有自建 dylib 的依赖行里出现构建机路径的，自动 -change 成 @rpath/<basename>（同目录即能解析），
+#      改不动的直接失败，不让坏包出门。
+fixup_dylib() {  # <dylib 路径>
+    local lib="$1" deps dep base
+    deps="$(otool -L "$lib" | tail -n +2 | grep -oE '/Users/[^ ]*\.dylib' || true)"
+    for dep in $deps; do
+        base="$(basename "$dep")"
+        if [ -e "$APP/$base" ]; then
+            install_name_tool -change "$dep" "@rpath/$base" "$lib"
+            echo "install_name_tool -change $lib: $base -> @rpath"
+        else
+            echo "::error::$lib 依赖 $dep（构建机路径，且 bundle 里没有 $base）"
+            exit 1
+        fi
+    done
+}
+for lib in "$APP"/*.dylib; do
+    fixup_dylib "$lib"
+done
+for lib in libglfw.dylib libvulkan.dylib libslang.dylib \
+           libslang-compiler.dylib libslang-glslang-2026.19.dylib libslang-glsl-module-2026.19.dylib; do
     NAME="$(otool -D "$APP/$lib" | tail -1)"
     echo "otool -D $lib: ${NAME}"
     case "$NAME" in

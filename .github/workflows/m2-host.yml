@@ -15,7 +15,7 @@ on:
 jobs:
   m2-ipa:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +40,17 @@ jobs:
 
       - name: 取原生库源码（缓存未命中才下载）
         run: ./host/fetch-native-deps.sh
+
+      - name: Slang 2026.19（源码+产物整体缓存，首建约半小时）
+        uses: actions/cache@v4
+        with:
+          path: build-slang
+          key: slang-2026.19-0fb6b758-bv1
+
+      - name: 取 Slang 源码并编译 iOS arm64 三件库
+        run: |
+          ./host/fetch-slang.sh
+          ./host/build-slang.sh
 
       - name: 取官方 ios-arm64 运行时包（.NET 探针诊断件用）
         run: ./scripts/fetch-official-runtime.sh 11.0.0
