@@ -57,13 +57,16 @@ cp -R "$MVK/framework/MoltenVK.framework" "$APP/"
 NDEPS="$ROOT/build-native-deps"
 [ -f "$NDEPS/.fetched" ] || { echo "::error::原生库依赖未就位，先跑 host/fetch-native-deps.sh"; exit 1; }
 
-# waylithaudio：引擎的 miniaudio 壳（host/audio，安卓版等义移植），CoreAudio 后端
+# waylithaudio：引擎的 miniaudio 壳（host/audio，安卓版等义移植），CoreAudio 后端。
+# -x objective-c：miniaudio 0.11.22 的 iOS 路径引 AVFoundation 头（AVAudioSession），
+# 纯 C 编译见到 ObjC 头就炸——按 ObjC 编译（源码本身是 C，两种模式都吃）。
 xcrun -sdk "$SDK" clang \
     -target "$TARGET" \
+    -x objective-c \
     -shared -O2 -fvisibility=default -Wno-unused-function -Wno-unused-variable \
     -Wl,-install_name,@rpath/libwaylithaudio.dylib \
     -I "$NDEPS/miniaudio" \
-    -framework CoreAudio -framework AudioToolbox -framework Foundation \
+    -framework CoreAudio -framework AudioToolbox -framework AVFoundation -framework Foundation \
     -o "$APP/libwaylithaudio.dylib" \
     "$ROOT/host/audio/waylithaudio.c" -lm
 
