@@ -8,6 +8,7 @@
 // MoltenVK, which is M2's proof before the engine itself comes.
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import <Metal/Metal.h>
 #include <dlfcn.h>
 #include <signal.h>
 #include <stdio.h>
@@ -124,12 +125,13 @@ static int mods_from_flags(UIKeyModifierFlags flags)
     if (flags & UIKeyModifierControl) mods |= 0x0002;
     if (flags & UIKeyModifierAlternate) mods |= 0x0004;
     if (flags & UIKeyModifierCommand) mods |= 0x0008;
-    if (flags & UIKeyModifierAlphaLock) mods |= 0x0010;
+    if (flags & UIKeyModifierAlphaShift) mods |= 0x0010;
     return mods;
 }
 
 // Every finger of every phase goes to the shim as its raw event (the id is the UITouch object's
-// address: stable for the finger's life, as Android's pointer id is).
+// address: stable for the finger's life, as Android's pointer id is; the double cast keeps ARC's
+// pointer-introspection warning away).
 @interface MetalView : UIView
 @end
 
@@ -184,7 +186,7 @@ static int touch_type(NSSet<UITouch *> *touches)
     for (UITouch *touch in touches)
     {
         CGPoint p = [touch locationInView:self];
-        glfwIosTouch(type, (int)(intptr_t)touch & 0x7fffffff, (float)p.x, (float)p.y);
+        glfwIosTouch(type, (int)(intptr_t)(__bridge const void *)touch & 0x7fffffff, (float)p.x, (float)p.y);
     }
 }
 
@@ -417,7 +419,7 @@ static void run_on_big_thread(int (*fn)(void))
     layer.device = MTLCreateSystemDefaultDevice();
     layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
     layer.framebufferOnly = YES; // present only, no reads: the fastest path, what a game takes
-    glfwIosAttach(layer, _gameView, _keyboard);
+    glfwIosAttach((__bridge void *)layer, (__bridge void *)_gameView, (__bridge void *)_keyboard);
 
     // 启动即回放既有 ui 日志：上一次会话（含抢救出的 stderr 尾部）直接可见（M1 的规矩）。
     NSString *uiPath = [NSHomeDirectory()
@@ -435,13 +437,13 @@ static void run_on_big_thread(int (*fn)(void))
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
     NSOperationQueue *main = [NSOperationQueue mainQueue];
     [nc addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:main
-                  usingBlock:^(NSNotification *) { glfwIosApplicationEvent(GLFWIOS_WILL_RESIGN_ACTIVE); }];
+                  usingBlock:^(NSNotification *note) { (void)note; glfwIosApplicationEvent(GLFWIOS_WILL_RESIGN_ACTIVE); }];
     [nc addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:main
-                  usingBlock:^(NSNotification *) { glfwIosApplicationEvent(GLFWIOS_DID_ENTER_BACKGROUND); }];
+                  usingBlock:^(NSNotification *note) { (void)note; glfwIosApplicationEvent(GLFWIOS_DID_ENTER_BACKGROUND); }];
     [nc addObserverForName:UIApplicationWillEnterForegroundNotification object:nil queue:main
-                  usingBlock:^(NSNotification *) { glfwIosApplicationEvent(GLFWIOS_WILL_ENTER_FOREGROUND); }];
+                  usingBlock:^(NSNotification *note) { (void)note; glfwIosApplicationEvent(GLFWIOS_WILL_ENTER_FOREGROUND); }];
     [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:main
-                  usingBlock:^(NSNotification *) { glfwIosApplicationEvent(GLFWIOS_DID_BECOME_ACTIVE); }];
+                  usingBlock:^(NSNotification *note) { (void)note; glfwIosApplicationEvent(GLFWIOS_DID_BECOME_ACTIVE); }];
 }
 
 - (void)viewDidAppear:(BOOL)animated

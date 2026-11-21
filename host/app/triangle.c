@@ -283,7 +283,8 @@ static bool pick_device_and_queue(void)
     info.queueCreateInfoCount = 1;
     info.pQueueCreateInfos = &queueInfo;
     CHECK(vkCreateDevice(g_physical, &info, NULL, &g_device), "vkCreateDevice");
-    PFN_vkGetDeviceQueue getQueue = (PFN_vkGetDeviceQueue)gipa(g_device, "vkGetDeviceQueue");
+    // gipa 的第一参类型是 VkInstance，设备级函数照 Vulkan 的实际用法传设备句柄进去（转型免警）。
+    PFN_vkGetDeviceQueue getQueue = (PFN_vkGetDeviceQueue)gipa((VkInstance)(void *)g_device, "vkGetDeviceQueue");
     getQueue(g_device, g_family, 0, &g_queue);
     return true;
 }
@@ -511,6 +512,8 @@ static bool create_vertices(void)
     VK_GET(g_instance, vkFreeMemory)
     VK_GET(g_instance, vkMapMemory)
     VK_GET(g_instance, vkBindBufferMemory)
+    VK_GET(g_instance, vkGetBufferMemoryRequirements)
+    VK_GET(g_instance, vkGetPhysicalDeviceMemoryProperties)
 
     VkBufferCreateInfo info = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
     info.size = 3 * 5 * sizeof(float);
@@ -518,12 +521,9 @@ static bool create_vertices(void)
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     CHECK(vkCreateBuffer(g_device, &info, NULL, &g_vertexBuffer), "vkCreateBuffer");
     VkMemoryRequirements needs;
-    PFN_vkGetBufferMemoryRequirements requirements = (PFN_vkGetBufferMemoryRequirements)gipa(g_device, "vkGetBufferMemoryRequirements");
-    requirements(g_vertexBuffer, &needs);
-    PFN_vkGetPhysicalDeviceMemoryProperties memoryProps =
-        (PFN_vkGetPhysicalDeviceMemoryProperties)gipa(g_instance, "vkGetPhysicalDeviceMemoryProperties");
+    vkGetBufferMemoryRequirements(g_device, g_vertexBuffer, &needs);
     VkPhysicalDeviceMemoryProperties props;
-    memoryProps(g_physical, &props);
+    vkGetPhysicalDeviceMemoryProperties(g_physical, &props);
     uint32_t typeIndex = UINT32_MAX;
     for (uint32_t i = 0; i < props.memoryTypeCount; i++)
     {
