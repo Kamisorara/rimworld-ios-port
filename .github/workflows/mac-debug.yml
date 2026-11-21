@@ -122,7 +122,8 @@ jobs:
       - name: 取官方 osx-arm64 运行时包
         run: |
           PKG="microsoft.netcore.app.runtime.osx-arm64"
-          VER=$(curl -sL "https://nuget.azure.cn/v3-flatcontainer/$PKG/index.json" | tr ',' '\n' | grep -o '"11\.0\.0-rc\.3[^"]*"' | tail -n1 | tr -d '"')
+          VER=$(curl -sL "https://nuget.azure.cn/v3-flatcontainer/$PKG/index.json" | tr ',' '\n' | grep -oE '"11\.0\.[0-9]+"' | tail -n1 | tr -d '"')
+          [ -n "$VER" ] || VER=11.0.0
           echo "版本 $VER"
           curl -sL -o pack.nupkg "https://nuget.azure.cn/v3-flatcontainer/$PKG/$VER/$PKG.$VER.nupkg"
           unzip -q pack.nupkg -d pack
@@ -149,8 +150,11 @@ jobs:
             probe/debug/debug-main.c probe/app/host.c \
             -o macprobe
 
-      - name: 对照组 1——官方 osx 包布局
+      - name: 对照组 1——官方 GA osx 包，基础 5 属性
         run: ./macprobe "$PWD/bundle" || true
+
+      - name: 对照组 1b——GA osx 包 + 设备同款属性（RID=ios-arm64 + 空 STARTUP_HOOKS）
+        run: PORT17_RID=ios-arm64 PORT17_STARTUP_HOOKS=1 ./macprobe "$PWD/bundle" || true
 
       - name: 对照组 2——SDK 10.0.x 运行时（平铺布局）
         run: ./macprobe "$PWD/bundle10" flat || true

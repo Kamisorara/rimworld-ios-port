@@ -139,16 +139,28 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    // JIT 内存完全交给 runtime 补丁的竞技场后端（自动：扫描竞技场 → RWX 后备）。
-    const char *kA[] = {"TRUSTED_PLATFORM_ASSEMBLIES", "APP_PATHS",
-                        "APP_NI_PATHS", "NATIVE_DLL_SEARCH_DIRECTORIES",
-                        "APP_CONTEXT_BASE_DIRECTORY"};
-    const char *vA[] = {tpa, managed, managed, (char *)dir, (char *)dir};
+    // 属性组：基础 5 项 + 可选设备同款补齐（PORT17_RID / PORT17_STARTUP_HOOKS=1）
+    const char *kA[9];
+    const char *vA[9];
+    int nProps = 0;
+    kA[nProps] = "TRUSTED_PLATFORM_ASSEMBLIES"; vA[nProps++] = tpa;
+    kA[nProps] = "APP_PATHS";                    vA[nProps++] = managed;
+    kA[nProps] = "APP_NI_PATHS";                 vA[nProps++] = managed;
+    kA[nProps] = "NATIVE_DLL_SEARCH_DIRECTORIES"; vA[nProps++] = (char *)dir;
+    kA[nProps] = "APP_CONTEXT_BASE_DIRECTORY";   vA[nProps++] = (char *)dir;
+    const char *rid = getenv("PORT17_RID");
+    if (rid != NULL && rid[0] != '\0' && strcmp(rid, "none") != 0) {
+        kA[nProps] = "RUNTIME_IDENTIFIER"; vA[nProps++] = rid;
+    }
+    if (getenv("PORT17_STARTUP_HOOKS") != NULL) {
+        kA[nProps] = "STARTUP_HOOKS"; vA[nProps++] = "";
+    }
 
-    printf("[macprobe] ---- 初始化 CoreCLR（竞技场后端自动选路）----\n");
+    printf("[macprobe] ---- 初始化 CoreCLR（props=%d, RID=%s）----\n", nProps,
+           (rid && rid[0]) ? rid : "(无)");
     void *host = NULL;
     unsigned int domain = 0;
-    int hr = init(self, "macdebug", 5, kA, vA, &host, &domain);
+    int hr = init(self, "macdebug", nProps, kA, vA, &host, &domain);
     if (hr != 0) {
         printf("[macprobe] → 失败 0x%08x\n", hr);
         return 1;
