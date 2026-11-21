@@ -142,14 +142,13 @@ done
 for f in libslang-compiler.dylib libslang-glslang-2026.19.so libslang-glsl-module-2026.19.so; do
     install_name_tool -id "@rpath/$f" "$APP/$f"
 done
-# 代理（host/native/slang_proxy.c，自身无代码）：把 libslang-compiler.dylib 挂进依赖——dlsym 顺着依赖搜索，
-# 引擎 P/Invoke "slang" 即落进 Slang。-needed_library 让链接器保留这条没人直接引用的依赖。
+# 代理（host/native/slang_proxy.c）：锚点函数取 Slang 入口的地址，链接器为解析这个未定义符号挂上
+# libslang-compiler.dylib——dlsym 顺着依赖搜索，引擎 P/Invoke "slang" 即落进 Slang。
 xcrun -sdk "$SDK" clang \
     -target "$TARGET" \
     -shared \
     -Wl,-install_name,@rpath/libslang.dylib \
-    -Wl,-needed_library,libslang-compiler.dylib \
-    -L "$APP" \
+    -L "$APP" -lslang-compiler \
     -o "$APP/libslang.dylib" \
     "$ROOT/host/native/slang_proxy.c"
 
