@@ -72,6 +72,7 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 - waylithaudio 已移植（host/audio，CoreAudio 后端，`MA_ENABLE_COREAUDIO`），依赖源码版本与 sha256 沿用安卓仓库的钉（miniaudio 0.11.22 + extras stb_vorbis、stb@013ac3be、VMA 3.3.0，host/fetch-native-deps.sh 按 .fetched 标记 + CI 缓存）；宿主加「音频」自检按钮（走引擎 wa_\* API 面：建设备→PCM 正弦→voice 播放→位置推进断言）。
 - vma（host/native/vma.cpp，vulkan 函数指针从 libvulkan.dylib 前向层填）与 stb（stb_image/write）一并进包——引擎三件先行库到位。
 - **真机验收（run 44905361529 的包，2026-11-21 20:48 会话）全绿**：音频 `miniaudio 0.11.22 on Core Audio, 48000 Hz, 2 声道, period 512`，voice 位置 12800→86016 帧实时推进、2 秒整自动结束零卡滞；三角形回归 60.3–63.2 fps 零失败（中途多次 inactive/active 切换存活）；.NET 探针 90.9 M 迭代/秒。waylithaudio 编译要点：miniaudio 的 iOS 路径引 AVFoundation 头（AVAudioSession），必须 `-x objective-c` 编译并链 AVFoundation。
+- **gli/KTX/astcenc 三库 iOS 化（run 44906116030，一次过全绿）**：libgli（header-only+glm 单元）、libKtx（libktx 4.4.0 读+转码子集，安卓文件清单与宏逐文件编译）、libportastc（astcenc 5.7.0 NEON、隐藏可见性）；fetch-native-deps 升 v2。宿主加「库」按钮：全部引擎 dylib 逐个 dlopen+解析已知符号的设备端装载自检。原生库清单至此只剩 **Slang**（最重）与 **ImGui/FreeType**（生成器需玩家游戏副本）。
 
 ### M3 游戏程序集上机
 - `patch.dll` 增加 iOS 目标（平台检查改写、Harmony 适配 darwin）；
