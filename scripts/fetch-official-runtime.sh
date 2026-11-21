@@ -21,7 +21,7 @@ for base in "https://api.nuget.org/v3-flatcontainer" "https://nuget.azure.cn/v3-
     fi
 done
 [ -n "$SRC" ] || { echo "::error::两个 NuGet 源都取不到 $PKG $VER"; exit 1; }
-echo "包来源：$SRC（$VER）"
+echo "pack source: ${SRC} (${VER})"
 
 unzip -q "$ROOT/build/official-pack.nupkg" -d "$ROOT/build/official-pack"
 cp "$ROOT"/build/official-pack/runtimes/ios-arm64/lib/net11.0/*.dll "$OUT"/
