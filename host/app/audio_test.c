@@ -4,6 +4,7 @@
 // auto-release, and watches the play position advance; wa_update runs the device watchdog as the
 // engine's own update loop does.
 #include <math.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
