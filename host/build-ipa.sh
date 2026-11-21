@@ -59,7 +59,7 @@ xcrun -sdk "$SDK" clang \
     -I "$ROOT/host/app" -I "$INC" \
     -Wl,-rpath,@executable_path \
     -L "$APP" -lglfw -lvulkan \
-    -framework UIKit -framework Foundation -framework QuartzCore -framework Metal \
+    -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics -framework Metal \
     -o "$APP/Port17Host" \
     "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/triangle.c"
 cp "$ROOT/host/app/Info.plist" "$APP/"
