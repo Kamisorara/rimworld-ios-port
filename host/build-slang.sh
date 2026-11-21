@@ -69,6 +69,12 @@ mkdir -p "$OUT/out"
 COMPILER="$(find "$BUILD" -name 'libslang-compiler*.dylib' ! -name '*without*' | head -1)"
 [ -n "$COMPILER" ] || { echo "::error::libslang-compiler 没编出来"; exit 1; }
 cp "$COMPILER" "$OUT/out/libslang-compiler.dylib"
+# 收身：Release 构建仍带大量调试信息（32MB）。去掉调试段与本地符号（动态符号表不动，装载与
+# dlsym 解析不受影响）；伴生模块同理。
+for f in "$OUT/out/libslang-compiler.dylib" "$OUT/out/libslang-glslang-2026.19.so" "$OUT/out/libslang-glsl-module-2026.19.so"; do
+    strip -S -x "$f"
+done
+ls -la "$OUT/out" | awk 'NR>3 {print $5"\t"$9}'
 for f in libslang-glslang-2026.19.so libslang-glsl-module-2026.19.so; do
     P="$(find "$BUILD" -name "$f" | head -1)"
     [ -n "$P" ] || { echo "::error::$f 没编出来"; exit 1; }
