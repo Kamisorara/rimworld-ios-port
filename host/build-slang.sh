@@ -27,8 +27,10 @@ if [ ! -x "$SRC/generators/bin/slang-bootstrap" ] && [ ! -x "$SRC/generators/bin
 fi
 
 # ---- 阶段 2：iOS arm64 目标库 ----
-# 与安卓段同参（不带 slangc/slangi/slangrt/proxy；SLANG_IGNORE_ABORT_MSG 容忍 -DNDEBUG 下的 abort 提示），
-# 工具链换成 iOS：CMAKE_SYSTEM_NAME=iOS + iphoneos SDK + 15.0 部署目标。
+# 与安卓 preset（android-base）同款关停清单（GFX/RHI/SLANGD/REPLAYER/LLVM/EXAMPLES/XLIB/CUDA/OPTIX/
+# NVAPI/AFTERMATH——不关的话 tools/ 的 gfx 块引用被关掉的 slangc 目标，configure 直接死），
+# 再叠加安卓 build-official.cmd 的同参（不带 slangc/slangi/slangrt/proxy；IGNORE_ABORT_MSG 容忍
+# -DNDEBUG 下的 abort 提示），工具链换成 iOS：CMAKE_SYSTEM_NAME=iOS + iphoneos SDK + 15.0 部署目标。
 echo "== slang: iOS arm64 目标库"
 BUILD="$SRC/build-ios-arm64"
 cmake -S "$SRC" -B "$BUILD" -G Ninja \
@@ -43,6 +45,18 @@ cmake -S "$SRC" -B "$BUILD" -G Ninja \
     -DSLANG_ENABLE_SLANGI=OFF \
     -DSLANG_ENABLE_SLANGRT=OFF \
     -DSLANG_ENABLE_SLANG_PROXY=OFF \
+    -DSLANG_ENABLE_GFX=OFF \
+    -DSLANG_ENABLE_SLANG_RHI=OFF \
+    -DSLANG_ENABLE_TESTS=OFF \
+    -DSLANG_ENABLE_SLANGD=OFF \
+    -DSLANG_ENABLE_REPLAYER=OFF \
+    -DSLANG_SLANG_LLVM_FLAVOR=DISABLE \
+    -DSLANG_ENABLE_EXAMPLES=OFF \
+    -DSLANG_ENABLE_XLIB=OFF \
+    -DSLANG_ENABLE_CUDA=OFF \
+    -DSLANG_ENABLE_OPTIX=OFF \
+    -DSLANG_ENABLE_NVAPI=OFF \
+    -DSLANG_ENABLE_AFTERMATH=OFF \
     -DSLANG_IGNORE_ABORT_MSG=ON
 
 cmake --build "$BUILD" --target slang slang-glslang slang-glsl-module
