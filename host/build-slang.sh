@@ -33,6 +33,7 @@ echo "== slang: iOS arm64 目标库"
 BUILD="$SRC/build-ios-arm64"
 cmake -S "$SRC" -B "$BUILD" -G Ninja \
     -DCMAKE_SYSTEM_NAME=iOS \
+    -DCMAKE_MACOSX_BUNDLE=OFF \
     -DCMAKE_OSX_SYSROOT=iphoneos \
     -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
     -DCMAKE_OSX_ARCHITECTURES=arm64 \
