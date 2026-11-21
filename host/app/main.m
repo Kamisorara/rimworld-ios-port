@@ -18,6 +18,7 @@
 #import "../glfw/glfw_ios.h"
 
 int triangle_main(void);
+int audio_test(void);
 static int run_probe_thread(void);
 
 static UITextView *g_text = nil;
@@ -379,11 +380,14 @@ static void run_on_big_thread(int (*fn)(void))
     UIButton *kbBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [kbBtn setTitle:@"键盘" forState:UIControlStateNormal];
     [kbBtn addTarget:self action:@selector(keyboardTapped:) forControlEvents:UIControlEventTouchUpInside];
+    UIButton *audioBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [audioBtn setTitle:@"音频" forState:UIControlStateNormal];
+    [audioBtn addTarget:self action:@selector(audioTapped:) forControlEvents:UIControlEventTouchUpInside];
     UIStackView *bar = [[UIStackView alloc] initWithFrame:CGRectZero];
     bar.translatesAutoresizingMaskIntoConstraints = NO;
     bar.axis = UILayoutConstraintAxisHorizontal;
     bar.spacing = 12;
-    for (UIView *v in @[tri, probe, logBtn, kbBtn]) [bar addArrangedSubview:v];
+    for (UIView *v in @[tri, probe, logBtn, kbBtn, audioBtn]) [bar addArrangedSubview:v];
 
     [self.view addSubview:bar];
     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
@@ -404,16 +408,21 @@ static void run_on_big_thread(int (*fn)(void))
 
     // The shim is attached before anything asks it for a window (the Android host's attach_glfw rule:
     // it must see the window and the input before the engine starts). Its logging and the Vulkan
-    // forwarder's go to the same overlay.
+    // forwarder's — and the audio's and the allocator's — go to the same overlay.
     glfwIosSetLogSink(append_log);
-    void *vulkan = dlopen([[[NSBundle mainBundle].bundlePath
-        stringByAppendingPathComponent:@"libvulkan.dylib"] fileSystemRepresentation],
-        RTLD_NOW | RTLD_LOCAL);
-    if (vulkan)
+    for (NSString *name in @[@"libvulkan.dylib", @"libwaylithaudio.dylib", @"libvma.dylib"])
     {
-        void (*sink)(void (*)(const char *)) =
-            (void (*)(void (*)(const char *)))dlsym(vulkan, "port17_vulkan_set_log_sink");
-        if (sink) sink(append_log);
+        NSString *entry = [name isEqualToString:@"libwaylithaudio.dylib"] ? @"port17_audio_set_log_sink"
+                            : [name isEqualToString:@"libvma.dylib"] ? @"port17_vma_set_log_sink"
+                            : @"port17_vulkan_set_log_sink";
+        void *lib = dlopen([[[NSBundle mainBundle].bundlePath
+            stringByAppendingPathComponent:name] fileSystemRepresentation], RTLD_NOW | RTLD_LOCAL);
+        if (lib)
+        {
+            void (*sink)(void (*)(const char *)) =
+                (void (*)(void (*)(const char *)))dlsym(lib, entry.UTF8String);
+            if (sink) sink(append_log);
+        }
     }
     CAMetalLayer *layer = (CAMetalLayer *)_gameView.layer;
     layer.device = MTLCreateSystemDefaultDevice();
@@ -500,6 +509,13 @@ static void run_on_big_thread(int (*fn)(void))
 {
     // 直接走垫片的软键盘入口（引擎将来的同一条路）。
     glfwAndroidShowKeyboard(_keyboard.isFirstResponder ? 0 : 1);
+}
+
+- (void)audioTapped:(id)sender
+{
+    // waylithaudio 的 CoreAudio 自检（引擎的 wa_* API 面；结束后可再跑）。
+    append_log("音频自检启动（waylithaudio / CoreAudio）");
+    run_on_big_thread(audio_test);
 }
 
 @end
@@ -616,7 +632,7 @@ int main(int argc, char *argv[])
             stringByAppendingPathComponent:@"Documents"];
         BOOL isDir = NO;
         BOOL docOk = [fm fileExistsAtPath:docDir isDirectory:&isDir] && isDir;
-        boot_log(docOk ? @"Documents 目录存在（Files app：浏览 → 我的 iPhone → Port17 Host）"
+        boot_log(docOk ? @"Documents 目录存在（Files app：浏览 → 我的 iPhone → Port17）"
                        : @"Documents 目录缺失（沙盒异常，日志只剩屏幕一份）");
         signal(SIGSEGV, crash_handler);
         signal(SIGBUS, crash_handler);

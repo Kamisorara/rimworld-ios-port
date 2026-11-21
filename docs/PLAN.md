@@ -67,6 +67,11 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 待办（M2 后半）：waylithaudio CoreAudio 后端、Slang/ImGui/FreeType/KTX/astcenc 的 iOS 构建、引擎程序集最小画面（M2 总验收线）。
 
+**M2 后半开工（2026-11-21 晚）**：
+- **正式包名定版 `com.samilry.port17`**（显示名 Port17）——数据容器绑包名，游戏资源将来经 Files app 放进本 app 的 Documents，一次放好不再迁移；探针 app（com.samilry.port17.probe）保持 M1 档案身份不动。
+- waylithaudio 已移植（host/audio，CoreAudio 后端，`MA_ENABLE_COREAUDIO`），依赖源码版本与 sha256 沿用安卓仓库的钉（miniaudio 0.11.22 + extras stb_vorbis、stb@013ac3be、VMA 3.3.0，host/fetch-native-deps.sh 按 .fetched 标记 + CI 缓存）；宿主加「音频」自检按钮（走引擎 wa_\* API 面：建设备→PCM 正弦→voice 播放→位置推进断言）。
+- vma（host/native/vma.cpp，vulkan 函数指针从 libvulkan.dylib 前向层填）与 stb（stb_image/write）一并进包——引擎三件先行库到位。
+
 ### M3 游戏程序集上机
 - `patch.dll` 增加 iOS 目标（平台检查改写、Harmony 适配 darwin）；
 - PortHooks 移植 + CoreLib 补丁对 11.0 CoreLib 的重移植（20 个 `WaylithClr.*` 开关，安卓版是对 10.0.12 做的）；

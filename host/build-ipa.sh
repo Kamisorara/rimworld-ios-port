@@ -52,16 +52,49 @@ xcrun -sdk "$SDK" clang \
 # 4) MoltenVK 官方 framework（原样放 .app 根；install name 是 @rpath/…，宿主带 @executable_path）
 cp -R "$MVK/framework/MoltenVK.framework" "$APP/"
 
-# 5) 宿主可执行（M2 骨架 + 三角形 + .NET 探针诊断件）
+# 4.5) 引擎原生库（M2 后半）：音频（waylithaudio/CoreAudio）、VMA、stb。
+#      依赖源码由 host/fetch-native-deps.sh 备好（版本与 sha 沿用安卓仓库的钉）。
+NDEPS="$ROOT/build-native-deps"
+[ -f "$NDEPS/.fetched" ] || { echo "::error::原生库依赖未就位，先跑 host/fetch-native-deps.sh"; exit 1; }
+
+# waylithaudio：引擎的 miniaudio 壳（host/audio，安卓版等义移植），CoreAudio 后端
+xcrun -sdk "$SDK" clang \
+    -target "$TARGET" \
+    -shared -O2 -fvisibility=default -Wno-unused-function -Wno-unused-variable \
+    -Wl,-install_name,@rpath/libwaylithaudio.dylib \
+    -I "$NDEPS/miniaudio" \
+    -framework CoreAudio -framework AudioToolbox -framework Foundation \
+    -o "$APP/libwaylithaudio.dylib" \
+    "$ROOT/host/audio/waylithaudio.c" -lm
+
+# vma：Vulkan Memory Allocator 3.3.0 的 C API（host/native/vma.cpp，填充 libvulkan 的函数指针）
+xcrun -sdk "$SDK" clang++ \
+    -target "$TARGET" \
+    -std=c++17 -O2 -shared -fvisibility=default \
+    -Wl,-install_name,@rpath/libvma.dylib \
+    -I "$NDEPS/VulkanMemoryAllocator-3.3.0/include" -I "$INC" \
+    -o "$APP/libvma.dylib" \
+    "$ROOT/host/native/vma.cpp"
+
+# stb：stb_image + stb_image_write 的导出面（host/native/stb.c）
+xcrun -sdk "$SDK" clang \
+    -target "$TARGET" \
+    -O2 -shared -fvisibility=default \
+    -Wl,-install_name,@rpath/libstb.dylib \
+    -I "$NDEPS" \
+    -o "$APP/libstb.dylib" \
+    "$ROOT/host/native/stb.c" -lm
+
+# 5) 宿主可执行（M2 骨架 + 三角形 + 音频自检 + .NET 探针诊断件）
 xcrun -sdk "$SDK" clang \
     -target "$TARGET" \
     -fobjc-arc -DPORT17_INTERP=1 \
     -I "$ROOT/host/app" -I "$INC" \
     -Wl,-rpath,@executable_path \
-    -L "$APP" -lglfw -lvulkan \
+    -L "$APP" -lglfw -lvulkan -lwaylithaudio \
     -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics -framework Metal \
     -o "$APP/Port17Host" \
-    "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/triangle.c"
+    "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/triangle.c" "$ROOT/host/app/audio_test.c"
 cp "$ROOT/host/app/Info.plist" "$APP/"
 
 # 6) .NET 探针诊断件（M1 全套：官方运行时 + Hello，平铺 .app 根——CoreLib 同目录原则）
