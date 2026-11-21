@@ -1,6 +1,8 @@
 build/
 runtime-src/
 runtime-out/
+runtime-out-official/
+build-interp/
 artifacts/
 obj/
 bin/

@@ -82,7 +82,11 @@ static void *probe_thread(void *arg)
 static void run_probe_on_bg(void)
 {
     append_log("==== Port17 iOS 探针 ====");
+#if defined(PORT17_INTERP)
+    append_log("解释器路线（官方 .NET 11 ios 运行时包）：无需 StikDebug/JIT，装完直接打开；本探针测解释器吞吐");
+#else
     append_log("JIT26 协议（宿主拿内存）：经 StikDebug 拉起并运行 rw17-jit26.js；本进程 brk 请求、脚本应答、别名/分离/探针全在宿主，runtime 只消费");
+#endif
     boot_log(@"创建 probe 线程");
     pthread_attr_t attr;
     pthread_attr_init(&attr);

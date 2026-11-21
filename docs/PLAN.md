@@ -18,6 +18,10 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 ### M1 运行时探针（进行中，本仓库当前状态）
 
+**路线决策（2026-11-21）**：解释器路线升为主线，JIT26 竞技场降为可选全速分支。
+- **解释器主线**（`interp-probe.yml`）：官方 `Microsoft.NETCore.App.Runtime.ios-arm64 11.0.0`（.NET 11 GA，微软支持形态：Apple mobile = 无 JIT 解释器配置）——零补丁、零 StikDebug、零脚本，装完即玩。真机要回答的唯一问题：解释器吞吐（Hello 探针的 M 迭代/秒）能否撑起 RimWorld。安卓 JIT 基线 ~200 M 迭代/秒（桌面同量级），解释器预期慢 3–15 倍。
+- **JIT26 竞技场分支**（`m1-probe.yml`，代码完成待真机验收）：STS2/playport 同款调试器授予竞技场 + brk 握手 + 提前分离，Backend v3（fd-mapper）已修 Module::Create SIGBUS 但未验收。两条路线宿主层/布局/探针全共享，仅 runtime 来源与 jit26 门控（`PORT17_INTERP`）不同；若解释器性能可接受则此分支封存，性能不足再回来验收。
+
 **改造计划（2026-11-13 起，进行中）**：JIT 授予协议转 playport 模式——`brk #0xf00d` 同步握手 + 提前分离（不再长挂调试会话），见 [PLAN-JIT26.md](PLAN-JIT26.md)。
 
 最小宿主 app + 自建 iOS CoreCLR + `Hello.dll`（Reflection.Emit 计时探针）+ mach RX 区域扫描。

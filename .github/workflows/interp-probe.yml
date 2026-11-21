@@ -1,0 +1,36 @@
+name: interp-probe
+
+# 解释器路线（微软官方支持形态）：官方 .NET 11 ios 运行时包 + 同一份探针宿主
+# （-DPORT17_INTERP 跳过 JIT26 竞技场），无 StikDebug/JIT 依赖——装完直接打开。
+# 真机要回答的问题只有一个：解释器吞吐（M 迭代/秒）能不能撑起 RimWorld。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'probe/**'
+      - 'scripts/fetch-official-runtime.sh'
+      - '.github/workflows/interp-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  interp-ipa:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 取官方 ios-arm64 运行时包（解释器配置）
+        run: ./scripts/fetch-official-runtime.sh 11.0.0
+
+      - name: 打解释器 IPA
+        run: ./probe/build-ipa-interp.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: port17probe-interp-ipa
+          path: build-interp/port17probe-interp.ipa
+          retention-days: 30

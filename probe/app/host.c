@@ -560,12 +560,19 @@ int run_probe(const char *bundle_dir)
         snprintf(buf, sizeof(buf), "写保护开关符号：%s（竞技场方案下仅作诊断）",
                  wprot != NULL ? "找到" : "未找到（iOS 正常现象）");
         host_log(buf);
+#if defined(PORT17_INTERP)
+        host_log("提示：解释器路线（官方运行时包）——无需 StikDebug/JIT，装完直接打开");
+#else
         host_log("提示：经 StikDebug 拉起本应用（带 JIT）并运行 probe/stikdebug/rw17-jit26.js（应答式脚本）");
         host_log("提示：本进程自己完成 brk 握手 + RW 别名 + 分离 + 探针（最多等调试器 120 秒），通过后把竞技场交给 CoreCLR");
+#endif
         (void)rwx_ok; // 授权探测仅作诊断显示；竞技场获取在宿主侧完成，无需本地 RWX 授权
     }
 
-#if TARGET_OSX || TARGET_OS_SIMULATOR
+#if defined(PORT17_INTERP)
+    // 解释器路线：官方包无 JIT、无可执行内存分配——不需要竞技场握手。
+    host_log("解释器路线：跳过竞技场握手（无 JIT，官方支持配置）");
+#elif TARGET_OSX || TARGET_OS_SIMULATOR
     // macOS/模拟器：宿主不获取竞技场——macOS 走 runtime 的种子扫描/RWX 路径，
     // 模拟器无脚本可应答、快速干净降级。值判断勿用 defined()（TargetConditionals
     // 无条件定义 TARGET_OS_SIMULATOR，真机上为 0——真机首测的教训）。

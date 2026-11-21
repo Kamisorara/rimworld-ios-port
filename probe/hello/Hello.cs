@@ -94,6 +94,9 @@ internal static class Hello
         double result = sum(10_000_000);
         sw.Stop();
         Log($"正式（1000 万次）：结果 {result:F1}，耗时 {sw.ElapsedMilliseconds} ms");
+        // 吞吐折算（跨路线可比）：安卓 JIT 基线 ~200 M 迭代/秒（桌面同数量级）
+        double mIterPerSec = sw.ElapsedMilliseconds > 0 ? 10_000.0 / sw.ElapsedMilliseconds : 0;
+        Log($"折算：{mIterPerSec:F1} M 迭代/秒");
         return (int)Math.Min(sw.ElapsedMilliseconds, int.MaxValue);
     }
 }
