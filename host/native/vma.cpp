@@ -24,8 +24,7 @@ static void vma_log(const char* fmt, ...)
     vsnprintf(text, sizeof text, fmt, ap);
     va_end(ap);
     if (g_vma_log_sink) g_vma_log_sink(text);
-    else fprintf(stderr, "[vma] %s
-", text);
+    else fprintf(stderr, "[vma] %s\n", text);
 }
 #define VK_NO_PROTOTYPES
 #define VMA_IMPLEMENTATION

@@ -51,8 +51,7 @@ static void audio_log(const char* fmt, ...)
     vsnprintf(text, sizeof text, fmt, ap);
     va_end(ap);
     if (g_audio_log_sink) g_audio_log_sink(text);
-    fprintf(stderr, "[audio] %s
-", text);
+    fprintf(stderr, "[audio] %s\n", text);
 }
 
 typedef int (*wa_read_fn)(void* user, float* output, uint64_t frames);
