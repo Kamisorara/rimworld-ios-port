@@ -317,10 +317,11 @@ API void glfwIosSetLogSink(void (*sink)(const char*))
 API void glfwIosAttach(void* metalLayer, void* view, void* keyboardField)
 {
     CAMetalLayer* layer = (CAMetalLayer*)metalLayer;
+    UIView* hostView = (UIView*)view;
     g_layer = layer;
-    g_view = (UIView*)view;
+    g_view = hostView;
     g_keyboardField = (UIView*)keyboardField;
-    UIScreen* screen = view ? view.window.screen : UIScreen.mainScreen;
+    UIScreen* screen = hostView.window.screen ?: UIScreen.mainScreen;
     g_density = screen.nativeScale;
     g_refreshRate = (int)screen.maximumFramesPerSecond;
     CGRect nb = screen.nativeBounds; // pixels, always portrait orientation of the device
@@ -626,7 +627,13 @@ API int glfwAndroidOpenUrl(const char* url)
     dispatch_sync(dispatch_get_main_queue(), ^{
         NSURL* ns = [NSURL URLWithString:s];
         UIApplication* app = UIApplication.sharedApplication;
-        if ([app canOpenURL:ns] && [app openURL:ns options:@{} completionHandler:nil]) ok = 1;
+        // openURL:options:completionHandler: 回 void 且异步——"有没有 app 接"由 canOpenURL 答，
+        // 打开本身在 completion 落定（Android 语义就是"问了没有"，不是"打开了没有"）。
+        if ([app canOpenURL:ns])
+        {
+            [app openURL:ns options:@{} completionHandler:nil];
+            ok = 1;
+        }
     });
     return ok;
 }
