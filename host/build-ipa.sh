@@ -82,9 +82,10 @@ for lib in libglfw.dylib libvulkan.dylib; do
 done
 echo "---- otool -L Port17Host ----"
 otool -L "$APP/Port17Host"
-case "$(otool -L "$APP/Port17Host")" in
-    *runner*) echo "::error::宿主依赖里有构建机绝对路径"; exit 1 ;;
-esac
+# 首行是输入文件自己的完整路径（构建机路径），依赖从第二行起——只查依赖行。
+if otool -L "$APP/Port17Host" | tail -n +2 | grep -q "runner/work"; then
+    echo "::error::宿主依赖里有构建机绝对路径"; exit 1
+fi
 
 # 7) ad-hoc 签名：先内嵌文件与 framework，后 bundle（顺序不能反）
 ENT="$ROOT/host/app/entitlements.plist"
