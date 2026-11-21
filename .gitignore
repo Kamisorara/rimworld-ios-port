@@ -3,6 +3,8 @@ runtime-src/
 runtime-out/
 runtime-out-official/
 build-interp/
+build-m2/
+build-moltenvk/
 artifacts/
 obj/
 bin/

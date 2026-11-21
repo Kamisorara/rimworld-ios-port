@@ -6,11 +6,12 @@
 
 这是 [Port17 安卓移植](../rimworld-android-port) 的姊妹项目：同一个目标（RimWorld 1.7，Waylith 引擎，.NET + Vulkan），换到 iOS 上。
 
-**当前状态：M1（运行时探针）。** 还没有游戏，只有一个最小宿主 app + 自建的 iOS CoreCLR，用来在真机上回答三个问题：
-
-1. 自建带 JIT 的 CoreCLR（`libcoreclr.dylib`）在 iOS 上能否启动并跑托管代码；
-2. 经 StikDebug（调试器 attach）开后，Reflection.Emit + JIT 是否真的以机器码速度执行；
-3. 进程里是否真的出现了匿名可执行内存（mach 区域扫描）。
+**当前状态：M1 已关闭（官方 .NET 11 运行时跑通），M2（宿主层成型）进行中。** M1 的结论：官方
+`Microsoft.NETCore.App.Runtime.ios-arm64 11.0.0` + `COMPlus_InterpMode=2` 配方在真机完整跑通探针，
+吞吐 87.7 M 迭代/秒——零补丁、零 StikDebug，装完即玩。M2 在把探针长成游戏宿主：全屏 CAMetalLayer、
+触摸采集、软键盘桥、GLFW 垫片 iOS 后端（接口契约见
+[docs/ENGINE-NATIVE-CONTRACT.md](docs/ENGINE-NATIVE-CONTRACT.md)）、Vulkan 经官方 MoltenVK 1.4.2，
+先用一个走引擎同款路径的 Vulkan 三角形验证原生渲染栈（`m2-host` 流水线，产物 `port17host-m2.ipa`）。
 
 ## 技术路线（与安卓版的差异）
 
@@ -31,8 +32,11 @@
 
 完全在 GitHub Actions 上（公开仓库的 macOS runner 免费额度内）：
 
-- `runtime` job：按 `runtime-pin.txt` 检出 dotnet/runtime 并编译 iOS arm64 JIT 变体，按 pin 哈希缓存（pin 不变不重建）；
-- `ipa` job：编译探针 app（clang + UIKit）和 `Hello.dll`（Reflection.Emit 计时探针），组 `Port17Probe.app`，ad-hoc 签名，打成 IPA 上传。
+- `interp-probe`：官方 .NET 11 ios 运行时包 + M1 探针（解释器路线的回归基线）；
+- `m2-host`：M2 宿主（UIKit + CAMetalLayer + GLFW 垫片 + libvulkan 前向层 + MoltenVK 1.4.2 按
+  sha256 缓存 + glslang 现编 SPIR-V 三角形 + M1 探针诊断件），产物 `port17host-m2.ipa`；
+- `m1-probe`：自建 CoreCLR（JIT26 分支，封存的实验性全速路线）；
+- `mac-debug`：macOS 上复现宿主层问题。
 
 手动触发或推送到 main 都会出包。产物在 Actions 的 Artifacts 里。
 

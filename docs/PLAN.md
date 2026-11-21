@@ -41,12 +41,24 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 3. StikDebug 以本 app 为目标运行应答脚本 `probe/stikdebug/rw17-jit26.js`——在 app 停在 brk 上的窗口里经 debugserver `_M,rx` 分配 128MiB RX 并逐页扫写祝福（约 1–2 分钟），x0 回传地址，随后应答 `x16=0` 分离请求；**分离完成后脚本窗口可关**（祝福存续），app 在无调试器状态下继续初始化；
 4. 日志期待链：`live debugger confirmed` → `arena granted at …` → `RW alias at …; detaching …` → `probe call #1 -> 42` → `probe call #2 -> 43` → `arena adopted: rx=… rw=…` → `CoreCLR 就绪` → `JIT 生效` → `exit 42`。
 
-### M2 宿主层成型
+### M2 宿主层成型（进行中，2026-11-21 开工）
 - UIKit 宿主（从 M1 探针 app 长出来）：窗口、触摸原始事件、软键盘桥（iOS 版 TextInputView 等价物）；
 - GLFW 垫片的 iOS 后端（沿用安卓版"引擎只用 Vulkan 子集"的写法）；
 - Vulkan 经 MoltenVK；waylithaudio 编 CoreAudio 后端；
 - Slang / ImGui / FreeType / KTX / astcenc 的 iOS 构建。
 **验收**：Waylith 引擎在真机上渲染出最小画面（无游戏程序集）。
+
+**骨架与决策（2026-11-21，接口契约全表见 [ENGINE-NATIVE-CONTRACT.md](ENGINE-NATIVE-CONTRACT.md)）**：
+- **host/ 目录**：`host/app/`（UIKit 宿主 main.m + 三角形 triangle.c + M1 探针诊断件 host.c 副本）、`host/glfw/glfw_ios.m`（libglfw.dylib）、`host/vulkan/vulkan_ios.c`（libvulkan.dylib）、`host/build-ipa.sh` + `host/fetch-moltenvk.sh`；流水线 `.github/workflows/m2-host.yml`（MoltenVK 按 sha256 缓存）。probe/ 原样封存为 M1 档案。
+- **GLFW 后端**：安卓垫片（glfw_android.c，1713 行）的等义移植。`glfwAndroid*` 扩展**保持原名**——PortMobile 按这些名字 P/Invoke "glfw"，M4 共享托管层零改动；宿主接线入口为 `glfwIos*`（attach/viewResized/applicationEvent/touch/key/char/textCommit/editorAction/backspace）。
+- **Vulkan 路线**：官方 MoltenVK **v1.4.2**（2026-07-24，Vulkan 1.4，iOS ≥15.0 与宿主 target 一致）动态 `MoltenVK.framework` 放 .app 根 + 自写 `libvulkan.dylib` 前向层（5 个全局入口直转，`vkGetInstanceProcAddr` 包装留钩子位）。surface 走 `VK_EXT_metal_surface`/`vkCreateMetalSurfaceEXT`（老的 `VK_MVK_ios_surface` 已被 MoltenVK 删除）。
+- **分辨率缩放与安卓不同**：CAMetalLayer 的 `drawableSize` 即渲染尺寸，compositor 自动拉伸到 layer bounds——**不需要**安卓那条"surface capabilities 拦截改 currentExtent"的钩子；MoltenVK 报告的 transform/extent 即 Metal 事实，identity-transform 钩子也无需对应物。
+- **前后台语义**：进后台 = 窗口消失（fbsize 0×0，引擎当最小化停止渲染）+ 失焦释放按键；回前台重新宣布尺寸——对齐安卓 TERM/INIT。
+- **键盘桥**：隐藏 UITextField（自动纠错全关）+ Done 工具条；delegate 把提交文本按 UTF-32 拆成 char 事件、空替换即 backspace、Done/Return 即 editor action（managed 模式 type 5）。硬件键盘走 UIKey（HID usage → GLFW 键码表在 main.m）。
+- **坐标链**：UIKit 点 ×nativeScale=窗口像素 ×(渲染尺寸/窗口尺寸)=引擎像素，与安卓 scaleX/scaleY 同构。
+- **M1 探针进宿主**：同一 app 内按钮触发（CoreCLR 单实例，跑过一次就拒绝），官方运行时包平铺 .app 根不变。
+
+**当前状态**：骨架已推 `m2-host` 流水线出包 `port17host-m2.ipa`——三角形（引擎同款路径：GLFW 垫片→libvulkan→MoltenVK→CAMetalLayer）+ 触摸拖顶点 + 键盘字符上屏 + .NET 探针回归。待真机验收三角形后进 M2 后半：waylithaudio CoreAudio 后端、Slang/ImGui/FreeType/KTX/astcenc 的 iOS 构建、引擎程序集最小画面。
 
 ### M3 游戏程序集上机
 - `patch.dll` 增加 iOS 目标（平台检查改写、Harmony 适配 darwin）；

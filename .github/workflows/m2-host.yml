@@ -1,0 +1,48 @@
+name: m2-host
+
+# M2 宿主层：UIKit 宿主（CAMetalLayer + 触摸 + 软键盘桥）+ GLFW 垫片 iOS 后端 +
+# Vulkan 前向层 → MoltenVK，三角形验证渲染（无 CoreCLR 依赖，原生路径全通）。
+# MoltenVK 按 sha256 缓存（钉死的版本，见 host/fetch-moltenvk.sh）。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'host/**'
+      - 'scripts/fetch-official-runtime.sh'
+      - '.github/workflows/m2-host.yml'
+  workflow_dispatch:
+
+jobs:
+  m2-ipa:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: MoltenVK（按 sha256 缓存）
+        uses: actions/cache@v4
+        with:
+          path: build-moltenvk
+          key: moltenvk-v1.4.2-b5d947b1660e6e9fed40b9cd2387e160aaab9e80b775c0cef7e14059405178c1
+
+      - name: 取 MoltenVK（缓存未命中才下载，校验和钉死）
+        run: ./host/fetch-moltenvk.sh
+
+      - name: 取官方 ios-arm64 运行时包（.NET 探针诊断件用）
+        run: ./scripts/fetch-official-runtime.sh 11.0.0
+
+      - name: glslang（三角形 SPIR-V）
+        run: brew install glslang
+
+      - name: 打 M2 宿主 IPA
+        run: ./host/build-ipa.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: port17host-m2-ipa
+          path: build-m2/port17host-m2.ipa
+          retention-days: 30
