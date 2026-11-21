@@ -285,8 +285,9 @@ static bool pick_device_and_queue(void)
     info.queueCreateInfoCount = 1;
     info.pQueueCreateInfos = &queueInfo;
     CHECK(vkCreateDevice(g_physical, &info, NULL, &g_device), "vkCreateDevice");
-    // gipa 的第一参类型是 VkInstance，设备级函数照 Vulkan 的实际用法传设备句柄进去（转型免警）。
-    PFN_vkGetDeviceQueue getQueue = (PFN_vkGetDeviceQueue)gipa((VkInstance)(void *)g_device, "vkGetDeviceQueue");
+    // gipa 的第一参永远是实例句柄（MoltenVK 把它解引用成 MVKInstance*——上一版在这里塞了
+    // VkDevice，设备对象按实例布局乱读，真机闪退；设备级函数也一样从实例取，指针本身通用）。
+    PFN_vkGetDeviceQueue getQueue = (PFN_vkGetDeviceQueue)gipa(g_instance, "vkGetDeviceQueue");
     getQueue(g_device, g_family, 0, &g_queue);
     return true;
 }
