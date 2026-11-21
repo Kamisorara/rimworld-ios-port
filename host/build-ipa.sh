@@ -134,12 +134,12 @@ xcrun -sdk "$SDK" clang++ \
 #      产物由 host/fetch-slang.sh + host/build-slang.sh 备好（两段式：宿主 generators → iOS arm64）。
 SLANG="$ROOT/build-slang/out"
 [ -f "$ROOT/build-slang/.built-v1" ] || { echo "::error::Slang 未就位（host/fetch-slang.sh + host/build-slang.sh）"; exit 1; }
-for f in libslang-compiler.dylib libslang-glslang-2026.19.dylib libslang-glsl-module-2026.19.dylib; do
+for f in libslang-compiler.dylib libslang-glslang-2026.19.so libslang-glsl-module-2026.19.so; do
     [ -f "$SLANG/$f" ] || { echo "::error::build-slang/out 缺 $f"; exit 1; }
     cp "$SLANG/$f" "$APP/"
 done
 # Slang 的 cmake 给的 install_name 可能是构建机绝对路径：统一钉成 @rpath（代理链接与设备装载都靠它）。
-for f in libslang-compiler.dylib libslang-glslang-2026.19.dylib libslang-glsl-module-2026.19.dylib; do
+for f in libslang-compiler.dylib libslang-glslang-2026.19.so libslang-glsl-module-2026.19.so; do
     install_name_tool -id "@rpath/$f" "$APP/$f"
 done
 # 代理（host/native/slang_proxy.c，自身无代码）：把 libslang-compiler.dylib 挂进依赖——dlsym 顺着依赖搜索，
@@ -188,11 +188,10 @@ fixup_dylib() {  # <dylib 路径>
         fi
     done
 }
-for lib in "$APP"/*.dylib; do
+for lib in "$APP"/*.dylib "$APP"/libslang-glslang-*.so "$APP"/libslang-glsl-module-*.so; do
     fixup_dylib "$lib"
 done
-for lib in libglfw.dylib libvulkan.dylib libslang.dylib \
-           libslang-compiler.dylib libslang-glslang-2026.19.dylib libslang-glsl-module-2026.19.dylib; do
+for lib in libglfw.dylib libvulkan.dylib libslang.dylib libslang-compiler.dylib; do
     NAME="$(otool -D "$APP/$lib" | tail -1)"
     echo "otool -D $lib: ${NAME}"
     case "$NAME" in
@@ -209,7 +208,7 @@ fi
 
 # 7) ad-hoc 签名：先内嵌文件与 framework，后 bundle（顺序不能反）
 ENT="$ROOT/host/app/entitlements.plist"
-for f in "$APP"/*.dylib "$APP/MoltenVK.framework/MoltenVK" "$APP/Port17Host"; do
+for f in "$APP"/*.dylib "$APP"/libslang-glslang-*.so "$APP"/libslang-glsl-module-*.so "$APP/MoltenVK.framework/MoltenVK" "$APP/Port17Host"; do
     codesign --force --sign - --timestamp=none --entitlements "$ENT" "$f"
 done
 codesign --force --sign - --timestamp=none --entitlements "$ENT" "$APP/MoltenVK.framework"

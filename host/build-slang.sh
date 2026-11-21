@@ -63,14 +63,17 @@ cmake -S "$SRC" -B "$BUILD" -G Ninja \
 cmake --build "$BUILD" --target slang slang-glslang slang-glsl-module
 
 # ---- 收集产物 ----
+# 本体带版本尾巴（libslang-compiler.0.2026.19.dylib），收成净名；伴生模块在 Apple 上也叫
+# .so（Slang 的模块命名，运行时按这个名字装载，保持原样）。
 mkdir -p "$OUT/out"
-found=0
-for f in libslang-compiler.dylib libslang-glslang-2026.19.dylib libslang-glsl-module-2026.19.dylib; do
+COMPILER="$(find "$BUILD" -name 'libslang-compiler*.dylib' ! -name '*without*' | head -1)"
+[ -n "$COMPILER" ] || { echo "::error::libslang-compiler 没编出来"; exit 1; }
+cp "$COMPILER" "$OUT/out/libslang-compiler.dylib"
+for f in libslang-glslang-2026.19.so libslang-glsl-module-2026.19.so; do
     P="$(find "$BUILD" -name "$f" | head -1)"
-    [ -n "$P" ] || { echo "::error::$f 没编出来（目标名变了？）"; exit 1; }
+    [ -n "$P" ] || { echo "::error::$f 没编出来"; exit 1; }
     cp "$P" "$OUT/out/$f"
-    found=$((found + 1))
 done
-echo "slang: $found 件就位"; ls -la "$OUT/out"
+echo "slang: 三件就位"; ls -la "$OUT/out"
 
 echo "ios-arm64-2026.19" > "$BUILT"

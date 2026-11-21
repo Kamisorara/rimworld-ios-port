@@ -27,9 +27,10 @@ int libs_check(void)
         { "libportastc.dylib", "port_astc_encode" },
         { "libslang.dylib", "slang_createGlobalSession" },
         { "libslang-compiler.dylib", "slang_createGlobalSession" },
-        // Slang 的两个伴生库是它自己 dlopen 的（内部 C++ 符号，无稳定入口）：装载成功即算过。
-        { "libslang-glslang-2026.19.dylib", NULL },
-        { "libslang-glsl-module-2026.19.dylib", NULL },
+        // Slang 的两个伴生模块是它自己 dlopen 的（内部 C++ 符号，无稳定入口）；Apple 构建上
+        // 也叫 .so（Slang 的模块命名，运行时按名装载）：装载成功即算过。
+        { "libslang-glslang-2026.19.so", NULL },
+        { "libslang-glsl-module-2026.19.so", NULL },
     };
     char path[1024];
     uint32_t n = sizeof path - 1;
