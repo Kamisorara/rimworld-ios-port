@@ -161,7 +161,10 @@ cp -R "$IMGUI" "$IMGUI_BUILD"
 for p in "$ROOT/host/native/rect-generation.patch" "$ROOT/host/native/thread-lock.patch"; do
     patch -s -p1 -d "$IMGUI_BUILD" < "$p"
 done
-IMGUI_DEFS="-DIMGUI_DISABLE_OBSOLETE_FUNCTIONS -DIMGUI_USE_WCHAR32 -DNDEBUG"
+# -mms-bitfields 不是 x86 专用：它强制 MSVC 的位域布局规则，托管侧（按 PC 的 imgui.dll 布局编译的
+# Brutal.ImGui）的结构体尺寸才能对上——iOS 默认的 Itanium 规则下 ImGuiContext/ImGuiStackLevelInfo
+# 等位域结构差 8 字节（CI 实测 + 桩头本地双跑对照坐实；安卓版一直带着这面旗，删它是我上一轮的错判）。
+IMGUI_DEFS="-DIMGUI_DISABLE_OBSOLETE_FUNCTIONS -DIMGUI_USE_WCHAR32 -DNDEBUG -mms-bitfields"
 # imgui_draw.cpp 的字体装载换成 port_fonts.cpp 的映射版（ImFileLoadToMemory → PortFontFileLoad）
 xcrun -sdk "$SDK" clang++ -target "$TARGET" -std=c++17 -O2 -fPIC $IMGUI_DEFS \
     -DImFileLoadToMemory=PortFontFileLoad -I "$IMGUI_BUILD" \
