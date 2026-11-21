@@ -152,7 +152,15 @@ glfwWaitEvents 用条件变量阻塞。
   @executable_path rpath 已由宿主链接参数覆盖）与 `MoltenVK/MoltenVK/include`（完整 Vulkan 头，
   编译垫片/前向层/三角形共用）
 - MoltenVK 环境变量（`MVK_CONFIG_*`）可在宿主 setenv 调优（如 `MVK_CONFIG_RESUME_LOST_DEVICE`），
-  留作 M2 真机调试旋钮
+  留作 M2 真机调试旋钮。**已定死的一条**（宿主 main() 里设，必须在 MoltenVK 装载前）：
+  `MVK_CONFIG_RESIDENCY_SETS=0` + `MVK_CONFIG_USE_MTLRESIDENCYSETS=0`——同为 MoltenVK 上架游戏
+  MHGURecomp-iOS 的实战教训（Apple Silicon / iOS 18+ 上 Metal residency sets 不稳，关掉保稳，只损失
+  一点性能优化路径）
+- 参考：MHGURecomp-iOS（`D:\Data\Code\reverse\MHGURecomp-iOS`，静态重编译的 Switch 游戏上架 iOS，
+  SDL3 + MoltenVK 1.3.0 静态库 + Vulkan 1.2）。引擎阶段可再借的写法在 `runtime/nvn/vulkan/device.c`：
+  compositeAlpha 的 OPAQUE→INHERIT→PRE_MULTIPLIED 回退、swapchain 重建（OUT_OF_DATE/SUBOPTIMAL 都
+  触发）、退出纪律（atexit → vkDeviceWaitIdle → _exit(0)，不跑后续 teardown——与 glfwAndroidPrepareExit
+  同一哲学）、Vulkan 1.2 的 timeline semaphore 帧同步
 
 ## 4. 音频（waylithaudio → iOS）
 

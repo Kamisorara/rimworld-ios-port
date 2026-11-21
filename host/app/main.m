@@ -626,6 +626,11 @@ int main(int argc, char *argv[])
         setenv("HELLO_OUT", [[NSHomeDirectory()
             stringByAppendingPathComponent:@"Documents/hello.log"]
             fileSystemRepresentation], 1);
+        // MoltenVK 稳定性旋钮（MHGURecomp-iOS 的实战教训，M2/iOS18 起 residency sets 不稳）：
+        // 必须在 MoltenVK 装载前设置——它读环境变量的时机是实例创建。用户设备 M4/iOS27 属于
+        // 同一风险面，关掉只影响性能优化路径，不影响功能。
+        setenv("MVK_CONFIG_RESIDENCY_SETS", "0", 0);
+        setenv("MVK_CONFIG_USE_MTLRESIDENCYSETS", "0", 0);
         boot_log(@"UIApplicationMain 开始");
         int rc = UIApplicationMain(argc, argv, nil,
                                    NSStringFromClass([AppDelegate class]));
