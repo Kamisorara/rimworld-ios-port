@@ -1208,6 +1208,21 @@ API VkResult glfwCreateWindowSurface(VkInstance instance, GLFWwindow* w, const V
     info.sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
     info.pLayer = layer;
     VkResult result = create(instance, &info, allocator, surface);
+    if (result == VK_ERROR_NATIVE_WINDOW_IN_USE_KHR && g_lastSurface != VK_NULL_HANDLE && g_vulkan)
+    {
+        // The engine's previous surface still holds this same layer (it destroys the old one only after
+        // making the new): the forwarder's release entry (the Android interposer's contract) frees it now,
+        // and the engine's later destroy of it is a no-op MoltenVK tolerates.
+        void (*release)(VkInstance, VkSurfaceKHR, const VkAllocationCallbacks*) =
+            (void (*)(VkInstance, VkSurfaceKHR, const VkAllocationCallbacks*))dlsym(g_vulkan, "port17_vulkan_release_surface");
+        if (release)
+        {
+            log_line("layer still held by surface %p; releasing that one and trying again", (void*)g_lastSurface);
+            release(instance, g_lastSurface, allocator);
+            g_lastSurface = VK_NULL_HANDLE;
+            result = create(instance, &info, allocator, surface);
+        }
+    }
     if (result != VK_SUCCESS)
     {
         char text[128];

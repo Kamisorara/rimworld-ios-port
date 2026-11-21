@@ -118,6 +118,8 @@ static PFN_vkCmdSetViewport vkCmdSetViewport;
 static PFN_vkCmdSetScissor vkCmdSetScissor;
 static PFN_vkCmdBindVertexBuffers vkCmdBindVertexBuffers;
 static PFN_vkCmdDraw vkCmdDraw;
+static PFN_vkGetBufferMemoryRequirements vkGetBufferMemoryRequirements;
+static PFN_vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceMemoryProperties;
 
 // ---- state the input callbacks touch (the poll thread == this render thread) ----
 static float g_dragX = 0.0f, g_dragY = -0.6f; // the dragged vertex's position (clip space)
