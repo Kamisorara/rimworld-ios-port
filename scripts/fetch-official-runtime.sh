@@ -10,7 +10,7 @@ PKG="microsoft.netcore.app.runtime.ios-arm64"
 OUT="$ROOT/runtime-out-official"
 
 rm -rf "$OUT"
-mkdir -p "$OUT"
+mkdir -p "$OUT" "$ROOT/build"
 
 SRC=""
 for base in "https://api.nuget.org/v3-flatcontainer" "https://nuget.azure.cn/v3-flatcontainer"; do
