@@ -1,0 +1,57 @@
+--- a/imgui_draw.cpp	2026-10-28 07:09:58.280890200 +0800
++++ b/imgui_draw.cpp	2026-10-28 07:09:58.341362400 +0800
+@@ -2564,6 +2564,14 @@
+ // - ImFontAtlasPackDiscardRect()
+ // - ImFontAtlasPackAddRect()
+ // - ImFontAtlasPackGetRect()
++// port17: the engine measures text on any thread (RimWorldWaylith.Imgui.TextLayout calls GetFontBaked().FindGlyph() for a
++// glyph it has not seen), and a glyph not loaded yet is loaded there: the atlas packed and grown, the size made, the glyph
++// rendered by FreeType into the face's one glyph slot. Two threads doing that at once clear each other's slot (a tester's
++// vivo, 2026-10-27: SIGSEGV in ImGui_ImplFreeType_FontBakedLoadGlyph reading a bitmap whose buffer was NULL). The
++// functions that change the atlas or load through the font loader take this lock; glyphs already there are found without.
++#include <mutex>
++static std::recursive_mutex& ImFontAtlasPortLock() { static std::recursive_mutex lock; return lock; }
++
+ //-----------------------------------------------------------------------------
+ // - ImFontBaked_BuildGrowIndex()
+ // - ImFontBaked_BuildLoadGlyph()
+@@ -2737,6 +2745,7 @@
+ // - 'frame_count' may not match those of all imgui contexts using this atlas, as contexts may be updated as different frequencies. But generally you can use ImGui::GetFrameCount() on one of your context.
+ void ImFontAtlasUpdateNewFrame(ImFontAtlas* atlas, int frame_count, bool renderer_has_textures)
+ {
++    std::lock_guard<std::recursive_mutex> port_lock(ImFontAtlasPortLock());
+     IM_ASSERT(atlas->Builder == NULL || atlas->Builder->FrameCount < frame_count); // Protection against being called twice.
+     atlas->RendererHasTextures = renderer_has_textures;
+ 
+@@ -3772,6 +3781,7 @@
+ 
+ ImFontBaked* ImFontAtlasBakedAdd(ImFontAtlas* atlas, ImFont* font, float font_size, float font_rasterizer_density, ImGuiID baked_id)
+ {
++    std::lock_guard<std::recursive_mutex> port_lock(ImFontAtlasPortLock());
+     IMGUI_DEBUG_LOG_FONT("[font] Created baked %.2fpx\n", font_size);
+     ImFontBaked* baked = atlas->Builder->BakedPool.push_back(ImFontBaked());
+     baked->Size = font_size;
+@@ -3832,6 +3842,7 @@
+ 
+ void ImFontAtlasBakedDiscard(ImFontAtlas* atlas, ImFont* font, ImFontBaked* baked)
+ {
++    std::lock_guard<std::recursive_mutex> port_lock(ImFontAtlasPortLock());
+     ImFontAtlasBuilder* builder = atlas->Builder;
+     IMGUI_DEBUG_LOG_FONT("[font] Discard baked %.2f for \"%s\"\n", baked->Size, font->GetDebugName());
+ 
+@@ -3877,6 +3888,7 @@
+ // use unused_frames==0 to discard everything.
+ void ImFontAtlasBuildDiscardBakes(ImFontAtlas* atlas, int unused_frames)
+ {
++    std::lock_guard<std::recursive_mutex> port_lock(ImFontAtlasPortLock());
+     ImFontAtlasBuilder* builder = atlas->Builder;
+     for (int baked_n = 0; baked_n < builder->BakedPool.Size; baked_n++)
+     {
+@@ -4418,6 +4430,7 @@
+ 
+ static ImFontGlyph* ImFontBaked_BuildLoadGlyph(ImFontBaked* baked, ImWchar codepoint, float* only_load_advance_x)
+ {
++    std::lock_guard<std::recursive_mutex> port_lock(ImFontAtlasPortLock());
+     ImFont* font = baked->ContainerFont;
+     ImFontAtlas* atlas = font->ContainerAtlas;
+     if (atlas->Locked || (font->Flags & ImFontFlags_NoLoadGlyphs))

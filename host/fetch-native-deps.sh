@@ -7,6 +7,9 @@
 #   gli-master/ + glm-1.0.1/         gli @3542f883 + glm 1.0.1（libgli 用，header-only）
 #   astc-encoder-5.7.0/              ARM astcenc 5.7.0（libportastc 用）
 #   KTX-Software-4.4.0/              Khronos libktx 4.4.0 读+转码子集（libKtx 用）
+#   imgui-1.92.2-docking/            Dear ImGui 1.92.2 docking（libimgui 用；平铺 C 面在仓内
+#                                    host/native/imgui_c.cpp，从玩家 PC 副本生成，不在此拉）
+#   freetype-VER-2-13-3/             FreeType 2.13.3（libimgui_freetype 用）
 # 已就位则跳过（.fetched 标记），配合 CI 的 actions/cache；依赖集合变化时升标记版本。
 set -euo pipefail
 
@@ -74,6 +77,18 @@ fetch_zip "$GH/g-truc/gli/archive/3542f8830178061e0661f5df1e89d36ba7d7b0ab.zip" 
 fetch_zip "$GH/g-truc/glm/archive/refs/tags/1.0.1.zip" \
           09c5716296787e1f7fcb87b1cbdbf26814ec1288ed6259ccd30d5d9795809fa5 \
           glm-1.0.1
+fetch_zip "$GH/ocornut/imgui/archive/refs/tags/v1.92.2-docking.zip" \
+          dbd869305d7cd40cc7fbc285f201ec921950a5e296bf4e8abf54d5b28b638254 \
+          imgui-1.92.2-docking
+
+echo "native-deps: 取 freetype 2.13.3"
+curl -fsSL --retry 3 -o "$OUT/freetype.tar.gz" \
+    "$GH/freetype/freetype/archive/refs/tags/VER-2-13-3.tar.gz"
+GOT="$(sha256sum < "$OUT/freetype.tar.gz" | cut -d' ' -f1)"
+[ "$GOT" = "bc5c898e4756d373e0d991bab053036c5eb2aa7c0d5c67e8662ddc6da40c4103" ] || {
+    echo "::error::freetype 2.13.3 SHA-256 $GOT"; exit 1; }
+tar -xzf "$OUT/freetype.tar.gz" -C "$OUT"
+rm "$OUT/freetype.tar.gz"
 
 echo "native-deps: 取 astc-encoder 5.7.0"
 curl -fsSL --retry 3 -o "$OUT/astc.tar.gz" \
@@ -93,5 +108,5 @@ GOT="$(sha256sum < "$OUT/ktx.tar.gz" | cut -d' ' -f1)"
 tar -xzf "$OUT/ktx.tar.gz" -C "$OUT"
 rm "$OUT/ktx.tar.gz"
 
-echo "native-deps-v2" > "$MARK"
+echo "native-deps-v3" > "$MARK"
 ls "$OUT"

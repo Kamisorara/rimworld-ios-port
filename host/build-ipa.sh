@@ -152,6 +152,47 @@ xcrun -sdk "$SDK" clang \
     -o "$APP/libslang.dylib" \
     "$ROOT/host/native/slang_proxy.c"
 
+# 4.9) ImGui（Dear ImGui 1.92.2 docking + 平铺 C 面 imgui_c.cpp）与其 FreeType 加载器。
+#      安卓版的两个补丁（上游 1.92.3 的字体图矩槽复用修复、FreeType 字形加载的线程锁）打在副本上。
+IMGUI="$NDEPS/imgui-1.92.2-docking"
+IMGUI_BUILD="$ROOT/build-m2/imgui-src"
+rm -rf "$IMGUI_BUILD"
+cp -R "$IMGUI" "$IMGUI_BUILD"
+for p in "$ROOT/host/native/rect-generation.patch" "$ROOT/host/native/thread-lock.patch"; do
+    patch -s -p1 -d "$IMGUI_BUILD" < "$p"
+done
+IMGUI_DEFS="-DIMGUI_DISABLE_OBSOLETE_FUNCTIONS -DIMGUI_USE_WCHAR32 -DNDEBUG"
+# imgui_draw.cpp 的字体装载换成 port_fonts.cpp 的映射版（ImFileLoadToMemory → PortFontFileLoad）
+xcrun -sdk "$SDK" clang++ -target "$TARGET" -std=c++17 -O2 -fPIC $IMGUI_DEFS \
+    -DImFileLoadToMemory=PortFontFileLoad -I "$IMGUI_BUILD" \
+    -c -o "$ROOT/build-m2/imgui_draw.o" "$IMGUI_BUILD/imgui_draw.cpp"
+xcrun -sdk "$SDK" clang++ -target "$TARGET" -std=c++17 -O2 -shared -fvisibility=default \
+    -Wl,-install_name,@rpath/libimgui.dylib \
+    $IMGUI_DEFS -I "$IMGUI_BUILD" \
+    -o "$APP/libimgui.dylib" \
+    "$IMGUI_BUILD/imgui.cpp" "$ROOT/build-m2/imgui_draw.o" \
+    "$IMGUI_BUILD/imgui_tables.cpp" "$IMGUI_BUILD/imgui_widgets.cpp" "$IMGUI_BUILD/imgui_demo.cpp" \
+    "$ROOT/host/native/port_fonts.cpp" "$ROOT/host/native/imgui_c.cpp"
+
+# FreeType 2.13.3 静态库 + imgui_freetype（引擎的 FreeType 字形加载器）
+FT="$NDEPS/freetype-VER-2-13-3"
+FTOBJ="$ROOT/build-m2/freetype"
+rm -rf "$FTOBJ"
+mkdir -p "$FTOBJ"
+FT_SOURCES="src/base/ftsystem.c src/base/ftinit.c src/base/ftdebug.c src/base/ftbase.c src/base/ftbbox.c src/base/ftglyph.c src/base/ftbdf.c src/base/ftbitmap.c src/base/ftcid.c src/base/ftfstype.c src/base/ftgasp.c src/base/ftgxval.c src/base/ftmm.c src/base/ftotval.c src/base/ftpatent.c src/base/ftpfr.c src/base/ftstroke.c src/base/ftsynth.c src/base/fttype1.c src/base/ftwinfnt.c src/truetype/truetype.c src/cff/cff.c src/sfnt/sfnt.c src/psaux/psaux.c src/psnames/psnames.c src/pshinter/pshinter.c src/autofit/autofit.c src/smooth/smooth.c src/raster/raster.c src/sdf/sdf.c src/type1/type1.c src/cid/type1cid.c src/type42/type42.c src/pfr/pfr.c src/winfonts/winfnt.c src/pcf/pcf.c src/bdf/bdf.c src/gzip/ftgzip.c src/lzw/ftlzw.c src/svg/svg.c"
+for f in $FT_SOURCES; do
+    xcrun -sdk "$SDK" clang -target "$TARGET" -O2 -fPIC -DFT2_BUILD_LIBRARY \
+        -I "$FT/include" -w -c "$FT/$f" -o "$FTOBJ/$(basename "$f" .c).o"
+done
+xcrun -sdk "$SDK" ar rcs "$FTOBJ/libfreetype.a" "$FTOBJ"/*.o
+xcrun -sdk "$SDK" clang++ -target "$TARGET" -std=c++17 -O2 -shared -fvisibility=default \
+    -Wl,-install_name,@rpath/libimgui_freetype.dylib \
+    $IMGUI_DEFS \
+    -I "$IMGUI_BUILD" -I "$FT/include" \
+    -o "$APP/libimgui_freetype.dylib" \
+    "$IMGUI_BUILD/misc/freetype/imgui_freetype.cpp" "$ROOT/host/native/imgui_freetype_c.cpp" \
+    "$FTOBJ/libfreetype.a" -L "$APP" -limgui
+
 # 5) 宿主可执行（M2 骨架 + 三角形 + 音频/原生库自检 + .NET 探针诊断件）
 xcrun -sdk "$SDK" clang \
     -target "$TARGET" \

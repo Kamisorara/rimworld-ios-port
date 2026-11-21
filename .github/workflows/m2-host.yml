@@ -32,11 +32,11 @@ jobs:
       - name: 取 MoltenVK（缓存未命中才下载，校验和钉死）
         run: ./host/fetch-moltenvk.sh
 
-      - name: 原生库源码（miniaudio/stb/VMA/gli/glm/astcenc/KTX，安卓仓库同钉版本）
+      - name: 原生库源码（miniaudio/stb/VMA/gli/glm/astcenc/KTX/imgui/freetype，安卓仓库同钉版本）
         uses: actions/cache@v4
         with:
           path: build-native-deps
-          key: native-deps-v2
+          key: native-deps-v3
 
       - name: 取原生库源码（缓存未命中才下载）
         run: ./host/fetch-native-deps.sh
