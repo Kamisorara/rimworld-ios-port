@@ -16,7 +16,15 @@
 ### M0 决策与验证（已完成）
 runtime 基线选型、CI 方案、分发路线（本文档）。
 
-### M1 运行时探针（进行中，本仓库当前状态）
+### M1 运行时探针（✅ 已关闭，2026-11-21）
+
+**结论：官方包路线成立。** `Microsoft.NETCore.App.Runtime.ios-arm64 11.0.0`（GA，混合构建）+ `COMPlus_InterpMode=2` 配方：真机完整跑通探针（`CoreCLR 就绪` → Reflection.Emit → `exit 42`），吞吐 **87.7 M 迭代/秒**（安卓 JIT 基线 ~200 的 44%，远超 20 的可玩阈值）。零补丁、零 StikDebug、零脚本，装完即玩。
+
+机理备注：InterpMode=2 的关键作用是禁 R2R（绕开混合构建初始化里的 SIGABRT 死点，`eeconfig.cpp`：`InterpMode>=2 → fReadyToRun=false`）；测试设备（iOS 27，SideStore 签名自带 RWX 授权）上 JIT 实际工作（机器码速度，探针判定"JIT 生效"）。无授权普通设备走纯解释器——该路径速度未测（待补）。JIT26 竞技场分支（m1-probe.yml + dualjit-arena.patch + rw17-jit26.js）封存为实验性全速分支，未验收。
+
+已知小债：①"重新运行"按钮在进程内二次 coreclr_initialize → 0x80131022（CoreCLR 单实例），需改为提示重启 app 或 shutdown 后重建；②屏幕文案滞后（写 InterpMode=1 实为 2；初始化提示仍提 JIT26 握手）；③无授权设备的解释器吞吐数字待补。
+
+### M1 存档：路线决策记录
 
 **路线决策（2026-11-21）**：解释器路线升为主线，JIT26 竞技场降为可选全速分支。
 - **解释器主线**（`interp-probe.yml`）：官方 `Microsoft.NETCore.App.Runtime.ios-arm64 11.0.0`（.NET 11 GA，微软支持形态：Apple mobile = 无 JIT 解释器配置）——零补丁、零 StikDebug、零脚本，装完即玩。真机要回答的唯一问题：解释器吞吐（Hello 探针的 M 迭代/秒）能否撑起 RimWorld。安卓 JIT 基线 ~200 M 迭代/秒（桌面同量级），解释器预期慢 3–15 倍。
