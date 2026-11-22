@@ -20,6 +20,11 @@
 //        PrepatcherCompat.Install 装载字段注入层时静态构造就 TypeLoadException（m2-engine-13）。
 //        引用整体改道到 bundle 里的 PortHooks.dll 替身（行为=电脑上关掉这些功能；安卓
 //        patch/Patch.cs 的同款手术，全游戏+92 mod 实测姿势）。
+//     6. 强制保守档：GpuProbe::Run 整体 → throw，游戏 catch 后自落 GpuPerformanceProfile
+//        .Conservative——贴图管线走"预生成缓存"快路径（slang 可装载时探针会成功，游戏改选
+//        "按需上传+运行时 Kaiser mip 链"，SIMD 重度滤镜在解释器上慢到每贴图数分钟、三条
+//        线程一起磨冻结帧循环——m2-engine-18 看门狗栈转储定的案）。slang 本体保持可装载
+//        （世界视图的着色器变体没有预编译，运行时编译离不开它——十四跑 Magenta 之死）。
 //   成功写 port17-setup.stamp（宿主认它决定进引擎还是先跑 setup）。
 using System;
 using System.Collections.Generic;
@@ -65,6 +70,7 @@ namespace Port17Setup
                 VoidifyLifetimeHooks(game, ref changed, ref kept); // 2.5：含 3 的删行（Hook/Dispose 已整哑）
                 RedirectProcessPath(game, ref changed, ref kept);
                 RetargetWaylithClr(game, ref changed, ref kept);
+                ForceConservativeTier(game, ref changed, ref kept);
                 MarkArm64(game);
             }
             catch (Exception e)
@@ -72,8 +78,8 @@ namespace Port17Setup
                 Say("[setup] failed: " + e);
                 return 3;
             }
-            File.WriteAllLines(Path.Combine(game, "port17-setup.v5.stamp"),
-                new[] { "Port17Setup v5", "changed=" + changed, "kept=" + kept });
+            File.WriteAllLines(Path.Combine(game, "port17-setup.v6.stamp"),
+                new[] { "Port17Setup v6", "changed=" + changed, "kept=" + kept });
             Say($"[setup] done: {changed} rewritten, {kept} already");
             return 0;
         }
@@ -485,7 +491,56 @@ namespace Port17Setup
             return false;
         }
 
-        // ---- 6. 机器类型 AMD64 → ARM64（原地 2 字节，幂等） ----
+        // ---- 6. 强制保守档（贴图管线走快路径） ----
+
+        // m2-engine-18 看门狗栈转储定的案：slang 可装载 → GpuProbe 成功 → 游戏选"按需上传
+        // + 运行时 Kaiser mip 链"贴图管线 → KaiserMipFilter（Vector128 SIMD 重度）在解释器
+        // 上慢到每贴图数分钟（主线程+渲染线程三条一起磨，帧循环冻结 >60s——十五/十六跑的
+        // "卡 Initializing 死锁"假象）。而 GpuProbe 失败时游戏 catch (Exception) 自落
+        // GpuPerformanceProfile.Conservative——贴图走"预生成缓存"快路径（十四跑实证：
+        // 首跑 13 分钟建缓存、命中后 3 秒）。slang 本身无辜且世界视图的着色器变体编译
+        // 离不开它（十四跑 Magenta.vert 之死）——所以解法是两头全要：slang 保持可装载，
+        // 这里把 GpuProbe::Run 整体换成 throw，游戏自己落保守档。
+        private static void ForceConservativeTier(string game, ref int changed, ref int kept)
+        {
+            const string dll = "Waylith.dll", type = "Waylith.Hardware.GpuProbe", method = "Run";
+            var asm = Open(game, dll);
+            if (asm == null)
+            {
+                Say($"[setup] {dll}: not present, skipped");
+                return;
+            }
+            using (asm)
+            {
+                var t = FindType(asm, type) ?? throw new InvalidOperationException($"{dll}: {type} 不在");
+                var runs = t.Methods.Where(x => x.Name == method && x.HasBody).ToList();
+                if (runs.Count != 1)
+                    throw new InvalidOperationException($"{dll}: {type}::{method} 有 {runs.Count} 个带体重载（期望 1）——版本变了，不动");
+                var m = runs[0];
+                bool thrown = m.Body.Instructions.Count == 3 &&
+                    m.Body.Instructions[0].OpCode == OpCodes.Ldstr &&
+                    m.Body.Instructions[1].OpCode == OpCodes.Newobj &&
+                    m.Body.Instructions[2].OpCode == OpCodes.Throw;
+                if (thrown)
+                {
+                    Say($"[setup] {dll}: GpuProbe::Run 已是强制抛出（跳过）");
+                    kept++;
+                    return;
+                }
+                m.Body = new MethodBody(m) { InitLocals = false, MaxStackSize = 1 };
+                var il = m.Body.GetILProcessor();
+                il.Emit(OpCodes.Ldstr, "port17: GpuProbe disabled (interpreter texture grind guard - forcing conservative tier)");
+                var ctor = asm.MainModule.ImportReference(
+                    typeof(NotSupportedException).GetConstructor(new[] { typeof(string) }));
+                il.Emit(OpCodes.Newobj, ctor);
+                il.Emit(OpCodes.Throw);
+                Save(game, dll, asm);
+                Say($"[setup] {dll}: GpuProbe::Run → throw（游戏自落保守档：贴图走预生成缓存快路径，slang 留给世界视图着色器）");
+                changed++;
+            }
+        }
+
+        // ---- 7. 机器类型 AMD64 → ARM64（原地 2 字节，幂等） ----
 
         private static void MarkArm64(string game)
         {

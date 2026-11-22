@@ -388,7 +388,7 @@ int run_engine(const char *bundle_dir, const char *home)
     // 多半是文件后来被替换过。
     {
         char stamp[1100], legacyA[1100], legacyB[1100];
-        snprintf(stamp, sizeof stamp, "%s/port17-setup.v5.stamp", game);
+        snprintf(stamp, sizeof stamp, "%s/port17-setup.v6.stamp", game);
         snprintf(legacyA, sizeof legacyA, "%s/os-detect.port17", game);
         snprintf(legacyB, sizeof legacyB, "%s/platform.port17", game);
         if (!file_exists(stamp) && !(file_exists(legacyA) && file_exists(legacyB)))
