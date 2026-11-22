@@ -4,6 +4,47 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<!-- 与可工作的参照包（DR3 Mobile，同设备同 SideStore 能在文件 app 出文件夹）的
+	     结构对齐：下面这组是 Xcode 正常出包自带、手工 bundle 容易缺的"正规军零件"。 -->
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>iPhoneOS</string>
+	</array>
+	<key>CFBundleIcons</key>
+	<dict>
+		<key>CFBundleIconFiles</key>
+		<array>
+			<string>AppIcon60x60@2x</string>
+		</array>
+	</dict>
+	<key>CFBundleIcons~ipad</key>
+	<dict>
+		<key>CFBundleIconFiles</key>
+		<array>
+			<string>AppIcon76x76@2x~ipad</string>
+			<string>AppIcon83.5x83.5@2x~ipad</string>
+		</array>
+	</dict>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>DTPlatformName</key>
+	<string>iphoneos</string>
+	<key>DTPlatformVersion</key>
+	<string>26.5</string>
+	<key>DTSDKName</key>
+	<string>iphoneos26.5</string>
+	<key>DTXcode</key>
+	<string>2660</string>
+	<key>DTXcodeBuild</key>
+	<string>17F113</string>
+	<key>DTCompiler</key>
+	<string>com.apple.compilers.llvm.clang.1_0</string>
+	<key>DTPlatformBuild</key>
+	<string>23F81a</string>
+	<key>DTSDKBuild</key>
+	<string>23F81a</string>
 	<key>CFBundleDisplayName</key>
 	<string>Port17</string>
 	<key>CFBundleExecutable</key>
@@ -17,7 +58,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.2</string>
+	<string>0.2.3</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
