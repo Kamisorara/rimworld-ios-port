@@ -180,9 +180,13 @@ xcrun -sdk "$SDK" clang++ -target "$TARGET" -std=c++17 -O2 -shared -fvisibility=
     "$IMGUI_BUILD/imgui.cpp" "$ROOT/build-m2/imgui_draw.o" \
     "$IMGUI_BUILD/imgui_tables.cpp" "$IMGUI_BUILD/imgui_widgets.cpp" "$IMGUI_BUILD/imgui_demo.cpp" \
     "$ROOT/host/native/port_fonts.cpp" "$ROOT/build-m2/imgui_c_darwin.cpp"
-# 别名落位验证：引擎按这些名字解析，缺一个就是白编
-nm -gU "$APP/libimgui.dylib" | grep -q ' _AcceptDragDropPayload$' || {
-    echo "::error::libimgui 里没有 _AcceptDragDropPayload（asm 别名的下划线变换没生效）"; exit 1; }
+# 别名落位验证：引擎按这些名字解析，缺一个就是白编。注意不用 grep -q——它命中即退出会让 nm
+# 吃 SIGPIPE，在 set -o pipefail 下把"找到了"误判成失败（真凶复盘：本地 llvm-nm 确认符号全在，
+# CI 的报错是 grep -q 提前退出 + pipefail 的组合误报）。grep 读完整个输入，nm 自然结束。
+if ! nm -gU "$APP/libimgui.dylib" | grep ' _AcceptDragDropPayload$' > /dev/null; then
+    echo "::error::libimgui 里没有 _AcceptDragDropPayload（asm 别名的下划线变换没生效）"; exit 1
+fi
+echo "imgui 别名抽查：_AcceptDragDropPayload 在位"
 
 # FreeType 2.13.3 静态库 + imgui_freetype（引擎的 FreeType 字形加载器）
 FT="$NDEPS/freetype-VER-2-13-3"
