@@ -147,6 +147,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 - `libcoreclr.dylib` 二进制补丁的 iOS 版（安卓版是 `libcoreclr.so` 两处）。
 **验收**：玩家导入的游戏副本在真机进主菜单。
 
+**三十五轮（2026-11-23 二更，0.3.5）：M4 首航发现混合运行时的解释器会话从未通过 coreclr_initialize——分配器模式门控改确定性信号**：m4-touch-1 首航：setup 的 coreclr_initialize E_FAIL（`[rw17-arena] no host arena`）——**0.3.x 全系普通启动（解释器）其实都死在这一步**（此前误判为 MMF 桩的资产检查崩溃；玩家实测的 0.3.3 全速体验全是 JIT 会话）。根因链：setup.c 在 coreclr_initialize 前 setenv COMPlus_InterpMode=2（M1 契约同款），但分配器门控读 CLRConfig 的 InterpMode 在 StaticInitialize 时仍得 0 → 强制竞技场 → setup 无 PORT17_JIT_* → fail-loud E_FAIL。**教训：CLRConfig 的 env 读取在 StaticInitialize 时刻不是可依赖的契约**（同进程 getenv 对竞技场交接 env 是可见的、真机双向验证过——机制不同不可类比推理）。**修法（结构性）**：分配器模式改由宿主确定性信号决定——`PORT17_JIT_RX` env 在（jit26_acquire 成功后、coreclr_initialize 前设置）= 竞技场 JIT；不在 = legacy 解释器配置（setup/普通启动）。macOS 保留 CI 种子竞技场机制（TARGET_OSX 分支）。InterpMode 门控删除。缓存键 c21/c17/c16。附带修正：setup.c 的 setenv InterpMode 保留（引擎语义仍需它——eeconfig 的解释器开关），只是分配器不再依赖它。
+
 ### M4 托管层共享（2026-11-23 开工：安卓触控优化完全对齐）
 
 **M3 JIT 收官背景**：0.3.3 真机裁决——JIT 会话进世界、装载显著提速、零崩溃（用户实测 + 日志验收：竞技场链 6 行全绿、30fps 满速心跳、零 Fatal）。M3 的 JIT 大项关闭，CoreLib 20 开关随 mod 管线并入 M4。

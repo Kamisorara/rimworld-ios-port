@@ -686,7 +686,7 @@ index 997d7a523e8..3f7703d0f53 100644
  
  #ifndef TARGET_APPLE
 diff --git a/src/coreclr/utilcode/executableallocator.cpp b/src/coreclr/utilcode/executableallocator.cpp
-index f982fa1f940..2f1c1beb907 100644
+index f982fa1f940..4a3166f53fc 100644
 --- a/src/coreclr/utilcode/executableallocator.cpp
 +++ b/src/coreclr/utilcode/executableallocator.cpp
 @@ -124,7 +124,7 @@ bool ExecutableAllocator::IsDoubleMappingEnabled()
@@ -698,28 +698,40 @@ index f982fa1f940..2f1c1beb907 100644
      return false;
  #else
      return g_isWXorXEnabled;
-@@ -262,6 +262,20 @@ HRESULT ExecutableAllocator::StaticInitialize(FatalErrorHandler fatalErrorHandle
+@@ -262,6 +262,32 @@ HRESULT ExecutableAllocator::StaticInitialize(FatalErrorHandler fatalErrorHandle
  
      g_fatalErrorHandler = fatalErrorHandler;
      g_isWXorXEnabled = Configuration::GetKnobBooleanValue(W("System.Runtime.EnableWriteXorExecute"), CLRConfig::EXTERNAL_EnableWriteXorExecute);
 +#if defined(HOST_APPLE) && defined(HOST_ARM64)
-+    // Port17 hybrid: force the arena-backed double mapping only when methods
-+    // will actually be JIT-compiled (InterpMode == 0; the host hands the arena
-+    // over through PORT17_JIT_*). Interpreted sessions keep the knob's default
-+    // and run the exact configuration of the official interpreter-only iOS
-+    // pack: single-mapped legacy allocator, no arena handshake, no fail-closed
-+    // startup. The legacy path can never write JIT code on iOS and iOS 26+
-+    // refuses to execute self-created RWX - which is fine, because nothing
-+    // jits in those sessions (precodes and thunks behave as in the pack).
-+    if (CLRConfig::GetConfigValue(CLRConfig::EXTERNAL_InterpMode) == 0)
++    // Port17 hybrid: the HOST decides the allocator mode, through a signal
++    // that cannot be missed - the PORT17_JIT_RX environment variable the host
++    // sets right after acquiring the arena, BEFORE coreclr_initialize.
++    // m4-touch-1 verdict: gating on the InterpMode knob (CLRConfig) failed the
++    // setup session - setup.c set COMPlus_InterpMode=2 before
++    // coreclr_initialize, yet the gate still read 0 there (an interpreter
++    // session never got past coreclr_initialize under the hybrid runtime at
++    // all: the only sessions that worked were the JIT ones, which carried the
++    // arena). Env reading inside StaticInitialize is not a contract to lean
++    // on; the arena handoff env is (jit26.c sets it with setenv and the
++    // runtime's Rw17AdoptHostArena reads it with getenv - device-proven both
++    // ways). No PORT17_JIT_RX = interpreter session: the knob's default, the
++    // official interpreter-only pack's exact configuration (single-mapped
++    // legacy allocator; nothing jits there, and iOS 26+ would refuse to
++    // execute self-made RWX anyway). macOS keeps the CI machinery (seeded
++    // arena / self-made RWX fallback).
++#if defined(TARGET_OSX)
++    g_isWXorXEnabled = true;
++#else
++    if (getenv("PORT17_JIT_RX") != NULL)
 +    {
 +        g_isWXorXEnabled = true;
 +    }
 +#endif
++#endif
      g_instance = new (nothrow) ExecutableAllocator();
      if (g_instance == NULL)
      {
-@@ -288,6 +302,13 @@ bool ExecutableAllocator::Initialize()
+@@ -288,6 +314,13 @@ bool ExecutableAllocator::Initialize()
          if (!VMToOSInterface::CreateDoubleMemoryMapper(&m_doubleMemoryMapperHandle, &m_maxExecutableCodeSize))
          {
              g_isWXorXEnabled = false;
