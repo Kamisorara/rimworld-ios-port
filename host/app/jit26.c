@@ -230,22 +230,12 @@ int port17_jit26_acquire(void)
         munmap(rwAlias, (size_t)RW17_CAP);
         return 0;
     }
-    // 深页抽查：vm_region 只报 16KiB 子图入口（"内核视角 size=16384"），但
-    // vm_remap(copy=FALSE) 是整段 128MiB 共享映射、脚本逐页扫写覆盖全部
-    // 8192 页——对别名深处写、竞技场深处读回抽查，把"深处实际没映射"的
-    // 怀疑直接排除或坐实。
-    {
-        static const size_t offs[] = {0x400000, 0x2000000, 0x7ff0000}; // +4MiB、+32MiB、尾部-64KiB
-        const uint32_t mark = 0x4a554e4bu; // "JUNK"
-        for (int i = 0; i < 3; i++) {
-            memcpy(rwAlias + offs[i], &mark, sizeof(mark));
-            uint32_t back = 0;
-            memcpy(&back, (uint8_t *)arena + offs[i], sizeof(mark));
-            snprintf(buf, sizeof(buf), "[jit26] 深页 0x%llx：别名写/竞技场读 %s",
-                     (unsigned long long)offs[i], back == mark ? "一致" : "不一致！");
-            host_log(buf);
-        }
-    }
+    // （深页抽查已删——m3-jit-2 教训：它往竞技场 +4MiB/+32MiB/尾部写 "JUNK"
+    // 标记做别名一致性验证，而这份竞技场随后整个交给 runtime 按偏移分配，
+    // 引擎分配越过 4MiB 后标记落进活结构的指针槽——.ips 的故障地址
+    // 0x4a554e4d 正是 "JUNK"+2 拼出来的假指针。一致性本来就已被探针 #1/#2
+    // 端到端证明：经 RW 别名写机器码、经竞技场本体执行成功即是。M1 探针
+    // 时代 Hello.dll 分配永远到不了 4MiB，所以这颗雷从没被踩响过。）
     char rx[32], rwb[32], szb[32];
     snprintf(rx, sizeof(rx), "%llx", (unsigned long long)(uintptr_t)arena);
     snprintf(rwb, sizeof(rwb), "%llx", (unsigned long long)(uintptr_t)rwAlias);
