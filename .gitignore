@@ -12,3 +12,4 @@ test_work/
 *.ipa
 .DS_Store
 build-native-deps/
+game-staging/
