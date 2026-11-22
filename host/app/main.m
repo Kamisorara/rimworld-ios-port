@@ -498,6 +498,10 @@ static void run_on_big_thread(int (*fn)(void))
         append_log("引擎已跑过一次；CoreCLR 单实例，重启 app 才能再跑");
         return;
     }
+    if (g_clrSpentBySetup) {
+        append_log("本进程的运行时已被 setup 用掉（CoreCLR 单实例）——上划彻底关闭 app 再打开，即进引擎");
+        return;
+    }
     m_engineRan = YES;
     if (m_probeRan)
         append_log("注意：探针已用过 CoreCLR——引擎的 coreclr_initialize 大概率 0x80131022，重启 app 直接点「引擎」最稳");
@@ -605,6 +609,9 @@ static int engine_thread(void)
     append_log(buf);
     return rc;
 }
+
+// 本进程的 CoreCLR 是否已被 setup 用掉（引擎按钮据此直接指引重开，不去撞 0x80131022）。
+static BOOL g_clrSpentBySetup = NO;
 
 // run_probe wants the plain signature the thread spawner takes.
 static int run_probe_thread(void)
@@ -765,8 +772,15 @@ int main(int argc, char *argv[])
                     rc,
                     rc == 0 ? @"改写完成，请彻底关闭 app（上划划掉）再打开，即进引擎"
                            : @"改写没完成（原因在上面日志），可重试或换打包好的 zip"]);
-                if (rc == 0)
-                    append_log("✅ 游戏文件改写完成——请上划彻底关闭 app，再重新打开即进引擎（本进程的运行时已被 setup 用掉，不能直接切）");
+                if (rc == 0) {
+                    g_clrSpentBySetup = YES;
+                    append_log("✅ 游戏文件改写完成——app 几秒后自动关闭，重新打开即进引擎");
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)),
+                                   dispatch_get_main_queue(), ^{
+                        boot_log(@"setup 完成后自动关闭（重新打开即引擎模式）");
+                        exit(0);
+                    });
+                }
                 else
                     append_log("⚠️ setup 没有完成——按日志里的原因处理（重开 app 会再试一次）");
             } else {
