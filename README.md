@@ -6,21 +6,23 @@
 
 这是 [Port17 安卓移植](../rimworld-android-port) 的姊妹项目：同一个目标（RimWorld 1.7，Waylith 引擎，.NET + Vulkan），换到 iOS 上。
 
-**当前状态：M1 已关闭（官方 .NET 11 运行时跑通），M2（宿主层成型）进行中。** M1 的结论：官方
-`Microsoft.NETCore.App.Runtime.ios-arm64 11.0.0` + `COMPlus_InterpMode=2` 配方在真机完整跑通探针，
-吞吐 87.7 M 迭代/秒——零补丁、零 StikDebug，装完即玩。M2 在把探针长成游戏宿主：全屏 CAMetalLayer、
-触摸采集、软键盘桥、GLFW 垫片 iOS 后端（接口契约见
-[docs/ENGINE-NATIVE-CONTRACT.md](docs/ENGINE-NATIVE-CONTRACT.md)）、Vulkan 经官方 MoltenVK 1.4.2，
-先用一个走引擎同款路径的 Vulkan 三角形验证原生渲染栈（`m2-host` 流水线，产物 `port17host-m2.ipa`）。
+**当前状态（2026-11-23）：M3 里程碑达成——JIT 成功，游戏全速可玩。** 真机实测：iPad M4 / iOS 27，
+全 DLC 创建世界 → 世界生成 → 进入殖民地地图，装载速度较解释器显著提升，零崩溃。解释器模式（普通
+启动，装完即玩）与 JIT 模式（StikDebug 会话拉起）同包双模：自建混合运行时（dotnet/runtime `v11.0.0`
+GA tag，`--dynamiccodecompiled true` + 静态 RyuJIT + 按需解释器 dylib）+ StikDebug 竞技场协议
+（app 发 `brk` 请求、脚本经 debugserver `_M` 代分配 128MiB RX 并逐页祝福、分离后照常执行）。
+M2（UIKit 宿主 + GLFW 垫片 iOS 后端 + MoltenVK 1.4.2 + 触摸/软键盘桥，接口契约见
+[docs/ENGINE-NATIVE-CONTRACT.md](docs/ENGINE-NATIVE-CONTRACT.md)）与设备内 setup（8 道幂等 Cecil
+补丁，安卓 SetupService 的对应物）均已收官。下一站 M4：托管层共享（安卓触控优化完全对齐）。
 
 ## 技术路线（与安卓版的差异）
 
 | | 安卓版 | iOS 版 |
 |---|---|---|
-| 运行时 | 微软官方 .NET 10 CoreCLR pack（android-arm64） | **自建**：dotnet/runtime `release/11.0`，`-os ios -arch arm64 --dynamiccodecompiled true`（微软官方 iOS 包 .NET 11 才有，且默认解释器） |
-| JIT | 系统允许 | StikDebug 调试器 attach 后允许（`get-task-allow` 签名侧载） |
+| 运行时 | 微软官方 .NET 10 CoreCLR pack（android-arm64） | **自建混合运行时**：dotnet/runtime `v11.0.0` GA tag，`-os ios -arch arm64 --dynamiccodecompiled true` + `FEATURE_INTERPRETER=1`（JIT 静态链入 + 解释器按需 dylib；微软官方 iOS 包是解释器专用构建，无 JIT） |
+| JIT | 系统允许 | StikDebug 调试器会话拉起后允许：app 发 brk 请求、脚本经 debugserver `_M` 代分配 128MiB RX 竞技场（普通启动自动回退解释器，同包双模） |
 | 图形 | 系统 Vulkan | MoltenVK（Vulkan over Metal） |
-| CoreLib 的 20 个 `WaylithClr.*` 开关模拟 | 补丁对着 10.0.12 CoreLib | **待重移植**到 11.0 CoreLib（M3） |
+| CoreLib 的 20 个 `WaylithClr.*` 开关模拟 | 补丁对着 10.0.12 CoreLib | **M4 重移植**到 11.0 CoreLib（随 mod 管线） |
 | 宿主 | Java NativeActivity + `host.c` | ObjC/UIKit + `host.c`（同一套 `coreclr_initialize` 拉起方式） |
 | 导入处理 | PortSetup 独立进程 | iOS 无 fork，须进程内 |
 | 分发 | APK 直装 | 未签名 IPA，玩家经 SideStore/AltStore 自签侧载 |
@@ -40,16 +42,17 @@
 
 手动触发或推送到 main 都会出包。产物在 Actions 的 Artifacts 里。
 
-## 真机测试（M1 验收，JIT26 协议）
+## 真机测试（0.3.3，双模）
 
-1. 下载 IPA，经 SideStore（或 AltStore）侧载——侧载自动带 `get-task-allow`；
-2. 经 StikDebug 拉起本 app（带 JIT）；runtime 走到 `coreclr_initialize` 时会自己发 `brk #0xf00d` 请求竞技场，并最多等调试器 120 秒（`[rw17-arena]` 进度在 stderr 日志里，屏幕此时无新行是正常的）；
-3. 在 StikDebug 里以本 app 为目标运行应答脚本 [`probe/stikdebug/rw17-jit26.js`](probe/stikdebug/rw17-jit26.js)——它在 app 停在 brk 上的窗口里经 debugserver `_M,rx` 分配 128MiB RX 并逐页扫写祝福（约 1–2 分钟，有进度日志），把地址经 x0 还给 app，随后应答分离请求；**脚本分离完成后窗口可关**，竞技场照常可用；
-4. 日志应出现 `[rw17-arena] live debugger confirmed` → `arena granted at …` → `RW alias at …; detaching …` → `probe call #1 -> 42` → `probe call #2 -> 43` → `arena adopted …`，随后 `CoreCLR 就绪`，Hello 以几十毫秒执行，结论"JIT 生效"；屏幕同时打印 mach 匿名 RX 区域统计（JIT 开启时非零且变大）。
-
-> 日志位置：屏幕全量可读；文件在 Files app → 浏览 → 我的 iPhone → Port17 Probe（`port17-ui.log` / `coreclr-stderr.log`）。重装应用会清空数据容器，旧日志随之消失。
-
-> 机制说明：iOS 不导出 `pthread_jit_write_protect_np`，MAP_JIT 页永远无法在进程内翻转可写；iOS 26 起内核还拒绝执行自建的 RWX 映射。可执行内存只能由调试器授予：runtime 发 brk 请求，debugserver 的 `_M,rx` 在进程内代建 RX 区并逐页写"祝福"（分离后仍可执行的凭据），运行时 `vm_remap` 出 RW 别名写代码、走授权 RX 视图执行。请求-应答-分离的协议形态来自 playport（`playport-universal.js` + `wine_host.c`），最初的竞技场思路来自杀戮尖塔2 社区 iOS 包（tools/ios-dualjit）的逆向，详见 [docs/PLAN.md](docs/PLAN.md) 决策表与 [docs/PLAN-JIT26.md](docs/PLAN-JIT26.md)。
+1. 下载 [Release](../../releases) 里的 IPA，经 SideStore（或 AltStore）侧载——侧载自动带 `get-task-allow`；
+2. **解释器模式（默认，装完即玩）**：普通打开 app。首次会自动在设备内跑 setup（改写游戏文件，约半分钟）后自动退出，再打开即引擎。性能为解释器基线；
+3. **JIT 模式（同包，需一次会话仪式）**：
+   - 前置（一次性）：StikDebug 导入设备配对文件；App Store 装 LocalDevVPN 并开启；连 WiFi；
+   - 把 [`probe/stikdebug/rw17-jit26.js`](probe/stikdebug/rw17-jit26.js) AirDrop 到 iPad，StikDebug → Scripts 导入；
+   - StikDebug 运行 `rw17-jit26`、目标选 Port17——app 自己发 `brk #0xf00d` 请求，脚本经 debugserver `_M,rx` 分配 128MiB RX 并逐页祝福（3-4 秒），把地址经 x0 还给 app，随后应答分离；**脚本显示 detached 后窗口可关**；
+   - 日志（Files → Port17 → `port17-ui.log`）应出现：`JIT 授权检测 CS_DEBUGGED=1` → `[jit26] 竞技场拿到 …` → `[jit26] 探针 #1 → 42` / `#2 → 43` → `竞技场就绪` → `生效执行模式 = JIT`；
+   - JIT 会话内创建/加载存档，存档与解释器模式互通；
+4. 游戏资源导入：诊断界面「导入 zip」选 `port17-game.zip`（PC 上 `python scripts/pack-game-zip.py` 打包），或 Files 文件夹直放、「打开方式 → Port17」——三种口子任选，详见 [docs/GAME-IMPORT.md](docs/GAME-IMPORT.md)。
 
 ## 里程碑
 

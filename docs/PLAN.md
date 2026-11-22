@@ -147,9 +147,24 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 - `libcoreclr.dylib` 二进制补丁的 iOS 版（安卓版是 `libcoreclr.so` 两处）。
 **验收**：玩家导入的游戏副本在真机进主菜单。
 
-### M4 托管层共享
-- 从安卓仓库共享 PortMobile / ModPrep / PortWorkshop 源码（初期：同步脚本复制；稳定后：git subtree 或抽出公共包）；
-- 触控、界面适配、mod 导入排序、创意工坊下载器（后台下载须前台亮屏，iOS 无前台服务）。
+### M4 托管层共享（2026-11-23 开工：安卓触控优化完全对齐）
+
+**M3 JIT 收官背景**：0.3.3 真机裁决——JIT 会话进世界、装载显著提速、零崩溃（用户实测 + 日志验收：竞技场链 6 行全绿、30fps 满速心跳、零 Fatal）。M3 的 JIT 大项关闭，CoreLib 20 开关随 mod 管线并入 M4。
+
+**目标**：安卓 `mobile/`（PortMobile，23,380 行 Harmony 补丁）在 iOS 真机行为完全一致。功能面：长按右键、双指缩放、TapAssist、列表惯性滚动、虚拟鼠标键、KeyWheel。
+
+**实施顺序（五步，每步真机可裁决）**：
+
+1. **Harmony 可用性探针（成败手，最先做）**：JIT 下 HarmonyX 的 detour 机制实测——Harmony 动态方法编译走 CoreCLR 的 JIT 通道 = 我们竞技场路径的天然客户，前景远好于解释器（detour 在解释器下未知，JIT 下是主流形态）；但 HarmonyX 还用 Reflection.Emit + 内存补丁写入两处要实测。探针件：最小 patch.dll 加载（一个 Prefix + 一个方法替换 + 帧内调用断言），产物走现成 m2-host 流水线加诊断按钮。裁决行：探针日志 `harmony probe: patched X, called Y`。
+2. **PortMobile 源码同步**：`scripts/sync-mobile.py` 从安卓仓库复制 `mobile/` 全量（保持相对路径），MSBuild 入游戏 TPA。**GLFW 接口契约零改动**——iOS 垫片的 `glfwAndroid*` 扩展名与安卓完全同名（ENGINE-NATIVE-CONTRACT.md 既定），PortMobile 的 P/Invoke 原样工作。
+3. **iOS 化清单审计**：扫 mobile/ 的安卓专属 API 面（GLFW Android 原生活动钩、JNI 调用、Android OS 服务：振动/剪贴板/软键盘拉起），逐条列 iOS 等价物。已知映射：软键盘桥已有（隐藏 UITextField）；振动 → UIImpactFeedbackGenerator；其余按审计结果定。
+4. **补丁应用管线**：安卓 patch/Patch.cs 的启动钩子形态对 iOS 落位（Harmony patch 在 Bootstrap 前应用；与 setup 八道 Cecil 补丁的先后关系：Cecil 改 IL 先行，Harmony 运行期叠上）。
+5. **逐功能真机验收**：长按右键 → 双指缩放 → TapAssist → 惯性滚动 → 虚拟鼠标键 → KeyWheel，每项同存档同操作与安卓版行为对比；全绿 = M4 触控线关闭。
+
+**风险与缓解**：
+- Harmony detour 若在 JIT 下有静态链接特异性（method thunk 生成路径）→ 探针定位，备选 = 手写 detour 桩（哈希表 + trampoline，安卓版 InlineGuard 的形态）；
+- PortMobile 若引用安卓 mod 管线的类型（ModPrep/Workshop）→ 同步时一并复制或桩化，审计步产出清单；
+- mod 管线 + CoreLib 20 开关与触控线并行推进（触控不依赖 mod，但 PortMobile 的 mod 兼容面依赖）——顺序：探针 → 触控主线，mod 管线随后。
 
 ### M5 玩家可用 beta
 - 导入流程进程内化（iOS 无 fork，PortSetup 不能独立进程）；
