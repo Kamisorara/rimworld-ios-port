@@ -113,7 +113,7 @@ index 93c4758956f..4b34fb57be9 100644
  
      ~ExecutableWriterHolder()
 diff --git a/src/coreclr/minipal/Unix/doublemapping.cpp b/src/coreclr/minipal/Unix/doublemapping.cpp
-index 997d7a523e8..8d84288a982 100644
+index 997d7a523e8..3f7703d0f53 100644
 --- a/src/coreclr/minipal/Unix/doublemapping.cpp
 +++ b/src/coreclr/minipal/Unix/doublemapping.cpp
 @@ -42,6 +42,13 @@
@@ -543,20 +543,25 @@ index 997d7a523e8..8d84288a982 100644
  #endif
  }
  
-@@ -197,6 +594,44 @@ bool IsMapJitFlagNeeded()
+@@ -197,6 +594,39 @@ bool IsMapJitFlagNeeded()
  
  void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offset, size_t size, const void *rangeStart, const void* rangeEnd)
  {
 +#if defined(TARGET_APPLE) && defined(TARGET_ARM64)
-+    // Arena mode, fd-mapper semantics: every reservation gets a fresh
-+    // vm_remap alias of arena[headerSize+offset .. +size). Commit flips that
-+    // view IN PLACE between RX and RW - protection changes on remapped
-+    // copies of debugger-granted pages are allowed, unlike on the granted
-+    // pages themselves - and GetRWMapping hands out short-lived extra
-+    // aliases. The interleaved loader heap writes its data through the SAME
-+    // VA it reserved, so the reserved view must be the flippable one: a
-+    // fixed alias pair (the first attempt) left its data writes landing on
-+    // the read-only execution view, dying with SIGBUS in Module::Create.
++    // Arena mode: the reservation IS the granted arena itself - pure pointer
++    // math, exactly what "allocation is pointer math over the host-granted
++    // arena" in the adoption log has always claimed. m3-jit-1 verdict: the
++    // previous per-reservation vm_remap design executed through a REMAPPED
++    // COPY of the granted pages and died with SIGBUS 8 ms after adoption
++    // (no managed frames, no reserve/commit failure logs) - iOS 27 refuses
++    // to execute remapped copies, the same wall M1 hit with the double-remap
++    // executor and STS2's rule names outright ("execute via the granted
++    // arena itself; remapped copies are not proven executable"). Writes go
++    // through GetRWMapping's short-lived RW aliases either way; Commit flips
++    // protection IN PLACE on the granted pages (code pages are already RX
++    // and never flip; only loader-heap data flips to RW - if the kernel
++    // refuses that, Commit logs the errno and the failure is clean and
++    // visible instead of a crash).
 +    Rw17ArenaMapper* mapper = (Rw17ArenaMapper*)mapperHandle;
 +    if (mapper == NULL)
 +    {
@@ -572,23 +577,13 @@ index 997d7a523e8..8d84288a982 100644
 +        RW17_LOG("range-restricted reserve at %p (%zu bytes) outside [%p, %p) - granting anyway\n",
 +                 (void*)src, size, rangeStart, rangeEnd);
 +    }
-+    vm_address_t va = 0;
-+    vm_prot_t curProtection = VM_PROT_NONE, maxProtection = VM_PROT_NONE;
-+    kern_return_t kr = vm_remap(mach_task_self(), &va, size, 0, VM_FLAGS_ANYWHERE,
-+                                mach_task_self(), (vm_address_t)src, FALSE,
-+                                &curProtection, &maxProtection, VM_INHERIT_NONE);
-+    if (kr != KERN_SUCCESS)
-+    {
-+        RW17_LOG("reserve vm_remap of %p (%zu bytes) failed: kr=%d (0x%x)\n",
-+                 (void*)src, size, (int)kr, (unsigned)kr);
-+        return NULL;
-+    }
-+    return (void*)va;
++    return (void*)src;
++
 +#else
      int fd = (int)(size_t)mapperHandle;
  
      bool isUnlimitedRange = (rangeStart == NULL) && (rangeEnd == NULL);
-@@ -246,20 +681,44 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
+@@ -246,20 +676,43 @@ void* VMToOSInterface::ReserveDoubleMappedMemory(void *mapperHandle, size_t offs
          result = NULL;
      }
      return result;
@@ -598,13 +593,12 @@ index 997d7a523e8..8d84288a982 100644
  void *VMToOSInterface::CommitDoubleMappedMemory(void* pStart, size_t size, bool isExecutable)
  {
 +#if defined(TARGET_APPLE) && defined(TARGET_ARM64)
-+    // fd-mapper semantics: the reserved view flips protection IN PLACE.
-+    // One code path serves every backend flavor - per-reservation aliases
-+    // of the granted arena, seeded-arena aliases, and the self-made RWX
-+    // arena alike. In-place flips are only possible because Reserve hands
-+    // out remapped aliases: protection changes on remapped copies of
-+    // debugger-granted pages are allowed, unlike on the granted pages
-+    // themselves (verified on device - the full-alias mprotect RW passed).
++    // The reserved view is the granted arena itself now; the flip lands on
++    // the granted pages. Code pages are already RX and never flip - only
++    // loader-heap data flips to RW. Whether the kernel allows in-place RW
++    // on debugger-granted pages is THE open question of this build: a
++    // refusal shows up as the errno line below (clean, visible failure),
++    // not a crash. Seeded/self arenas flip the same way (max=RWX there).
 +    if (mprotect(pStart, size, isExecutable ? (PROT_READ | PROT_EXEC) : (PROT_READ | PROT_WRITE)) == -1)
 +    {
 +        RW17_LOG("commit flip of %p (%llu bytes, %s) failed (errno=%d)\n",
@@ -633,7 +627,7 @@ index 997d7a523e8..8d84288a982 100644
  #ifndef TARGET_APPLE
      int fd = (int)(size_t)mapperHandle;
      if (mmap(pStart, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, fd, offset) == MAP_FAILED)
-@@ -269,6 +728,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
+@@ -269,6 +722,7 @@ bool VMToOSInterface::ReleaseDoubleMappedMemory(void *mapperHandle, void* pStart
      memset(pStart, 0, size);
  #endif // TARGET_APPLE
      return munmap(pStart, size) != -1;
@@ -641,7 +635,7 @@ index 997d7a523e8..8d84288a982 100644
  }
  
  void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t offset, size_t size)
-@@ -302,16 +762,46 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
+@@ -302,16 +756,46 @@ void* VMToOSInterface::GetRWMapping(void *mapperHandle, void* pStart, size_t off
  
      return (void*)startRW;
  #else // TARGET_AMD64

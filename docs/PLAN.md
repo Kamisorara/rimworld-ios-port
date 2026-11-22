@@ -131,8 +131,12 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **三十一轮（2026-11-22 深夜五更，0.3.0）：JIT 线复活——混合运行时 + 宿主竞技场合流**：方向裁决后按四阶段路线开工。**阶段一（混合构建）**：CMake 门控（静态链接块里解释器仅非 DCC 链入——JIT 占静态位、解释器作为独立 dylib 按需 dlopen，getJit 8 符号冲突从根上消失）；`StaticInitialize` 的 W^X 强制改为仅 `InterpMode==0` 生效（解释器会话=官方包同款零竞技场零握手，JIT 会话才走 `PORT17_JIT_*` 竞技场）；`build-runtime.sh` INTERPRETER=0→1（显式定义避开生成器表达式默认值）；collect 抓 `libclrinterpreter.dylib`；缓存键 c18/c14/c13。**阶段二（宿主合流）**：`host/app/jit26.c/.h`——M1 探针宿主的竞技场获取全套移植（brk 握手→vm_remap RW 别名→detach→无调试器探针 42/43→深页抽查→PORT17_JIT_* 交接，逐行保留 eb1ab5f 终版形态）；engine.c 模式门重写（竞技场就绪→自动 InterpMode=0；否则 InterpMode=2；`DOTNET_InterpreterName` 绝对路径指解释器 dylib——裸名 dlopen 不搜 bundle 目录）；setup.c/探针 host.c 补同一 env（混合运行时下每个 coreclr_initialize 位点必须显式设 InterpMode，未设=0=强制竞技场=无交接即 E_FAIL）；build-ipa.sh 运行时目录参数化（`PORT17_RUNTIME_DIR`，默认自建混合套）+ jit26.c 入编译清单；新增 `scripts/fetch-hybrid-runtime.sh`（从 m1-probe 的 Release 资产取运行时、managed/ 摊平）；m2-host 切换运行时来源。**脚本**：rw17-jit26.js 信号停机从 fail() 改 vCont;S 原样递送（0.2.7 教训：SEH 靠 SIGSEGV，吞=卡死、会话失败=停死黑屏）；port17-jit.js 加 brk 跳过（pc+4，混合 app 配错脚本时优雅降级而非无限重执行）。**时序纪律**：阶段二推送必须等 m1-probe 绿（m2-host 从 Release 取运行时，推早了会打包旧纯 JIT 资产）。
 
+**三十二轮（2026-11-23 凌晨，0.3.1）：JIT 首航真机——竞技场全链贯通至 runtime 收货，SIGBUS 死在"执行走 remap 副本"**：m3-jit-1（0.3.0 首个混合包 + StikDebug/rw17-jit26.js 会话）：**项目首次实证调试器授予页在 iOS 27 真机可执行**——brk 握手 3.4 秒拿到 128MiB（_M 分配+逐页祝福，脚本 v3.x 批量备页比逐包 M 快 20 倍）、别名就绪、detach、探针 42/43 双过、深页三档一致、`PORT17_JIT_*` 交接；runtime 侧 `[rw17-arena] host arena adopted` + `JIT26 backend done` 后 **8ms SIGBUS**（无托管帧、无 reserve/commit 失败日志）。死因定位：**eb1ab5f 终版 Reserve 给每笔保留开新 vm_remap 别名、执行走 remap 副本**——M1 旧注释与 STS2 铁律都点名过"remapped copies are not proven executable"，53f7a4a 曾修回"执行走授予页本体"，但后来的 in-place-flip 重构又把执行视图换回了 remap 副本，而 M1 封存前**这个形态从未上过真机**。Darwin 上执行保护违例呈 SIGBUS，与位置、无声失败（vm_remap/mprotect 都成功返回）全吻合。**0.3.1 修法**：Reserve 改为对授予页的**纯指针算术**（兑现它日志里 "allocation is pointer math" 的原话）；写路径本就全走 GetRWMapping 短命 RW 别名不动；Commit 的 in-place 翻转落到授予页上——代码页本就 RX 永不翻、只有 loader 堆数据翻 RW，内核若拒就有 errno 日志的干净失败（本 build 的开卷问题）。缓存键 c19/c15/c14。dmcheck 垫片补 TargetConditionals.h 与 vm_protect。附带观察：设备 runtime.env 仍残留 `DOTNET_JitDisasm=Program:Main`；jit.on 仍在游戏目录（21 轮遗留——普通启动也报 JIT 模式，建议删掉）。
+
 ### M3 游戏程序集上机
 - `patch.dll` 增加 iOS 目标（平台检查改写、Harmony 适配 darwin）；
+
+
 
 
 - PortHooks 的 WaylithClr.* 替身已随 M2 收官进包（见上）；剩 CoreLib 补丁对 11.0 CoreLib 的重移植（20 个 `WaylithClr.*` 开关，安卓版是对 10.0.12 做的）与 PortHooks 的启动钩子/UnityStubs/ModPrep 件；
