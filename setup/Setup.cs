@@ -66,8 +66,8 @@ namespace Port17Setup
                 Say("[setup] failed: " + e);
                 return 3;
             }
-            File.WriteAllLines(Path.Combine(game, "port17-setup.v3.stamp"),
-                new[] { "Port17Setup v3", "changed=" + changed, "kept=" + kept });
+            File.WriteAllLines(Path.Combine(game, "port17-setup.v4.stamp"),
+                new[] { "Port17Setup v4", "changed=" + changed, "kept=" + kept });
             Say($"[setup] done: {changed} rewritten, {kept} already");
             return 0;
         }
@@ -325,12 +325,16 @@ namespace Port17Setup
             op == OpCodes.Ldloc_0 || op == OpCodes.Ldloc_1 || op == OpCodes.Ldloc_2 ||
             op == OpCodes.Ldloc_3 || op == OpCodes.Ldloc_S;
 
-        // ---- 4. 资源包路径改道（九跑）：Bootstrap.ConfigureRuntime 用 Environment.ProcessPath
+        // ---- 4. 资源包路径改道（十跑版）：Bootstrap.ConfigureRuntime 用 Environment.ProcessPath
         // 的目录找 Assets.zip——iOS 上 ProcessPath 读真实进程可执行（.app 里的宿主），与
-        // host API 的 exePath 无关（安卓当年也如此，所以改写引擎）。把该方法内唯一的
-        // get_ProcessPath 调用换成读环境变量 PORT17_GAME_DLL（宿主在 execute 前设为
-        // <game>/RimWorld.dll），GetDirectoryName 即得 game 目录——资源包/数据全落位。
-        // CrashHandler 与 Waylith.dll 里的其余 ProcessPath 都在非启动路径，不动。
+        // host API 的 exePath 无关；v3 曾换成读环境变量，托管侧读不到（GetDirectoryName(null)
+        // → Path.Combine 炸 ArgumentNullException(path1)）。本版换 CurrentDirectory（getcwd，
+        // 进程级实时——宿主 chdir(game) 过必生效）：
+        //   call get_ProcessPath            → call get_CurrentDirectory
+        //   （v3 形态：ldstr "PORT17_GAME_DLL"; call GetEnvironmentVariable 也归位到同一目标）
+        //   紧随的 call Path::GetDirectoryName → nop（栈平衡：cwd 本身就是目标目录）
+        // 资源包与 RimWorld_Data 全落 game。CrashHandler 与 Waylith.dll 里的其余 ProcessPath
+        // 都在非启动路径，不动。
 
         private static void RedirectProcessPath(string game, ref int changed, ref int kept)
         {
@@ -347,29 +351,51 @@ namespace Port17Setup
                 var m = t.Methods.FirstOrDefault(x => x.Name == method && x.HasBody)
                     ?? throw new InvalidOperationException($"{dll}: {type}::{method} 不在");
                 var il = m.Body.GetILProcessor();
-                var hits = m.Body.Instructions.Where(i =>
-                    (i.OpCode == OpCodes.Call || i.OpCode == OpCodes.Callvirt) &&
-                    i.Operand is MethodReference mr &&
-                    mr.DeclaringType?.FullName == "System.Environment" &&
-                    mr.Name == "get_ProcessPath").ToList();
-                if (hits.Count == 0)
+                var list = m.Body.Instructions;
+                var getCwd = asm.MainModule.ImportReference(
+                    typeof(Environment).GetProperty("CurrentDirectory").GetGetMethod());
+                bool already = false;
+                int did = 0;
+                for (int i = 0; i < list.Count; i++)
                 {
-                    Say($"[setup] {dll}: ConfigureRuntime 的 ProcessPath 已改道（跳过）");
+                    var instr = list[i];
+                    if (instr.OpCode != OpCodes.Call && instr.OpCode != OpCodes.Callvirt)
+                        continue;
+                    if (instr.Operand is not MethodReference mr || mr.DeclaringType?.FullName != "System.Environment")
+                        continue;
+                    if (mr.Name == "get_ProcessPath" || mr.Name == "GetEnvironmentVariable")
+                    {
+                        // v3 的 ldstr "PORT17_GAME_DLL" 前缀一并归位
+                        if (mr.Name == "GetEnvironmentVariable" && i > 0 && list[i - 1].OpCode == OpCodes.Ldstr &&
+                            (string)list[i - 1].Operand == "PORT17_GAME_DLL")
+                        {
+                            il.Remove(list[i - 1]);
+                            i--;
+                        }
+                        instr.Operand = getCwd;
+                        did++;
+                        // 紧随的 GetDirectoryName 让位（cwd 即目录，栈上 string 原样通过）
+                        if (i + 1 < list.Count && list[i + 1].Operand is MethodReference dn &&
+                            dn.DeclaringType?.FullName == "System.IO.Path" && dn.Name == "GetDirectoryName")
+                        {
+                            il.Replace(list[i + 1], Instruction.Create(OpCodes.Nop));
+                        }
+                    }
+                    else if (mr.Name == "get_CurrentDirectory")
+                    {
+                        already = true; // v4 形态在
+                    }
+                }
+                if (did == 0 && already)
+                {
+                    Say($"[setup] {dll}: ConfigureRuntime 路径源已是 CurrentDirectory（跳过）");
                     kept++;
                     return;
                 }
-                var getEnv = asm.MainModule.ImportReference(
-                    typeof(Environment).GetMethod("GetEnvironmentVariable", new[] { typeof(string) }));
-                foreach (var call in hits)
-                {
-                    var ldstr = Instruction.Create(OpCodes.Ldstr, "PORT17_GAME_DLL");
-                    var callGetEnv = Instruction.Create(OpCodes.Call, getEnv);
-                    il.InsertAfter(call, callGetEnv);
-                    il.InsertAfter(call, ldstr);
-                    il.Remove(call);
-                }
+                if (did == 0)
+                    throw new InvalidOperationException($"{dll}: ConfigureRuntime 里没有找到 ProcessPath/env 调用——版本变了？");
                 Save(game, dll, asm);
-                Say($"[setup] {dll}: ConfigureRuntime 的 ProcessPath → 环境变量 PORT17_GAME_DLL ×{hits.Count}");
+                Say($"[setup] {dll}: ConfigureRuntime 路径源 → CurrentDirectory ×{did}（宿主 chdir 过 game）");
                 changed++;
             }
         }
