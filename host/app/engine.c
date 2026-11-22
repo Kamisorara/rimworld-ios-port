@@ -382,17 +382,15 @@ int run_engine(const char *bundle_dir, const char *home)
     if (missing)
         return -1;
 
-    // 改写戳（设备内 setup 写 port17-setup.stamp；PC 侧老流程写 os-detect+platform 组合）：
-    // 5014 引擎的原生绑定只认 Windows/Linux/macOS，没有改写就跑会在 Vulkan 装载与 Platform
-    // 家族两处硬墙给出明确报错。没有戳的目录本该在引擎模式前先过 setup——到这里还没戳
-    // 多半是文件后来被替换过。
+    // 改写戳（设备内 setup 写 port17-setup.vN.stamp）：5014 引擎的原生绑定只认
+    // Windows/Linux/macOS，没有改写就跑会在 Vulkan 装载与 Platform 家族两处硬墙给出
+    // 明确报错。没有当前版戳的目录本该在引擎模式前先过 setup——到这里还没戳多半是
+    // 文件后来被替换过。（只认当前版戳；老的 os-detect+platform 组合不再放行。）
     {
-        char stamp[1100], legacyA[1100], legacyB[1100];
-        snprintf(stamp, sizeof stamp, "%s/port17-setup.v6.stamp", game);
-        snprintf(legacyA, sizeof legacyA, "%s/os-detect.port17", game);
-        snprintf(legacyB, sizeof legacyB, "%s/platform.port17", game);
-        if (!file_exists(stamp) && !(file_exists(legacyA) && file_exists(legacyB)))
-            host_log("引擎：没有改写戳（port17-setup.stamp）——这份游戏文件没被 setup 改写过；"
+        char stamp[1100];
+        snprintf(stamp, sizeof stamp, "%s/port17-setup.v7.stamp", game);
+        if (!file_exists(stamp))
+            host_log("引擎：没有当前版改写戳（port17-setup.v7.stamp）——这份游戏文件没被最新 setup 改写过；"
                      "重开 app 会让宿主自动跑设备内 setup");
     }
 

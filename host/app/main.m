@@ -828,11 +828,11 @@ int main(int argc, char *argv[])
         char gameDir[1024];
         if (port17_find_game(NSHomeDirectory().UTF8String, gameDir, sizeof gameDir) == 0) {
             NSString *gameNS = [NSString stringWithUTF8String:gameDir];
-            NSString *stamp = [gameNS stringByAppendingPathComponent:@"port17-setup.v6.stamp"];
-            NSString *legacyA = [gameNS stringByAppendingPathComponent:@"os-detect.port17"];
-            NSString *legacyB = [gameNS stringByAppendingPathComponent:@"platform.port17"];
-            BOOL setupDone = [fm fileExistsAtPath:stamp] ||
-                ([fm fileExistsAtPath:legacyA] && [fm fileExistsAtPath:legacyB]);
+            // 只认当前版本的 setup 戳——旧的 os-detect+platform 组合旁路曾把版本轮换架空
+            // （v6 补丁在设备上从未执行：用户游戏目录里有这对老戳，setupDone 恒真）。
+            // PC 打包流程的旧戳副本：setup 重跑一遍全幂等，顺手补写当前版戳，无害。
+            NSString *stamp = [gameNS stringByAppendingPathComponent:@"port17-setup.v7.stamp"];
+            BOOL setupDone = [fm fileExistsAtPath:stamp];
             if (!setupDone) {
                 boot_log(@"游戏文件是原件（没有改写戳）——先跑设备内 setup（安卓同款体验），完成后请重开 app");
                 int rc = port17_run_setup([[NSBundle mainBundle].bundlePath UTF8String], gameDir);

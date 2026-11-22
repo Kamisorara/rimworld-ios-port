@@ -21,10 +21,12 @@
 //        引用整体改道到 bundle 里的 PortHooks.dll 替身（行为=电脑上关掉这些功能；安卓
 //        patch/Patch.cs 的同款手术，全游戏+92 mod 实测姿势）。
 //     6. 强制保守档：GpuProbe::Run 整体 → throw，游戏 catch 后自落 GpuPerformanceProfile
-//        .Conservative——贴图管线走"预生成缓存"快路径（slang 可装载时探针会成功，游戏改选
-//        "按需上传+运行时 Kaiser mip 链"，SIMD 重度滤镜在解释器上慢到每贴图数分钟、三条
-//        线程一起磨冻结帧循环——m2-engine-18 看门狗栈转储定的案）。slang 本体保持可装载
-//        （世界视图的着色器变体没有预编译，运行时编译离不开它——十四跑 Magenta 之死）。
+//        .Conservative（注：探针结果有磁盘缓存 gpu-profile.bin，缓存在时探针根本不跑——
+//        此补丁是兜底，防将来缓存失效后重新探针）。
+//     7. 贴图上传走便宜路径：CompletedChainTextureSource::get_MipCount → 返回 stored 的
+//        实际 mip 数——资产包命中后的上传永远只读已存层（纯 memcpy、BC7 原样上 GPU），
+//        "BC7 解码 → Kaiser 补链 → 重编码"的昂贵路径从上传不可达（m2-engine-19 栈转储
+//        定案；与 slang/探针/缓存历史全脱钩）。代价：mip 层数少于元数据要求，远景画质略降。
 //   成功写 port17-setup.stamp（宿主认它决定进引擎还是先跑 setup）。
 using System;
 using System.Collections.Generic;
@@ -71,6 +73,7 @@ namespace Port17Setup
                 RedirectProcessPath(game, ref changed, ref kept);
                 RetargetWaylithClr(game, ref changed, ref kept);
                 ForceConservativeTier(game, ref changed, ref kept);
+                CheapTextureChain(game, ref changed, ref kept);
                 MarkArm64(game);
             }
             catch (Exception e)
@@ -78,8 +81,8 @@ namespace Port17Setup
                 Say("[setup] failed: " + e);
                 return 3;
             }
-            File.WriteAllLines(Path.Combine(game, "port17-setup.v6.stamp"),
-                new[] { "Port17Setup v6", "changed=" + changed, "kept=" + kept });
+            File.WriteAllLines(Path.Combine(game, "port17-setup.v7.stamp"),
+                new[] { "Port17Setup v7", "changed=" + changed, "kept=" + kept });
             Say($"[setup] done: {changed} rewritten, {kept} already");
             return 0;
         }
@@ -540,7 +543,63 @@ namespace Port17Setup
             }
         }
 
-        // ---- 7. 机器类型 AMD64 → ARM64（原地 2 字节，幂等） ----
+        // ---- 7. 贴图上传走便宜路径（CompletedChainTextureSource 只暴露 stored 的 mip 数） ----
+
+        // m2-engine-19 看门狗栈转储的续案：贴图上传命中资产包后，若挂载点元数据要求的
+        // mip 数多于包文件自带的，TryOpenPackTexture 会包一层 CompletedChainTextureSource，
+        // 读取高层 mip 时现场做"BC7 解码 → RGBA32 → Kaiser 补链 → 重编码回 BC7"——SIMD
+        // 重度四连，解释器上每贴图数分钟、三条线程一起磨、帧循环冻结（十五/十六跑的
+        // "卡 Initializing"）。这个补丁把包装器的 get_MipCount 改成返回 stored（包内源）
+        // 的实际 mip 数：BuildCacheUploads 只排 stored 层、每层走 PackedTextureSource 的
+        // 纯 memcpy，昂贵的 Chain() 从上传路径不可达——BC7 原样上 GPU（M4 原生支持），
+        // 与 slang/探针/缓存历史全脱钩。代价：贴图 mip 层数少于元数据要求（远景画质
+        // 略降），可玩性优先。
+        private static void CheapTextureChain(string game, ref int changed, ref int kept)
+        {
+            const string dll = "Waylith.dll";
+            const string type = "Waylith.Graphics.Textures.CompletedChainTextureSource";
+            const string iface = "Waylith.Graphics.Textures.ITextureCacheSource";
+            var asm = Open(game, dll);
+            if (asm == null)
+            {
+                Say($"[setup] {dll}: not present, skipped");
+                return;
+            }
+            using (asm)
+            {
+                var t = FindType(asm, type) ?? throw new InvalidOperationException($"{dll}: {type} 不在");
+                var m = t.Methods.FirstOrDefault(x => x.Name == "get_MipCount" && x.HasBody)
+                    ?? throw new InvalidOperationException($"{dll}: {type}::get_MipCount 不在——版本变了？");
+                bool patched = m.Body.Instructions.Count == 4 &&
+                    m.Body.Instructions[0].OpCode == OpCodes.Ldarg_0 &&
+                    m.Body.Instructions[1].OpCode == OpCodes.Ldfld &&
+                    m.Body.Instructions[2].OpCode == OpCodes.Callvirt &&
+                    m.Body.Instructions[3].OpCode == OpCodes.Ret;
+                if (patched)
+                {
+                    Say($"[setup] {dll}: CompletedChainTextureSource::get_MipCount 已是 stored 直通（跳过）");
+                    kept++;
+                    return;
+                }
+                // 主构造捕获字段的真名是 "<stored>P"（ilspy 展示成参数名 stored）
+                var fStored = t.Fields.FirstOrDefault(f => f.Name == "<stored>P" || f.Name == "stored")
+                    ?? throw new InvalidOperationException($"{dll}: {type} 缺 stored 字段——版本变了？");
+                var iT = FindType(asm, iface) ?? throw new InvalidOperationException($"{dll}: {iface} 不在");
+                var iGet = iT.Methods.FirstOrDefault(x => x.Name == "get_MipCount")
+                    ?? throw new InvalidOperationException($"{dll}: {iface}::get_MipCount 不在");
+                m.Body = new MethodBody(m) { InitLocals = false, MaxStackSize = 1 };
+                var il = m.Body.GetILProcessor();
+                il.Emit(OpCodes.Ldarg_0);
+                il.Emit(OpCodes.Ldfld, fStored);
+                il.Emit(OpCodes.Callvirt, iGet);
+                il.Emit(OpCodes.Ret);
+                Save(game, dll, asm);
+                Say($"[setup] {dll}: CompletedChainTextureSource::get_MipCount → stored.MipCount（上传纯 memcpy，昂贵补链不可达）");
+                changed++;
+            }
+        }
+
+        // ---- 8. 机器类型 AMD64 → ARM64（原地 2 字节，幂等） ----
 
         private static void MarkArm64(string game)
         {
