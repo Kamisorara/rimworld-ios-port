@@ -14,4 +14,12 @@ void host_log(const char *msg);
 // 返回 Hello 的退出码；负数是宿主自身错误
 int run_probe(const char *bundle_dir);
 
+// M2 收官：游戏目录 <home>/Documents/game 里的 RimWorld.dll 上官方 CoreCLR 运行。
+// bundle_dir 同上；home = NSHomeDirectory。返回引擎退出码；负数是宿主自身错误。
+int run_engine(const char *bundle_dir, const char *home);
+
+// 三角形渲染循环的停止开关（引擎与三角形共用一个 CAMetalLayer 和 GLFW 垫片的单窗口槽，
+// 引擎启动前必须让三角形收尾）：置停止位并等循环退出（有超时，从没跑过则立刻返回）。
+void triangle_stop(void);
+
 #endif

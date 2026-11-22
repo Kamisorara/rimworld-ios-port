@@ -125,6 +125,18 @@ static PFN_vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceMemoryProperti
 static float g_dragX = 0.0f, g_dragY = -0.6f; // the dragged vertex's position (clip space)
 static volatile int g_charCount, g_lastChar;
 static volatile int g_stop;
+static volatile int g_ran, g_done; // ran: the loop started once; done: triangle_main returned
+
+// The engine button's pre-flight: stop the loop and wait for the thread to be through (the
+// engine takes the same CAMetalLayer and the shim's single window slot). Never ran → at once.
+void triangle_stop(void)
+{
+    g_stop = 1;
+    for (int waited = 0; g_ran && !g_done && waited < 200; waited++)
+        usleep(10 * 1000); // the loop checks g_stop once a frame; 2 s of patience is plenty
+    if (g_ran && !g_done)
+        logf_("三角形：停止等待超时（引擎继续，绘制可能短暂重叠）");
+}
 
 static void on_char(GLFWwindow* w, unsigned int cp)
 {
@@ -610,6 +622,7 @@ static void touch_input(void)
 
 int triangle_main(void)
 {
+    g_ran = 1;
     logf_("三角形：开始（GLFW 垫片 → libvulkan → MoltenVK → CAMetalLayer）");
     if (!glfwInit()) { logf_("三角形：glfwInit 失败"); return 1; }
     if (!glfwVulkanSupported()) { logf_("三角形：glfwVulkanSupported = FALSE（libvulkan.dylib 或 MoltenVK 没装上）"); return 2; }
@@ -624,14 +637,27 @@ int triangle_main(void)
     glfwSetCharCallback(window, on_char);
     glfwSetKeyCallback(window, on_key);
 
-    if (!create_instance()) return 4;
+// The early ways out give the shim's window slot back too: an engine started after a failed
+// triangle would otherwise meet "only one window is available on iOS" instead of its own error.
+#define TRI_FAIL(code, expr) \
+    do { \
+        if (!(expr)) { \
+            glfwDestroyWindow(window); \
+            glfwTerminate(); \
+            g_done = 1; \
+            return (code); \
+        } \
+    } while (0)
+    TRI_FAIL(4, create_instance());
     VkResult surfaceResult = glfwCreateWindowSurface(g_instance, window, NULL, &g_surface);
-    if (surfaceResult != 0) { logf_("三角形：glfwCreateWindowSurface 失败 VkResult=%d", (int)surfaceResult); return 5; }
-    if (!pick_device_and_queue()) return 6;
-    if (!create_swapchain()) return 7;
-    if (!create_pipeline()) return 8;
-    if (!create_vertices()) return 9;
-    if (!create_sync()) return 10;
+    if (surfaceResult != VK_SUCCESS) logf_("三角形：glfwCreateWindowSurface 失败 VkResult=%d", (int)surfaceResult);
+    TRI_FAIL(5, surfaceResult == VK_SUCCESS);
+    TRI_FAIL(6, pick_device_and_queue());
+    TRI_FAIL(7, create_swapchain());
+    TRI_FAIL(8, create_pipeline());
+    TRI_FAIL(9, create_vertices());
+    TRI_FAIL(10, create_sync());
+#undef TRI_FAIL
     VK_GET(g_instance, vkBeginCommandBuffer)
     VK_GET(g_instance, vkEndCommandBuffer)
     VK_GET(g_instance, vkResetCommandBuffer)
@@ -736,5 +762,10 @@ int triangle_main(void)
     logf_("三角形：渲染循环结束（%ld 帧）", frames);
     vkDeviceWaitIdle(g_device);
     vkUnmapMemory(g_device, g_vertexMemory);
+    // Give the shim's single window slot back before the done flag: the engine's glfwInit /
+    // glfwCreateWindow (or a re-run after a stop) may come the moment this returns.
+    glfwDestroyWindow(window);
+    glfwTerminate();
+    g_done = 1;
     return 0;
 }

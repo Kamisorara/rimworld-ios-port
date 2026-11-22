@@ -21,6 +21,7 @@ int triangle_main(void);
 int audio_test(void);
 int libs_check(void);
 static int run_probe_thread(void);
+static int engine_thread(void);
 
 static UITextView *g_text = nil;
 
@@ -47,6 +48,9 @@ static void append_log(const char *msg)
     boot_log([NSString stringWithUTF8String:msg]);
     NSString *line = [NSString stringWithUTF8String:msg];
     dispatch_async(dispatch_get_main_queue(), ^{
+        // 引擎把 stdout 整个泵进来，覆盖层不能无界增长：留尾部的量（port17-ui.log 有全文）。
+        if (g_text.text.length > 200000)
+            g_text.text = [g_text.text substringFromIndex:g_text.text.length - 100000];
         g_text.text = [g_text.text stringByAppendingString:
                               [line stringByAppendingString:@"\n"]];
         NSRange end = { g_text.text.length - 1, 1 };
@@ -340,6 +344,7 @@ static void run_on_big_thread(int (*fn)(void))
 {
     BOOL m_triangleRan;
     BOOL m_probeRan;
+    BOOL m_engineRan;
 }
 
 - (void)viewDidLoad
@@ -368,7 +373,12 @@ static void run_on_big_thread(int (*fn)(void))
     g_text.hidden = YES;
     [self.view addSubview:g_text];
 
-    // The buttons of the diagnostics: the triangle (auto-runs), the .NET probe, the log, the keyboard.
+    // The buttons of the diagnostics: the engine (M2's closing line), the triangle (auto-runs),
+    // the .NET probe, the log, the keyboard, the audio, the libraries.
+    UIButton *engineBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [engineBtn setTitle:@"引擎" forState:UIControlStateNormal];
+    [engineBtn.titleLabel setFont:[UIFont boldSystemFontOfSize:17]];
+    [engineBtn addTarget:self action:@selector(engineTapped:) forControlEvents:UIControlEventTouchUpInside];
     UIButton *tri = [UIButton buttonWithType:UIButtonTypeSystem];
     [tri setTitle:@"三角形" forState:UIControlStateNormal];
     [tri addTarget:self action:@selector(triangleTapped:) forControlEvents:UIControlEventTouchUpInside];
@@ -391,7 +401,7 @@ static void run_on_big_thread(int (*fn)(void))
     bar.translatesAutoresizingMaskIntoConstraints = NO;
     bar.axis = UILayoutConstraintAxisHorizontal;
     bar.spacing = 12;
-    for (UIView *v in @[tri, probe, logBtn, kbBtn, audioBtn, libsBtn]) [bar addArrangedSubview:v];
+    for (UIView *v in @[engineBtn, tri, probe, logBtn, kbBtn, audioBtn, libsBtn]) [bar addArrangedSubview:v];
 
     [self.view addSubview:bar];
     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
@@ -440,6 +450,8 @@ static void run_on_big_thread(int (*fn)(void))
     NSString *prev = [NSString stringWithContentsOfFile:uiPath
                                               encoding:NSUTF8StringEncoding
                                                  error:nil];
+    if (prev.length > 32000)
+        prev = [prev substringFromIndex:prev.length - 32000]; // 引擎会话的日志很大，覆盖层只留尾部
     if (prev.length > 0) {
         g_text.text = prev;
         NSRange end = { g_text.text.length - 1, 1 };
@@ -477,6 +489,24 @@ static void run_on_big_thread(int (*fn)(void))
     // 布局定了窗口尺寸才有效：attach 时（viewDidLoad）视图还是零尺寸，旋转/Stage
     // 变化也走这里。垫片自己判断尺寸没变就什么都不做。
     glfwIosViewResized();
+}
+
+- (void)engineTapped:(id)sender
+{
+    if (m_engineRan) {
+        append_log("引擎已跑过一次；CoreCLR 单实例，重启 app 才能再跑");
+        return;
+    }
+    m_engineRan = YES;
+    if (m_probeRan)
+        append_log("注意：探针已用过 CoreCLR——引擎的 coreclr_initialize 大概率 0x80131022，重启 app 直接点「引擎」最稳");
+    append_log("停止三角形，启动引擎（Documents/game 的 RimWorld.dll；首屏前 stdout 滚动是正常进度）");
+    g_text.hidden = NO; // 引导期看得见装载日志；「日志」按钮随时收起
+    // triangle_stop 最多等 2 秒循环收尾，别冻主线程。
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+        triangle_stop();
+        run_on_big_thread(engine_thread);
+    });
 }
 
 - (void)triangleTapped:(id)sender
@@ -558,6 +588,19 @@ static void *probe_thread(void *unused)
     snprintf(buf, sizeof(buf), "run_probe 返回 %d", rc);
     append_log(buf);
     return NULL;
+}
+
+// The engine on its big thread: Documents/game 的 RimWorld.dll 上官方 CoreCLR。
+static int engine_thread(void)
+{
+    boot_log(@"engine 线程启动（16MB 栈）");
+    const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];
+    const char *home = [NSHomeDirectory() UTF8String];
+    int rc = run_engine(bundle, home);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "run_engine 返回 %d", rc);
+    append_log(buf);
+    return rc;
 }
 
 // run_probe wants the plain signature the thread spawner takes.
