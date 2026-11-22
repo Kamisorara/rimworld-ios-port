@@ -641,11 +641,22 @@ static int run_probe_thread(void)
 
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options
 {
-    (void)session;
-    (void)options;
-    // 探针：六跑日志的悖论（execute 未返回、我们的 UIApplicationMain 未启动，HostVC 却
-    // 起来了）——这行钉死"是谁的 UIKit 会话"调到了我们的 scene delegate。
-    append_log("⚠️ 诊断 scene 连接（我们的 SceneDelegate willConnect 被调用）");
+    // 引擎的 UIKit 会话把 scene 交到了我们手里（七跑铁证：execute 活着、引擎的
+    // UIApplicationMain 在等它的 WaylithSceneDelegate 收到 willConnect，UIKit 却调了
+    // 我们的——引擎因此永远等不到 StartApplication，黑屏"无事发生"）。这里转交：
+    // WaylithSceneDelegate 类在引擎跑起来时才注册（运行时 ClassBuilder），引擎没跑
+    // 时不存在——正好也是"进引擎还是进诊断"的判据。
+    Class waylith = NSClassFromString(@"WaylithSceneDelegate");
+    if (waylith != NULL)
+    {
+        append_log("⚠️ scene 转交引擎（WaylithSceneDelegate 在，实例化并转发 willConnect）");
+        id engineDelegate = [[waylith alloc] init];
+        scene.delegate = engineDelegate;
+        if ([engineDelegate respondsToSelector:@selector(scene:willConnectToSession:options:)])
+            [engineDelegate scene:scene willConnectToSession:session options:options];
+        return;
+    }
+    append_log("诊断 scene 连接（WaylithSceneDelegate 不在 = 引擎没跑，诊断界面）");
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
     self.window.rootViewController = [[HostVC alloc] init];
