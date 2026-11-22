@@ -561,11 +561,12 @@ int run_engine(const char *bundle_dir, const char *home)
 
     char entry[1100];
     snprintf(entry, sizeof entry, "%s/RimWorld.dll", game);
-    // exePath is the host executable (the M1 contract, verified with this runtime pack on
-    // the device; Android gave the game dll here, which the full property set makes
-    // equivalent — flipped here in one line if something path-shaped points the wrong way).
+    // exePath = 游戏目录里的 RimWorld.dll（安卓配方）：八跑定案——引擎的 Bootstrap 用
+    // Environment.ProcessPath 的目录找 Assets.zip，传宿主可执行（M1 探针的契约）会把
+    // 资源包解析到 app bundle（"asset pack … is missing"），传游戏 dll 才落在 game/。
+    // （探针当年传宿主也能跑：Hello.dll 不读资源包。）
     char exePath[1100];
-    snprintf(exePath, sizeof exePath, "%s/Port17Host", bundle_dir);
+    snprintf(exePath, sizeof exePath, "%s/RimWorld.dll", game);
     void *host = NULL;
     unsigned int domain = 0;
     host_log("初始化 CoreCLR（解释器 + 32MiB gen0 + 16MB 线程栈）…");
