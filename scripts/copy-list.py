@@ -77,6 +77,6 @@ print(f"\n机器类型：AMD64 {amd64} 个，ARM64 {arm64} 个，其它 {len(cop
 
 import sys
 if len(sys.argv) > 3:
-    with open(sys.argv[3], "w", encoding="utf-8") as f:
+    with open(sys.argv[3], "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(name for name, _ in copy) + "\n")
     print(f"清单已写 {sys.argv[3]}")

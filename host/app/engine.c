@@ -257,6 +257,18 @@ int run_engine(const char *bundle_dir, const char *home)
     if (missing)
         return -1;
 
+    // OS 探测补丁的戳（scripts/patch-os-detect.py 在 PC 上写）：5014 引擎的原生绑定只认
+    // Windows/Linux/macOS，两个静态构造（Brutal.Vulkan 的装载链、Brutal.Core.Common 的
+    // Platform 家族）在 iOS 上会翻车，补丁把那两处调用改成恒真。没有它引擎也会给出明确
+    // 报错（"Failed to load Vulkan library" / PlatformNotSupportedException）。
+    {
+        char stamp[1100];
+        snprintf(stamp, sizeof stamp, "%s/os-detect.port17", game);
+        if (!file_exists(stamp))
+            host_log("引擎：os-detect.port17 不在——Brutal.Vulkan/Brutal.Core.Common 的 OS 探测补丁没打，"
+                     "在 PC 上跑 scripts/patch-os-detect.py <game目录>（Vulkan 装载与 Platform 家族两处硬墙）");
+    }
+
     redirect_stdio(home);
     host_log("==== 引擎启动（Waylith 程序集，官方 11.0 运行时） ====");
 

@@ -47,6 +47,22 @@ Steam（1）：`com.rlabrecque.steamworks.net.dll`
 清单由 `scripts/copy-list.py <PC游戏目录> <官方 ios-arm64 运行时包 nupkg> [输出文件]` 生成
 （规则 = 安卓 Setup.cs 的取舍：托管、不在运行时包里、非 .Native./DiaSymReader）。
 
+### OS 探测补丁（拷完必跑的一步）
+
+5014 引擎的原生绑定只认 Windows/Linux/macOS，iOS 上两处静态构造是硬墙：
+`Brutal.Vulkan.dll` 的 Vulkan 装载链（iOS 全假 → "Failed to load Vulkan library"）与
+`Brutal.Core.Common.dll` 的 Platform 家族判定（→ PlatformNotSupportedException）。
+补丁在 PC 上对 game 文件夹跑（原地 5 字节/处，幂等，写 `os-detect.port17` 戳）：
+
+```
+pip install dnfile
+python scripts/patch-os-detect.py <game文件夹>        # 打补丁
+python scripts/patch-os-detect.py <game文件夹> --check  # 只看状态
+```
+
+`--check` 各报 `call 命中 1 处（可补）` 即正常。没打补丁的文件拷上机，宿主会点名提醒，
+引擎也会给出上面对应的报错——都不会静默。
+
 ## 传到 iPad
 
 任选：
