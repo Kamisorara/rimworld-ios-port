@@ -58,6 +58,7 @@ namespace Port17Setup
                 PatchOsDetection(game, ref changed, ref kept);
                 NullifyRegisterPosixSignal(game, ref changed, ref kept);
                 VoidifyLifetimeHooks(game, ref changed, ref kept); // 2.5：含 3 的删行（Hook/Dispose 已整哑）
+                RedirectProcessPath(game, ref changed, ref kept);
                 MarkArm64(game);
             }
             catch (Exception e)
@@ -65,8 +66,8 @@ namespace Port17Setup
                 Say("[setup] failed: " + e);
                 return 3;
             }
-            File.WriteAllLines(Path.Combine(game, "port17-setup.v2.stamp"),
-                new[] { "Port17Setup v2", "changed=" + changed, "kept=" + kept });
+            File.WriteAllLines(Path.Combine(game, "port17-setup.v3.stamp"),
+                new[] { "Port17Setup v3", "changed=" + changed, "kept=" + kept });
             Say($"[setup] done: {changed} rewritten, {kept} already");
             return 0;
         }
@@ -324,7 +325,56 @@ namespace Port17Setup
             op == OpCodes.Ldloc_0 || op == OpCodes.Ldloc_1 || op == OpCodes.Ldloc_2 ||
             op == OpCodes.Ldloc_3 || op == OpCodes.Ldloc_S;
 
-        // ---- 4. 机器类型 AMD64 → ARM64（原地 2 字节，幂等） ----
+        // ---- 4. 资源包路径改道（九跑）：Bootstrap.ConfigureRuntime 用 Environment.ProcessPath
+        // 的目录找 Assets.zip——iOS 上 ProcessPath 读真实进程可执行（.app 里的宿主），与
+        // host API 的 exePath 无关（安卓当年也如此，所以改写引擎）。把该方法内唯一的
+        // get_ProcessPath 调用换成读环境变量 PORT17_GAME_DLL（宿主在 execute 前设为
+        // <game>/RimWorld.dll），GetDirectoryName 即得 game 目录——资源包/数据全落位。
+        // CrashHandler 与 Waylith.dll 里的其余 ProcessPath 都在非启动路径，不动。
+
+        private static void RedirectProcessPath(string game, ref int changed, ref int kept)
+        {
+            const string dll = "RimWorld.dll", type = "RimWorldWaylith.Bootstrap", method = "ConfigureRuntime";
+            var asm = Open(game, dll);
+            if (asm == null)
+            {
+                Say($"[setup] {dll}: not present, skipped");
+                return;
+            }
+            using (asm)
+            {
+                var t = FindType(asm, type) ?? throw new InvalidOperationException($"{dll}: {type} 不在");
+                var m = t.Methods.FirstOrDefault(x => x.Name == method && x.HasBody)
+                    ?? throw new InvalidOperationException($"{dll}: {type}::{method} 不在");
+                var il = m.Body.GetILProcessor();
+                var hits = m.Body.Instructions.Where(i =>
+                    (i.OpCode == OpCodes.Call || i.OpCode == OpCodes.Callvirt) &&
+                    i.Operand is MethodReference mr &&
+                    mr.DeclaringType?.FullName == "System.Environment" &&
+                    mr.Name == "get_ProcessPath").ToList();
+                if (hits.Count == 0)
+                {
+                    Say($"[setup] {dll}: ConfigureRuntime 的 ProcessPath 已改道（跳过）");
+                    kept++;
+                    return;
+                }
+                var getEnv = asm.MainModule.ImportReference(
+                    typeof(Environment).GetMethod("GetEnvironmentVariable", new[] { typeof(string) }));
+                foreach (var call in hits)
+                {
+                    var ldstr = Instruction.Create(OpCodes.Ldstr, "PORT17_GAME_DLL");
+                    var callGetEnv = Instruction.Create(OpCodes.Call, getEnv);
+                    il.InsertAfter(call, callGetEnv);
+                    il.InsertAfter(call, ldstr);
+                    il.Remove(call);
+                }
+                Save(game, dll, asm);
+                Say($"[setup] {dll}: ConfigureRuntime 的 ProcessPath → 环境变量 PORT17_GAME_DLL ×{hits.Count}");
+                changed++;
+            }
+        }
+
+        // ---- 5. 机器类型 AMD64 → ARM64（原地 2 字节，幂等） ----
 
         private static void MarkArm64(string game)
         {

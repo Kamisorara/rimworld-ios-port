@@ -388,7 +388,7 @@ int run_engine(const char *bundle_dir, const char *home)
     // 多半是文件后来被替换过。
     {
         char stamp[1100], legacyA[1100], legacyB[1100];
-        snprintf(stamp, sizeof stamp, "%s/port17-setup.v2.stamp", game);
+        snprintf(stamp, sizeof stamp, "%s/port17-setup.v3.stamp", game);
         snprintf(legacyA, sizeof legacyA, "%s/os-detect.port17", game);
         snprintf(legacyB, sizeof legacyB, "%s/platform.port17", game);
         if (!file_exists(stamp) && !(file_exists(legacyA) && file_exists(legacyB)))
@@ -597,6 +597,9 @@ int run_engine(const char *bundle_dir, const char *home)
     }
 
     unsigned int exitCode = 0;
+    // 资源包路径改道的供给端（Setup.cs 的 RedirectProcessPath 把引擎的 Environment.ProcessPath
+    // 读取换成这个变量）：Bootstrap 用它的目录找 Assets.zip。
+    setenv("PORT17_GAME_DLL", entry, 1);
     // 硬打点（直写文件，绕开一切缓冲与回调链）：六跑日志出现"execute 未返回但诊断 UI
     // 却起来了"的悖论——这些行钉死 execute 的进出时刻。
     trace_mark(home, "execute 进入（主线程交给托管 Main）");
