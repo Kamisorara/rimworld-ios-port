@@ -8,6 +8,7 @@
 // The framework comes from the bundle's runtime pack; the game folder's own copies of the
 // framework assemblies never make it into the TPA list (the name dedup of Android's add_assemblies).
 #include "host.h"
+#include "jit26.h"
 
 #include <dlfcn.h>
 #include <dirent.h>
@@ -18,11 +19,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <libkern/OSCacheControl.h>
-#include <mach/mach.h>
 
 typedef int (*coreclr_initialize_fn)(
     const char *exePath, const char *appDomainName, int propertyCount,
@@ -34,84 +32,8 @@ typedef int (*coreclr_execute_assembly_fn)(
 typedef int (*coreclr_shutdown_fn)(void *hostHandle, unsigned int domainId);
 typedef void (*coreclr_set_error_writer_fn)(void (*)(const char *message));
 
-// ---- JIT authorization (M3) ----
-// iOS grants no dynamic-codesigning entitlement to sideloaded apps; the JIT authorization
-// bit is CS_DEBUGGED, set the moment a debugger (StikDebug's debugserver session, an
-// Xcode attach, …) takes the task over. csops on one's own pid is unprivileged.
-// CS_DEBUGGED = 0x10000000 (xnu cs_blobs.h: "currently or has previously been debugged
-// and allowed to run with invalid pages"). MeloNX's checkDebugged() is this exact call.
-extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
-#define PORT17_CS_OPS_STATUS 0
-#define PORT17_CS_DEBUGGED 0x10000000u
-
-static int jit_cs_debugged(void)
-{
-    unsigned int flags = 0;
-    if (csops(getpid(), PORT17_CS_OPS_STATUS, &flags, sizeof flags) != 0)
-        return -1; // can't tell: treat as unauthorized, the log says so
-    return (flags & PORT17_CS_DEBUGGED) ? 1 : 0;
-}
-
-// The allocation-chain probe of the dual-mapping recipe the runtime itself uses on Apple
-// arm64 (IsWXORXEnabled() is unconditionally true there; the official ios-arm64 binary
-// imports vm_remap + sys_icache_invalidate and never pthread_jit_write_protect_np):
-// mmap one RX page, vm_remap a copy=FALSE alias, vm_protect the alias RW, write a pattern
-// through the alias, read it back through the RX view. NOTHING here may fault: the probe
-// runs exactly when a debugger holds the session (CS_DEBUGGED), and under an attach a
-// SIGSEGV belongs to the debugserver — the in-process handler never gets it and the
-// process is left standing at the fault (M1's fault-loop lesson; the 0.2.6 execution
-// probe died exactly there: black screen, log cut right after the engine banner,
-// m2-jit-1). Whether the kernel also EXECUTES such a page is judged by the runtime
-// itself; if it cannot, the interpreter fallback of InterpMode=0 (m2-engine-21's
-// observed shape: runs slow, no crash) is the worst case.
-static int jit_probe_dualmap(void)
-{
-    static const uint8_t pattern[16] = {
-        0x40, 0x05, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6, // mov x0,#42 ; ret (as data)
-        1, 2, 3, 4, 5, 6, 7, 8,
-    };
-    char line[192];
-    long ps = sysconf(_SC_PAGESIZE);
-    if (ps <= 0)
-        return 0;
-    size_t page = (size_t)ps;
-    void *rx = mmap(NULL, page, PROT_READ | PROT_EXEC, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (rx == MAP_FAILED)
-    {
-        host_log("引擎：JIT 探针 mmap RX 失败（无授权时的 EPERM 是最常见形态）");
-        return 0;
-    }
-    vm_address_t rw = 0;
-    vm_prot_t cur = 0, max = 0;
-    kern_return_t kr = vm_remap(mach_task_self(), &rw, (vm_size_t)page, 0, VM_FLAGS_ANYWHERE,
-                                mach_task_self(), (vm_address_t)rx, FALSE,
-                                &cur, &max, VM_INHERIT_NONE);
-    if (kr != KERN_SUCCESS)
-    {
-        snprintf(line, sizeof line, "引擎：JIT 探针 vm_remap 失败（kern 0x%x）", kr);
-        host_log(line);
-        munmap(rx, page);
-        return 0;
-    }
-    kr = vm_protect(mach_task_self(), rw, (vm_size_t)page, 0, VM_PROT_READ | VM_PROT_WRITE);
-    if (kr != KERN_SUCCESS)
-    {
-        snprintf(line, sizeof line, "引擎：JIT 探针 vm_protect RW 失败（kern 0x%x）", kr);
-        host_log(line);
-        munmap((void *)rw, page);
-        munmap(rx, page);
-        return 0;
-    }
-    memcpy((void *)rw, pattern, sizeof pattern);
-    sys_icache_invalidate(rx, page);
-    int coherent = memcmp(rx, pattern, sizeof pattern) == 0;
-    munmap((void *)rw, page);
-    munmap(rx, page);
-    snprintf(line, sizeof line, "引擎：JIT 探针链路通（RX=%p RW=%p，别名一致=%d）",
-             rx, (void *)rw, coherent);
-    host_log(line);
-    return coherent ? 1 : 0;
-}
+// The JIT26 arena acquisition lives in jit26.c (ported from the M1 probe host);
+// the mode gate below asks it only when CS_DEBUGGED says a serve session holds us.
 
 
 // The tail of the engine's stderr, logged when the run ends: the runtime's last words before
@@ -493,23 +415,28 @@ int run_engine(const char *bundle_dir, const char *home)
     // Threads started without a size (the loading thread, the XML loader's): Darwin leaves
     // them 512 KB where the PC's exe gives 1.5 MB — 16 MB of address space, as the main thread.
     setenv("DOTNET_Thread_DefaultStackSize", "0x1000000", 1);
-    // The interpreter line of M1: the official iOS pack is a JIT/interpreter mix and InterpMode=2
-    // (disable R2R, run interpreted) is what made it start at all.
-    //
-    // JIT (M3): authorization is measured, not assumed. CS_DEBUGGED (csops on our own pid —
-    // StikDebug's session sets it before our first instruction) plus the dual-mapping probe
-    // (the runtime's own W^X recipe, executed once here) gate an AUTOMATIC switch to
-    // InterpMode=0 + ReadyToRun=0; anything less keeps the interpreter. jit.on remains the
-    // manual force (with a loud warning when it is forced without authorization — the runtime
-    // dies at startup in that shape). runtime.env still overrides both; the unified report
-    // below tells what actually took effect.
-    int csdbg = jit_cs_debugged();
+    // The execution mode (M3 JIT line, hybrid runtime): the arena decides, not a guess.
+    // Under a StikDebug serve session (rw17-jit26.js) the host acquires the debugger-
+    // granted arena itself (jit26.c: brk handshake -> RW alias -> detach -> execution
+    // probe -> PORT17_JIT_* handoff) and the runtime starts in JIT mode over it; any
+    // other launch keeps the interpreter (InterpMode=2, the official pack's exact
+    // configuration - the allocator never touches the arena). The interpreter dylib of
+    // the hybrid build is loaded on demand through DOTNET_InterpreterName (absolute
+    // path: bare-name dlopen does not inherit the app bundle's directories).
+    // jit.on remains the manual force; runtime.env still overrides both; the unified
+    // report below tells what actually took effect.
+    {
+        char interp[1100];
+        snprintf(interp, sizeof interp, "%s/libclrinterpreter.dylib", bundle_dir);
+        setenv("DOTNET_InterpreterName", interp, 1);
+    }
+    int csdbg = port17_jit26_cs_debugged();
     snprintf(buf, sizeof buf, "引擎：JIT 授权检测 CS_DEBUGGED=%d（%s）",
              csdbg,
              csdbg == 1 ? "调试器已接管（StikDebug/Xcode 拉起）"
                         : csdbg == 0 ? "未接管（普通启动，无授权）" : "csops 查询失败");
     host_log(buf);
-    int dualOk = csdbg == 1 ? jit_probe_dualmap() : 0; // 探针每步自带日志（0.2.6 教训：死点要留名）
+    int arena = csdbg == 1 ? port17_jit26_acquire() : 0; // 每步自带日志（0.2.6 教训：死点要留名）
     char jitFlag[1100];
     snprintf(jitFlag, sizeof jitFlag, "%s/jit.on", game);
     if (file_exists(jitFlag))
@@ -517,15 +444,15 @@ int run_engine(const char *bundle_dir, const char *home)
         // jit.on：强制 JIT（runtime.env 仍可覆盖——生效模式见下方统一上报）。
         setenv("COMPlus_InterpMode", "0", 1);
         setenv("DOTNET_ReadyToRun", "0", 1);
-        if (csdbg != 1)
-            host_log("引擎：⚠️ jit.on 强制 JIT 但 CS_DEBUGGED 未置位——未经调试器拉起时运行时退回解释器执行（m2-engine-21 实测形态：不崩但无 JIT 收益）");
+        if (arena != 1)
+            host_log("引擎：⚠️ jit.on 强制 JIT 但竞技场未就绪——混合运行时下 JIT 模式没有竞技场会在 coreclr_initialize 失败（黑屏即此）；请经 StikDebug + rw17-jit26.js 拉起，或删掉 jit.on 用解释器");
         host_log("引擎：jit.on 在——InterpMode=0 + R2R 关（runtime.env 可覆盖）");
     }
-    else if (csdbg == 1 && dualOk == 1)
+    else if (arena == 1)
     {
         setenv("COMPlus_InterpMode", "0", 1);
         setenv("DOTNET_ReadyToRun", "0", 1);
-        host_log("引擎：JIT 已授权（CS_DEBUGGED + 双映射探针通过）——自动 InterpMode=0 + R2R 关");
+        host_log("引擎：竞技场就绪（[jit26] 链路见上）——自动 InterpMode=0 + R2R 关");
     }
     else
     {

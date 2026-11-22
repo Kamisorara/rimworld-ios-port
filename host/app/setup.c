@@ -94,6 +94,12 @@ static int run_setup_now(const char *bundle, const char *game)
     }
 
     setenv("COMPlus_InterpMode", "2", 1); // the M1 contract, same line as the engine
+    {
+        // 混合运行时的解释器 dylib 按需 dlopen：裸名搜索不含 bundle 目录，绝对路径指路。
+        char interp[1100];
+        snprintf(interp, sizeof interp, "%s/libclrinterpreter.dylib", bundle);
+        setenv("DOTNET_InterpreterName", interp, 1);
+    }
     setenv("COMPlus_EnableCrashReport", "1", 1);
 
     // TPA: the bundle's runtime plus the setup and Cecil themselves.

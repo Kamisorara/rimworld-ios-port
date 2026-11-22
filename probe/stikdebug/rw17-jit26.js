@@ -98,15 +98,23 @@ log("attached to pid " + pid + "; waiting for the app's prepare brk (coreclr_ini
 let prepares = 0;
 for (let stop = 1; ; stop++) {
     if (stop > MAX_STOPS) fail("no detach after " + MAX_STOPS + " stops");
-    const s = parseStop(command("c"));
+    const reply = command("c");
+    const s = parseStop(reply);
     const insn = command("m" + s.pc.toString(16) + ",4");
     if (insn.toLowerCase() !== BRK) {
-        // Not our trap. A fault (SIGSEGV/SIGBUS/SIGILL from anything the app
-        // does under attach) must be REPORTED with its pc, never blindly
-        // continued: a blind 'c' re-executes the faulting instruction forever
-        // - that was the old script's freeze loop.
-        fail("stop " + stop + " at pc 0x" + s.pc.toString(16) +
-             " is not brk #0xf00d (" + insn.slice(0, 16) + "); signal-level stop - report this pc, do not just resume");
+        // Not our trap: a genuine signal (SIGSEGV/SIGBUS/SIGILL...) from
+        // anything the app does under attach. 0.2.7 lesson (port17-jit.js):
+        // CoreCLR's SEH rides on SIGSEGV (managed NREs) and thread suspension
+        // on its own signals - a swallowed stop hangs the app, a failed
+        // session leaves it stopped forever (black screen). Report it, then
+        // RE-DELIVER the signal with vCont;S and keep serving; the MAX_STOPS
+        // guard bounds pathological loops.
+        const m = /^T([0-9a-fA-F]{2})/.exec(reply);
+        const sigNo = m ? m[1] : null;
+        log("rw17-jit26: signal stop (sig 0x" + (sigNo || "??") + ", pc 0x" + s.pc.toString(16) +
+            ", insn " + insn.slice(0, 16) + ") - re-delivering and keep serving");
+        if (sigNo && s.thread) send_command("vCont;S" + sigNo + ":" + s.thread);
+        continue;
     }
     expectOK("P20=" + leHex(s.pc + 4n) + ";thread:" + s.thread + ";", "skipping the brk");
 

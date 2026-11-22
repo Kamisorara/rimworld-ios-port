@@ -18,7 +18,11 @@ mkdir -p "$APP"
 
 [ -f "$MVK/.fetched" ] || { echo "::error::MoltenVK 未就位，先跑 host/fetch-moltenvk.sh"; exit 1; }
 command -v glslangValidator >/dev/null || { echo "::error::glslangValidator 不在（brew install glslang）"; exit 1; }
-[ -e "$ROOT/runtime-out-official/libcoreclr.dylib" ] || { echo "::error::官方运行时包未就位（scripts/fetch-official-runtime.sh）"; exit 1; }
+# 运行时套来源（JIT 线复活：默认 = 自建混合套 runtime-out-hybrid/，m2-host 用
+# scripts/fetch-hybrid-runtime.sh 从 m1-probe 的 Release 资产取；本地没跑过
+# runtime 构建时也可 PORT17_RUNTIME_DIR=runtime-out-official 回官方套出解释器包）。
+RT_DIR="${PORT17_RUNTIME_DIR:-$ROOT/runtime-out-hybrid}"
+[ -e "$RT_DIR/libcoreclr.dylib" ] || { echo "::error::运行时包未就位（$RT_DIR；scripts/fetch-hybrid-runtime.sh，或 PORT17_RUNTIME_DIR 指别处）"; exit 1; }
 
 # 1) 着色器：GLSL -> SPIR-V（目标环境 vulkan1.1——引擎的地板，MoltenVK 1.4 之上照跑）
 for s in vert frag; do
@@ -281,7 +285,7 @@ xcrun -sdk "$SDK" clang \
     -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics -framework Metal -framework CoreFoundation \
     -framework UniformTypeIdentifiers \
     -o "$APP/Port17Host" \
-    "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/engine.c" "$ROOT/host/app/setup.c" "$ROOT/host/app/unzip.c" "$ROOT/host/app/triangle.c" "$ROOT/host/app/audio_test.c" "$ROOT/host/app/libs_check.c"
+    "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/engine.c" "$ROOT/host/app/setup.c" "$ROOT/host/app/unzip.c" "$ROOT/host/app/triangle.c" "$ROOT/host/app/audio_test.c" "$ROOT/host/app/libs_check.c" "$ROOT/host/app/jit26.c"
 cp "$ROOT/host/app/Info.plist" "$APP/"
 # 正规军零件（与能在文件 app 出文件夹的参照包对齐）：PkgInfo + 图标（host/app/icons/
 # 里的正式图标由 rimworld_icon.jpg 经 System.Drawing 转出；scripts/gen-icon.py 只在
@@ -295,8 +299,9 @@ cp "$ROOT/host/app/icons/icon-1024.png" "$ROOT/build-m2/AppIcon1024.png"
 
 # 6) .NET 探针诊断件（M1 全套：官方运行时 + Hello，平铺 .app 根——CoreLib 同目录原则）
 dotnet build "$ROOT/probe/hello/hello.csproj" -c Release -o "$ROOT/build-m2/hello"
-cp "$ROOT"/runtime-out-official/*.dylib "$APP/"
-cp "$ROOT"/runtime-out-official/*.dll "$APP/"
+cp "$RT_DIR"/*.dylib "$APP/"
+cp "$RT_DIR"/*.dll "$APP/"
+[ -e "$APP/libclrinterpreter.dylib" ] || echo "::warning::混合套里没有 libclrinterpreter.dylib——解释器会话起不来（fetch 到旧资产？）"
 cp "$ROOT/build-m2/hello/Hello.dll" "$APP/"
 
 # 6.5) 出包自检：install_name 必须是 @rpath（默认值是构建机绝对路径，设备上 dyld 拒载而 CI 全绿）；

@@ -9,6 +9,7 @@ on:
     paths:
       - 'host/**'
       - 'scripts/fetch-official-runtime.sh'
+      - 'scripts/fetch-hybrid-runtime.sh'
       - '.github/workflows/m2-host.yml'
   workflow_dispatch:
 
@@ -52,8 +53,8 @@ jobs:
           ./host/fetch-slang.sh
           ./host/build-slang.sh
 
-      - name: 取官方 ios-arm64 运行时包（.NET 探针诊断件用）
-        run: ./scripts/fetch-official-runtime.sh 11.0.0
+      - name: 取自建混合运行时（m1-probe 的 Release 资产：JIT 静态链入 + 解释器 dylib）
+        run: ./scripts/fetch-hybrid-runtime.sh
 
       - name: glslang（三角形 SPIR-V）
         run: brew install glslang

@@ -575,6 +575,12 @@ int run_probe(const char *bundle_dir)
     // JIT 并撞上 W^X 写保护问题。COMPlus_InterpMode=2（clrconfigvalues.h 的
     // 官方旋钮）强制全程解释器，绕开 JIT 加载路径。
     setenv("COMPlus_InterpMode", "2", 1);  // 2=全程解释且禁 R2R（iOS 本就无 R2R，最确定）
+    {
+        // 混合运行时的解释器 dylib 按需 dlopen：裸名搜索不含 bundle 目录，绝对路径指路。
+        char interp[1100];
+        snprintf(interp, sizeof interp, "%s/libclrinterpreter.dylib", bundle_dir);
+        setenv("DOTNET_InterpreterName", interp, 1);
+    }
     host_log("解释器路线：跳过竞技场握手；COMPlus_InterpMode=2 强制解释器并禁 R2R（绕开混合构建死点）");
 #elif TARGET_OSX || TARGET_OS_SIMULATOR
     // macOS/模拟器：宿主不获取竞技场——macOS 走 runtime 的种子扫描/RWX 路径，

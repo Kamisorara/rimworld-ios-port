@@ -37,21 +37,36 @@
         const sig = m ? m[1] : null;
         log("port17-jit: stopped (sig 0x" + sig + ", tid " + tid + ")");
 
-        // A breakpoint instruction (brk) the app itself asked for? Not ours — Port17
-        // emits none; skip any such stop with a plain continue.
+        // A breakpoint instruction (brk) the app itself asked for? The hybrid
+        // runtime's JIT26 protocol emits brk #0xf00d handshakes served by
+        // rw17-jit26.js; if THIS (official-runtime-style) script is running
+        // against a hybrid app, skip the brk (pc+4, plain continue) so the
+        // trampoline returns with x0 untouched (NULL) and the host aborts the
+        // acquisition cleanly - instead of re-executing the brk forever.
         let isBrk = false;
+        let brkTid = null;
+        let brkPc = null;
         if (pcHex) {
             // Register values in stop packets are LITTLE-ENDIAN hex (universal.js
             // byte-reverses for a reason): decode before addressing memory.
             const pcLe = parseInt(pcHex.match(/../g).reverse().join(""), 16);
+            brkPc = pcLe;
             const instr = send_command("m" + pcLe.toString(16) + ",4");
             if (/^[0-9a-f]+$/i.test(instr)) {
                 const u32 = parseInt(instr.match(/../g).reverse().join(""), 16);
                 isBrk = ((u32 >>> 0) & 0xFFE0001F) === 0xD4200000;
             }
         }
+        if (isBrk && brkPc !== null) {
+            log("port17-jit: brk stop at 0x" + brkPc.toString(16) + " - skipping (the hybrid runtime wants rw17-jit26.js for its handshakes)");
+            const pcPlus4 = brkPc + 4;
+            const bytes = [];
+            for (let i = 0; i < 8; i++) { bytes.push(pcPlus4 & 0xff); pcPlus4 /= 256; }
+            const le = bytes.map(b => Math.floor(b).toString(16).padStart(2, "0")).join("");
+            if (tid) send_command("P20=" + le + ";thread:" + tid + ";");
+        }
         // Anything that is not a brk is a real signal: hand it back untouched.
-        if (!isBrk && sig && tid) {
+        else if (sig && tid) {
             log("port17-jit: re-delivering signal 0x" + sig);
             send_command("vCont;S" + sig + ":" + tid);
         }

@@ -129,8 +129,11 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **三十轮（2026-11-22 深夜四更，0.2.7 真机裁决）：官方 iOS 包 = 解释器专用构建，JIT 物理不可能——M1"混合构建"结论正式推翻**：m2-jit-2（StikDebug 会话拉起 0.2.7）：授权链三行全绿（`CS_DEBUGGED=1` → `探针链路通（RX/RW 别名一致=1）` → `生效执行模式 = JIT（InterpMode=0）`），0.2.6 黑屏修复验证 ✓——**但装载停摆与解释器逐秒一致**（对照 m2-engine-20：两轮都是 +397/+382、+332/+367、**三连 +0 共 45 秒**、+66/+82 恢复窗——def 装载是纯托管 CPU 活，真 JIT 不可能一秒不差）。源码+二进制双重定位：vanilla `eeconfig.cpp` 里 InterpMode=0 且未设 `DOTNET_Interpreter` 时解释器仍运行的解释唯一剩 `!FEATURE_DYNAMIC_CODE_COMPILED`；二进制判据 `"Failed to load JIT compiler"`（UTF-16，DCC=1 必有/DCC=0 编译出局）：**安卓官方包=1（判据阳性对照，安卓实测 JIT 可用）vs iOS 官方包=0**。`jitinterface.cpp UnsafeJitFunction` 结构：解释器一旦装载即接管一切编译请求；JIT 路径失败是逐方法抛 InvalidProgram（游戏会坏，不会慢）——"以解释器速度稳定运行"只有解释器一条路。libclrjit.dylib（真 RyuJIT arm64，Clang 17 构建）是包清单随附件。**JIT 的唯一出路 = M1 自建 runtime 线（--dynamiccodecompiled true，封存于 53f7a4a 单 remap 改造后、真机验证前）**。附带观察：设备 runtime.env 残留 21 轮的 `DOTNET_JitDisasm=Program:Main`（checked-build 专属，release 无害）。
 
+**三十一轮（2026-11-22 深夜五更，0.3.0）：JIT 线复活——混合运行时 + 宿主竞技场合流**：方向裁决后按四阶段路线开工。**阶段一（混合构建）**：CMake 门控（静态链接块里解释器仅非 DCC 链入——JIT 占静态位、解释器作为独立 dylib 按需 dlopen，getJit 8 符号冲突从根上消失）；`StaticInitialize` 的 W^X 强制改为仅 `InterpMode==0` 生效（解释器会话=官方包同款零竞技场零握手，JIT 会话才走 `PORT17_JIT_*` 竞技场）；`build-runtime.sh` INTERPRETER=0→1（显式定义避开生成器表达式默认值）；collect 抓 `libclrinterpreter.dylib`；缓存键 c18/c14/c13。**阶段二（宿主合流）**：`host/app/jit26.c/.h`——M1 探针宿主的竞技场获取全套移植（brk 握手→vm_remap RW 别名→detach→无调试器探针 42/43→深页抽查→PORT17_JIT_* 交接，逐行保留 eb1ab5f 终版形态）；engine.c 模式门重写（竞技场就绪→自动 InterpMode=0；否则 InterpMode=2；`DOTNET_InterpreterName` 绝对路径指解释器 dylib——裸名 dlopen 不搜 bundle 目录）；setup.c/探针 host.c 补同一 env（混合运行时下每个 coreclr_initialize 位点必须显式设 InterpMode，未设=0=强制竞技场=无交接即 E_FAIL）；build-ipa.sh 运行时目录参数化（`PORT17_RUNTIME_DIR`，默认自建混合套）+ jit26.c 入编译清单；新增 `scripts/fetch-hybrid-runtime.sh`（从 m1-probe 的 Release 资产取运行时、managed/ 摊平）；m2-host 切换运行时来源。**脚本**：rw17-jit26.js 信号停机从 fail() 改 vCont;S 原样递送（0.2.7 教训：SEH 靠 SIGSEGV，吞=卡死、会话失败=停死黑屏）；port17-jit.js 加 brk 跳过（pc+4，混合 app 配错脚本时优雅降级而非无限重执行）。**时序纪律**：阶段二推送必须等 m1-probe 绿（m2-host 从 Release 取运行时，推早了会打包旧纯 JIT 资产）。
+
 ### M3 游戏程序集上机
 - `patch.dll` 增加 iOS 目标（平台检查改写、Harmony 适配 darwin）；
+
 
 - PortHooks 的 WaylithClr.* 替身已随 M2 收官进包（见上）；剩 CoreLib 补丁对 11.0 CoreLib 的重移植（20 个 `WaylithClr.*` 开关，安卓版是对 10.0.12 做的）与 PortHooks 的启动钩子/UnityStubs/ModPrep 件；
 - `libcoreclr.dylib` 二进制补丁的 iOS 版（安卓版是 `libcoreclr.so` 两处）。
