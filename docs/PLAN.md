@@ -125,6 +125,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 - **为什么双映射是正路（证据链）**：官方 ios-arm64 libcoreclr 导 `_vm_remap`+`_sys_icache_invalidate`（无 `pthread_jit_write_protect_np`——iOS 不导出）；`IsWXORXEnabled()` 在 Apple arm64 无条件为真（runtime-110 executableallocator.cpp）——**运行时自己的 JIT 代码页就是双映射**。iOS 26+/TXM 拒绝的是自建 RWX 的执行（M1 注释正确），但双映射在 CS_DEBUGGED 下成立——MeloNX（M4 级 TXM 设备实测，`jitEnabled() = checkDebugged() && attemptToMapDualMapping()`）。universal.js 的 `_M`/brk 合作协议是 Mono/arena 需求（STS2 线），CoreCLR 不需要。
 - **StikDebug 会话脚本重写（probe/stikdebug/port17-jit.js）**：修掉 vAttach 后双重 `c`（对齐 universal.js 的单 c 循环）；停机信号原样递送（`vCont;S`）——CoreCLR 的 SEH 靠 SIGSEGV 实现 NRE，吞信号=卡死游戏；stop 包寄存器值小端字节序修正。拉起流程 = StikDebug 会话先 spawn app 再 vAttach → CS_DEBUGGED 在我们第一条指令前就位。**用户侧前置**：配对文件 + LocalDevVPN 回环 VPN + WiFi（StikDebug README）。
 
+**二十九轮（2026-11-22 深夜三更，0.2.7）：JIT 首航黑屏——探针执行段在 attach 态不可 fault，重做为纯分配链探针**：m2-jit-1 首次 StikDebug 会话拉起：日志停在「引擎启动」横幅后一字不出（连授权检测行都没到），黑屏不回落诊断界面＝进程卡在异常现场。死点定位＝0.2.6 探针的**执行段**（`mov x0,#42;ret` 走 RX 调用）——**attach 态下 mach 异常先送 debugserver，进程内 SIGSEGV 处理器（sigsetjmp 兜底）永远不跑**，fault 即卡死（M1 fault-loop 教训的重犯：那次是探针 fault→停→脚本 c→再 fault 无限循环）。0.2.7 探针重做：**全程不可 fault**——只验分配链（mmap RX→vm_remap 别名→vm_protect RW→经别名写、经 RX 读回比对），每步即时落日志（死点要留名）；执行可行性交运行时本体裁决（其失败形态是 21 轮实测的解释器回退，不崩）。授权检测行也拆开：CS_DEBUGGED 先打、探针各步自打。若 0.2.7 探针链路全通而运行时自身在代码页执行上 fault-loop（脚本窗口将刷 stopped 行），则转 M1/STS2 竞技场线（debugserver `_M` 代分配）。
+
 ### M3 游戏程序集上机
 - `patch.dll` 增加 iOS 目标（平台检查改写、Harmony 适配 darwin）；
 - PortHooks 的 WaylithClr.* 替身已随 M2 收官进包（见上）；剩 CoreLib 补丁对 11.0 CoreLib 的重移植（20 个 `WaylithClr.*` 开关，安卓版是对 10.0.12 做的）与 PortHooks 的启动钩子/UnityStubs/ModPrep 件；

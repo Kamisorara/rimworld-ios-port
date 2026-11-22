@@ -14,8 +14,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
-#include <setjmp.h>
-#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,69 +52,65 @@ static int jit_cs_debugged(void)
     return (flags & PORT17_CS_DEBUGGED) ? 1 : 0;
 }
 
-// The execution probe of the dual-mapping recipe the runtime itself uses on Apple arm64
-// (IsWXORXEnabled() is unconditionally true there; the official ios-arm64 binary imports
-// vm_remap + sys_icache_invalidate and never pthread_jit_write_protect_np): mmap one RX
-// page, vm_remap a copy=FALSE alias, vm_protect the alias RW, write "mov x0,#42; ret",
-// flush the icache, call through the RX view. iOS 26+/TXM refuses to EXECUTE self-made
-// RWX — but this RX+RW-alias shape under CS_DEBUGGED is the sanctioned one (MeloNX's
-// testDualMappedExecution, device-proven on M4-class TXM hardware). A fault at the call
-// is caught (sigsetjmp) so a hostile kernel answers the question instead of killing us.
-static sigjmp_buf g_jitProbeJmp;
-static volatile sig_atomic_t g_jitProbeFaulted;
-static void jit_probe_fault(int sig, siginfo_t *info, void *ctx)
-{
-    (void)sig;
-    (void)info;
-    (void)ctx;
-    g_jitProbeFaulted = 1;
-    siglongjmp(g_jitProbeJmp, 1);
-}
-
+// The allocation-chain probe of the dual-mapping recipe the runtime itself uses on Apple
+// arm64 (IsWXORXEnabled() is unconditionally true there; the official ios-arm64 binary
+// imports vm_remap + sys_icache_invalidate and never pthread_jit_write_protect_np):
+// mmap one RX page, vm_remap a copy=FALSE alias, vm_protect the alias RW, write a pattern
+// through the alias, read it back through the RX view. NOTHING here may fault: the probe
+// runs exactly when a debugger holds the session (CS_DEBUGGED), and under an attach a
+// SIGSEGV belongs to the debugserver — the in-process handler never gets it and the
+// process is left standing at the fault (M1's fault-loop lesson; the 0.2.6 execution
+// probe died exactly there: black screen, log cut right after the engine banner,
+// m2-jit-1). Whether the kernel also EXECUTES such a page is judged by the runtime
+// itself; if it cannot, the interpreter fallback of InterpMode=0 (m2-engine-21's
+// observed shape: runs slow, no crash) is the worst case.
 static int jit_probe_dualmap(void)
 {
-    static const uint32_t code[2] = { 0x52800540, 0xD65F03C0 }; // mov x0,#42 ; ret
+    static const uint8_t pattern[16] = {
+        0x40, 0x05, 0x80, 0xD2, 0xC0, 0x03, 0x5F, 0xD6, // mov x0,#42 ; ret (as data)
+        1, 2, 3, 4, 5, 6, 7, 8,
+    };
+    char line[192];
     long ps = sysconf(_SC_PAGESIZE);
     if (ps <= 0)
         return 0;
     size_t page = (size_t)ps;
     void *rx = mmap(NULL, page, PROT_READ | PROT_EXEC, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (rx == MAP_FAILED)
-        return 0; // PROT_EXEC mmap EPERM: the everyday shape of "no authorization"
+    {
+        host_log("引擎：JIT 探针 mmap RX 失败（无授权时的 EPERM 是最常见形态）");
+        return 0;
+    }
     vm_address_t rw = 0;
     vm_prot_t cur = 0, max = 0;
     kern_return_t kr = vm_remap(mach_task_self(), &rw, (vm_size_t)page, 0, VM_FLAGS_ANYWHERE,
                                 mach_task_self(), (vm_address_t)rx, FALSE,
                                 &cur, &max, VM_INHERIT_NONE);
-    if (kr != KERN_SUCCESS || vm_protect(mach_task_self(), rw, (vm_size_t)page, 0,
-                                         VM_PROT_READ | VM_PROT_WRITE) != KERN_SUCCESS)
+    if (kr != KERN_SUCCESS)
     {
-        if (kr == KERN_SUCCESS)
-            munmap((void *)rw, page);
+        snprintf(line, sizeof line, "引擎：JIT 探针 vm_remap 失败（kern 0x%x）", kr);
+        host_log(line);
         munmap(rx, page);
         return 0;
     }
-    memcpy((void *)rw, code, sizeof code);
+    kr = vm_protect(mach_task_self(), rw, (vm_size_t)page, 0, VM_PROT_READ | VM_PROT_WRITE);
+    if (kr != KERN_SUCCESS)
+    {
+        snprintf(line, sizeof line, "引擎：JIT 探针 vm_protect RW 失败（kern 0x%x）", kr);
+        host_log(line);
+        munmap((void *)rw, page);
+        munmap(rx, page);
+        return 0;
+    }
+    memcpy((void *)rw, pattern, sizeof pattern);
     sys_icache_invalidate(rx, page);
-
-    struct sigaction sa, oldSEGV, oldBUS;
-    memset(&sa, 0, sizeof sa);
-    sa.sa_sigaction = jit_probe_fault;
-    sa.sa_flags = SA_SIGINFO | SA_NODEFER;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGSEGV, &sa, &oldSEGV);
-    sigaction(SIGBUS, &sa, &oldBUS);
-    g_jitProbeFaulted = 0;
-    int result = -1;
-    if (sigsetjmp(g_jitProbeJmp, 1) == 0)
-        result = ((int (*)(void))rx)();
-    sigaction(SIGSEGV, &oldSEGV, NULL);
-    sigaction(SIGBUS, &oldBUS, NULL);
+    int coherent = memcmp(rx, pattern, sizeof pattern) == 0;
     munmap((void *)rw, page);
     munmap(rx, page);
-    if (g_jitProbeFaulted)
-        return 0; // the kernel let the mapping stand and refused the execution
-    return result == 42 ? 1 : 0;
+    snprintf(line, sizeof line, "引擎：JIT 探针链路通（RX=%p RW=%p，别名一致=%d）",
+             rx, (void *)rw, coherent);
+    host_log(line);
+    return coherent ? 1 : 0;
 }
 
 
@@ -510,13 +504,12 @@ int run_engine(const char *bundle_dir, const char *home)
     // dies at startup in that shape). runtime.env still overrides both; the unified report
     // below tells what actually took effect.
     int csdbg = jit_cs_debugged();
-    int dualOk = csdbg == 1 ? jit_probe_dualmap() : 0;
-    snprintf(buf, sizeof buf, "引擎：JIT 授权检测 CS_DEBUGGED=%d%s（%s）",
+    snprintf(buf, sizeof buf, "引擎：JIT 授权检测 CS_DEBUGGED=%d（%s）",
              csdbg,
-             csdbg == 1 ? (dualOk == 1 ? "，双映射探针通过" : "，双映射探针未通过") : "",
              csdbg == 1 ? "调试器已接管（StikDebug/Xcode 拉起）"
                         : csdbg == 0 ? "未接管（普通启动，无授权）" : "csops 查询失败");
     host_log(buf);
+    int dualOk = csdbg == 1 ? jit_probe_dualmap() : 0; // 探针每步自带日志（0.2.6 教训：死点要留名）
     char jitFlag[1100];
     snprintf(jitFlag, sizeof jitFlag, "%s/jit.on", game);
     if (file_exists(jitFlag))
