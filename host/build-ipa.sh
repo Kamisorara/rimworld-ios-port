@@ -216,6 +216,24 @@ xcrun -sdk "$SDK" clang++ -target "$TARGET" -std=c++17 -O2 -shared -fvisibility=
     "$IMGUI_BUILD/misc/freetype/imgui_freetype.cpp" "$ROOT/host/native/imgui_freetype_c.cpp" \
     "$FTOBJ/libfreetype.a" -L "$APP" -limgui
 
+# 4.95) Windows 库替身：shell32（启动器 Bootstrap 的 Windows 兜底分支 P/Invoke
+#      SHGetKnownFolderPath，失败返回让它走自己的 fallback 路径）与 steam_api64
+#      （Steam 永不在，全 API 报"不在"，安卓同款）。文件名精确：dlopen 在 Darwin
+#      上不去 ".dll" 后缀，runtime 试的名字就是 "libshell32.dll"——bundle 里这个
+#      文件必须叫这个名（无 .dylib）。
+xcrun -sdk "$SDK" clang \
+    -target "$TARGET" \
+    -shared -fvisibility=default \
+    -Wl,-install_name,@rpath/libshell32.dll \
+    -o "$APP/libshell32.dll" \
+    "$ROOT/host/stubs/shell32.c"
+xcrun -sdk "$SDK" clang \
+    -target "$TARGET" \
+    -shared -fvisibility=default \
+    -Wl,-install_name,@rpath/libsteam_api64.dylib \
+    -o "$APP/libsteam_api64.dylib" \
+    "$ROOT/host/stubs/steam_api64.c"
+
 # 5) 宿主可执行（M2 骨架 + 三角形 + 音频/原生库自检 + .NET 探针诊断件 + 引擎装载件
 #    + zip 自动安装件；解压用系统 libz 的 raw inflate）
 xcrun -sdk "$SDK" clang \
@@ -252,7 +270,7 @@ fixup_dylib() {  # <dylib 路径>
         fi
     done
 }
-for lib in "$APP"/*.dylib "$APP"/libslang-glslang-*.so "$APP"/libslang-glsl-module-*.so; do
+for lib in "$APP"/*.dylib "$APP"/libslang-glslang-*.so "$APP"/libslang-glsl-module-*.so "$APP/libshell32.dll"; do
     fixup_dylib "$lib"
 done
 for lib in libglfw.dylib libvulkan.dylib libslang.dylib libslang-compiler.dylib; do
@@ -272,7 +290,7 @@ fi
 
 # 7) ad-hoc 签名：先内嵌文件与 framework，后 bundle（顺序不能反）
 ENT="$ROOT/host/app/entitlements.plist"
-for f in "$APP"/*.dylib "$APP"/libslang-glslang-*.so "$APP"/libslang-glsl-module-*.so "$APP/MoltenVK.framework/MoltenVK" "$APP/Port17Host"; do
+for f in "$APP"/*.dylib "$APP"/libslang-glslang-*.so "$APP"/libslang-glsl-module-*.so "$APP/libshell32.dll" "$APP/MoltenVK.framework/MoltenVK" "$APP/Port17Host"; do
     codesign --force --sign - --timestamp=none --entitlements "$ENT" "$f"
 done
 codesign --force --sign - --timestamp=none --entitlements "$ENT" "$APP/MoltenVK.framework"

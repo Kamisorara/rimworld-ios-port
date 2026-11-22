@@ -93,6 +93,12 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 - **UI**：「引擎」按钮（首键）：先 `triangle_stop()`（三角形渲染循环加 g_stop 对外入口 + 完成等待 + glfwDestroyWindow/glfwTerminate 归还垫片单窗口槽；早退路径也归还，否则引擎撞"only one window"红鲱鱼）再起 16MB 线程。与探针互斥提示（CoreCLR 单实例）。
 - **M3 输入（PC RimWorld.runtimeconfig.json 的 20 个 WaylithClr 开关全表，本路线经 coreclr host API 不读 runtimeconfig 故全不生效，裸引擎行为差异归这里）**：AssemblyNameRedirects（UnityEngine*=UnityStubs 等映射）、FieldInjection（+GCDescReserve=4）、LaxAssemblyBinding、SkipAccessChecks、LaxDynamicMethodAttributes、AllowInitOnlyStaticWrites、LaxCallvirt、LaxAssemblyArchitecture、LaxTypeRefResolution、LaxMemberSignatures、DynamicMethodOwnerIsDeclaringType、CatchableAccessViolations（已用 env 近似）、JitNoInlinePatchableIntoDynamicMethods、JitPatchableAssemblies=Assembly-CSharp、LaxInterfaceDispatch、IsolatedLoadsResolveByName、LaxPrivateFieldNames、MonoStringHashCode、MonoFloatFormatPrecision、LaxInheritedFieldRefs、MissingAssemblyTypeLoadException。安卓 patch/Patch.cs 的 AddLudeonMembers/AddLudeonSwitches（在 CoreLib 里补成员/开关）是 iOS 对 11.0 重移植的参考。
 
+**引擎首跑情报（2026-11-22 真机，run 44973988560 的包）**：
+- **托管 Main 已在真机执行**：目录自动识别（用户文件夹名 " game" 带前导空格 + folder-app 数据容器路径 `Documents/Data/Application/<UUID>/Documents/`——SideStore folder-app 的 NSHomeDirectory 即该数据容器，文件 app 的 Port17 同源）、TPA 245（运行时 182 + 游戏 63）、CoreCLR 就绪、`RimWorldWaylith.Program.Main` 进入。
+- **.NET 11 不拒 AMD64 标记的纯 IL**（机器补写 0 个也装载执行）——安卓 10.0 的拒载行为在 11 不复现，MarkArm64 变成无害保留。
+- **死点一：`Bootstrap.ResolvePersistentDataRoot`** 三路分支（IsOSPlatform(OSX)/IsOSPlatform(Linux)/兜底=Windows），iOS 全假掉兜底 → `SHGetKnownFolderPath`（P/Invoke shell32.dll）→ DllNotFoundException → SIGABRT。**修法 = host/stubs/shell32.c 返回非 0**（该函数自带失败 fallback：`UserProfile/AppData/LocalLow`，落在容器里可写）——文件名精确 `libshell32.dll`（无 .dylib：Darwin 的 dlopen 不去 ".dll" 后缀，runtime 试名就是原样）。
+- **死点二（非致命）：Steamworks.NET** `SteamAPI_RestartAppIfNecessary` DllNotFoundException——被 SteamManager 吞掉但每次刷十几行 dlopen 狩猎日志。**修法 = host/stubs/steam_api64.c**（安卓同款静默版 → libsteam_api64.dylib）。"Used UnityData before it's initialized" WARN 无碍继续。
+
 ### M3 游戏程序集上机
 - `patch.dll` 增加 iOS 目标（平台检查改写、Harmony 适配 darwin）；
 - PortHooks 移植 + CoreLib 补丁对 11.0 CoreLib 的重移植（20 个 `WaylithClr.*` 开关，安卓版是对 10.0.12 做的）；
