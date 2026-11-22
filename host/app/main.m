@@ -571,7 +571,9 @@ static void run_on_big_thread(int (*fn)(void))
         boot_log(@"诊断保持已关——下次启动照常（有游戏即引擎）");
         [sender setTitle:@"下次诊断" forState:UIControlStateNormal];
     } else {
-        [fm createFileAtPath:flag contents:[@"on" dataUsingEncoding:NSUTF8StringEncoding] error:nil];
+        [fm createFileAtPath:flag
+                    contents:[@"on" dataUsingEncoding:NSUTF8StringEncoding]
+                  attributes:nil];
         boot_log(@"诊断保持已开——下次启动还进这个界面（引擎先让路；再点一次恢复）");
         [sender setTitle:@"下次进引擎" forState:UIControlStateNormal];
     }
@@ -580,8 +582,7 @@ static void run_on_big_thread(int (*fn)(void))
 - (void)importTapped:(id)sender
 {
     UIDocumentPickerViewController *picker =
-        [[UIDocumentPickerViewController alloc] initWithForOpeningContentTypes:@[UTTypeZIP]
-                                                                        asCopy:YES];
+        [[UIDocumentPickerViewController alloc] initWithForOpeningContentTypes:@[UTTypeZIP]];
     picker.delegate = self;
     picker.allowsMultipleSelection = NO;
     [self presentViewController:picker animated:YES completion:nil];
@@ -592,12 +593,19 @@ static void run_on_big_thread(int (*fn)(void))
 {
     if (urls.count == 0)
         return;
+    NSURL *src = urls[0];
     NSString *dest = [NSHomeDirectory()
         stringByAppendingPathComponent:@"Documents/port17-game.zip"];
     NSFileManager *fm = NSFileManager.defaultManager;
+    // iCloud/别的 app 沙盒来的 URL 带 security scope：拷贝期间要持着访问权（本地
+    // 文件时这是无害的 no-op）。
+    BOOL scoped = [src startAccessingSecurityScopedResource];
     [fm removeItemAtPath:dest error:nil]; // 旧的一份先清（.installed 记录保留——Inbox 收件同规矩）
     NSError *err = nil;
-    if (![fm copyItemAtURL:urls[0] toURL:[NSURL fileURLWithPath:dest] error:&err]) {
+    BOOL copied = [fm copyItemAtURL:src toURL:[NSURL fileURLWithPath:dest] error:&err];
+    if (scoped)
+        [src stopAccessingSecurityScopedResource];
+    if (!copied) {
         boot_log([NSString stringWithFormat:@"导入：拷到 port17-game.zip 失败（%@）",
                   err.localizedDescription]);
         return;
@@ -632,11 +640,13 @@ static void run_on_big_thread(int (*fn)(void))
                  home.UTF8String);
         snprintf(srcDir, sizeof srcDir, "%s/Documents/AppData", home.UTF8String);
         int n = port17_zip_tree(srcDir, zipPath);
+        // C 数组进不了 block 的捕获（按值拷数组禁止）——先落到对象再带进去。
+        NSString *zipNS = [NSString stringWithUTF8String:zipPath];
         dispatch_async(dispatch_get_main_queue(), ^{
             NSMutableArray<NSURL *> *items = [NSMutableArray array];
             if (n >= 0) {
                 boot_log([NSString stringWithFormat:@"导出：AppData 打包完成（%d 个文件）——分享面板里可「存储到文件」或隔空投送", n]);
-                [items addObject:[NSURL fileURLWithPath:[NSString stringWithUTF8String:zipPath]]];
+                [items addObject:[NSURL fileURLWithPath:zipNS]];
             } else {
                 boot_log(n == -20
                     ? @"导出：Documents/AppData 不在（还没有存档？）——只分享日志"
