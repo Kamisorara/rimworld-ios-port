@@ -282,10 +282,10 @@ xcrun -sdk "$SDK" clang \
     -o "$APP/Port17Host" \
     "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/engine.c" "$ROOT/host/app/setup.c" "$ROOT/host/app/unzip.c" "$ROOT/host/app/triangle.c" "$ROOT/host/app/audio_test.c" "$ROOT/host/app/libs_check.c"
 cp "$ROOT/host/app/Info.plist" "$APP/"
-# 正规军零件（与能在文件 app 出文件夹的参照包对齐）：PkgInfo + 图标（scripts/gen-icon.py
-# 生成占位，正式图标放 host/app/icons/ 同名覆盖即可）。
+# 正规军零件（与能在文件 app 出文件夹的参照包对齐）：PkgInfo + 图标（host/app/icons/
+# 里的正式图标由 rimworld_icon.jpg 经 System.Drawing 转出；scripts/gen-icon.py 只在
+# 图标缺失时手工跑一次生成纯色占位，构建不再覆盖）。
 printf 'APPL????' > "$APP/PkgInfo"
-python3 "$ROOT/scripts/gen-icon.py"
 cp "$ROOT/host/app/icons/icon-120.png" "$APP/AppIcon60x60@2x.png"
 cp "$ROOT/host/app/icons/icon-152.png" "$APP/AppIcon76x76@2x~ipad.png"
 cp "$ROOT/host/app/icons/icon-167.png" "$APP/AppIcon83.5x83.5@2x~ipad.png"
