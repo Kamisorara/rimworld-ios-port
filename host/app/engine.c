@@ -155,6 +155,24 @@ static int file_exists(const char *path)
     return stat(path, &st) == 0;
 }
 
+// 硬打点：时间戳 + 一行字直写 <home>/Documents/engine-trace.log（open/append/write/close，
+// 不经 stdio 不经回调——悖论排查看的就是它）。
+static void trace_mark(const char *home, const char *what)
+{
+    char path[512];
+    snprintf(path, sizeof path, "%s/Documents/engine-trace.log", home);
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0)
+        return;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    char line[256];
+    int n = snprintf(line, sizeof line, "[%ld.%03ld] %s\n", (long)ts.tv_sec, ts.tv_nsec / 1000000, what);
+    if (n > 0)
+        write(fd, line, (size_t)n);
+    close(fd);
+}
+
 // The game folder as the host understands it: <home>/Documents/game with RimWorld.dll in it.
 // A folder unpacked by hand often sits one level deep (iOS's own unzip wraps everything in a
 // folder named after the zip), so a single wrapper below game/ — or a game folder under
@@ -578,7 +596,11 @@ int run_engine(const char *bundle_dir, const char *home)
     }
 
     unsigned int exitCode = 0;
+    // 硬打点（直写文件，绕开一切缓冲与回调链）：六跑日志出现"execute 未返回但诊断 UI
+    // 却起来了"的悖论——这些行钉死 execute 的进出时刻。
+    trace_mark(home, "execute 进入（主线程交给托管 Main）");
     hr = execute(host, domain, argc, (char **)argv, entry, &exitCode);
+    trace_mark(home, "execute 返回");
     if (hr != 0)
     {
         snprintf(buf, sizeof buf, "coreclr_execute_assembly 失败：0x%08x", hr);

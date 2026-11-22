@@ -643,6 +643,9 @@ static int run_probe_thread(void)
 {
     (void)session;
     (void)options;
+    // 探针：六跑日志的悖论（execute 未返回、我们的 UIApplicationMain 未启动，HostVC 却
+    // 起来了）——这行钉死"是谁的 UIKit 会话"调到了我们的 scene delegate。
+    append_log("⚠️ 诊断 scene 连接（我们的 SceneDelegate willConnect 被调用）");
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
     self.window.rootViewController = [[HostVC alloc] init];
