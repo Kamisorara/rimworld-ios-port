@@ -813,6 +813,29 @@ int main(int argc, char *argv[])
         setenv("MVK_CONFIG_RESIDENCY_SETS", "0", 0);
         setenv("MVK_CONFIG_USE_MTLRESIDENCYSETS", "0", 0);
 
+        // “打开方式 → Port17”的备用导入通道（Files 里看不到 Port17 文件夹时的正路）：
+        // 在文件 app 里点 port17 开头的 zip → 打开方式 → Port17，iOS 把它拷进
+        // Documents/Inbox 再拉起 app——冷启动时这里收件挪成 port17-game.zip，下面的
+        // 自动安装照常接手。只认 port17 开头的 zip（用户点开别的 zip 不误吞）；
+        // 暖启动（app 已在跑）时拷贝要到下次冷启动才被收——“没反应就彻底关掉重开”。
+        {
+            NSString *inbox = [docDir stringByAppendingPathComponent:@"Inbox"];
+            for (NSString *f in [fm contentsOfDirectoryAtPath:inbox error:nil])
+            {
+                if (![f.pathExtension.lowercaseString isEqualToString:@"zip"] ||
+                    ![f.lowercaseString hasPrefix:@"port17"])
+                    continue;
+                NSString *src = [inbox stringByAppendingPathComponent:f];
+                NSString *dst = [docDir stringByAppendingPathComponent:@"port17-game.zip"];
+                [fm removeItemAtPath:dst error:nil]; // 旧的一份先清（.installed 记录保留）
+                NSError *mvErr = nil;
+                if ([fm moveItemAtPath:src toPath:dst error:&mvErr])
+                    boot_log([NSString stringWithFormat:@"Inbox 收件：%@ → port17-game.zip（打开方式导入，自动安装接手）", f]);
+                else
+                    boot_log([NSString stringWithFormat:@"Inbox 收件失败（%@）：%@", f, mvErr.localizedDescription]);
+            }
+        }
+
         // zip 自动安装：Documents/port17-game.zip 在就解压成 Documents/game（PC 上
         // scripts/pack-game-zip.py 的产物；换新版游戏也是丢一个新 zip 的事——旧 game 自动
         // 挪 game.previous）。主线程上活儿放线程里干，runloop 切片泵着等（launch watchdog

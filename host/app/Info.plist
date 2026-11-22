@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.1</string>
+	<string>0.2.2</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
@@ -58,7 +58,25 @@
 	<dict/>
 	<key>UIFileSharingEnabled</key>
 	<true/>
-	<key>LSSupportsOpeningFilesInPlace</key>
-	<true/>
+	<!-- 备用导入通道：文件 app 里点 port17 开头的 zip → 打开方式 → Port17。系统把
+	     zip 拷进 Documents/Inbox 再拉起 app，main() 收件后走既有自动安装——Files 里
+	     看不看得见 Port17 文件夹都能导入。LSSupportsOpeningFilesInPlace 必须不开：
+	     系统才会拷进 Inbox（而不是交一个我们不处理的 in-place URL）。
+	     LSHandlerRank=Alternate：不抢占别的 app 的 zip 关联，只出现在打开方式列表里。 -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Port17 game archive</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.zip-archive</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
