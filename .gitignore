@@ -14,3 +14,4 @@ test_work/
 build-native-deps/
 game-staging/
 *.zip
+game-steam/
