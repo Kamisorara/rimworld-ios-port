@@ -647,7 +647,7 @@ static int run_probe_thread(void)
 // 路径 RenderThread.Stop 再撞 → UIKit 循环未处理异常 FailFast。持有 UIKit 后台断言后 iOS
 // 给 ~30 秒"完成在途工作"窗口（Metal 后台的标准姿势）；引擎自己的 HoldBackgroundTask 只在
 // 抑制节流时才拿，装载期是空的。过期干净归还，回前台重新持有（下一次熄屏又有窗口）。
-static UIBackgroundTaskIdentifier g_engineBgTask = UIBackgroundTaskInvalid;
+static UIBackgroundTaskIdentifier g_engineBgTask = (UIBackgroundTaskIdentifier)~(NSUInteger)0; // = UIBackgroundTaskInvalid（extern const 当不了编译期常量）
 static id g_bgTaskObserver = nil; // 观察者令牌要持有（不持有可能被提前释放，重挂静默失效）
 static void engine_hold_background_task(void)
 {
