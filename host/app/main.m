@@ -747,18 +747,31 @@ int main(int argc, char *argv[])
             boot_log(@"zip 安装失败——见日志；继续按有无 game 判定");
 
         // 引擎模式：Documents/game 有游戏就走（port17_find_game 也认手动解压套了一层/改名
-        // 的目录）。5014 引擎的 iOS 窗口后端（Waylith.Windowing 的 Backends.IOS）要求主线程、
-        // 自己调 UIApplicationMain 建 UIWindowScene/CAMetalLayer（VK_EXT_metal_surface 与我们
-        // 的三角形同一条 Vulkan 路）——宿主的 UIKit 不能先占主线程，所以引擎在 main 线程直接
-        // 上 CoreCLR，诊断 UI 退位。引擎返回（失败或游戏退出）再落回诊断界面，port17-ui.log
-        // 回放把过程直接摆在屏幕上。
+        // 的目录）。游戏目录没有改写戳（Steam 原件直接拷的场景）→ 先跑设备内 setup（安卓
+        // SetupService 的体验：app 自己改写游戏文件，玩家无感 PC）；setup 用掉本进程的
+        // CoreCLR（iOS 无 fork），完成或失败都回落诊断界面——重开即引擎。
         char gameDir[1024];
         if (port17_find_game(NSHomeDirectory().UTF8String, gameDir, sizeof gameDir) == 0) {
-            boot_log(@"引擎模式：游戏目录在，主线程直接跑引擎（宿主 UIKit 退位）");
-            const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];
-            const char *home = [NSHomeDirectory() UTF8String];
-            int rc = run_engine(bundle, home);
-            boot_log([NSString stringWithFormat:@"引擎模式结束（run_engine 返回 %d）——落回诊断界面", rc]);
+            NSString *gameNS = [NSString stringWithUTF8String:gameDir];
+            NSString *stamp = [gameNS stringByAppendingPathComponent:@"port17-setup.stamp"];
+            NSString *legacyA = [gameNS stringByAppendingPathComponent:@"os-detect.port17"];
+            NSString *legacyB = [gameNS stringByAppendingPathComponent:@"platform.port17"];
+            BOOL setupDone = [fm fileExistsAtPath:stamp] ||
+                ([fm fileExistsAtPath:legacyA] && [fm fileExistsAtPath:legacyB]);
+            if (!setupDone) {
+                boot_log(@"游戏文件是原件（没有改写戳）——先跑设备内 setup（安卓同款体验），完成后请重开 app");
+                int rc = port17_run_setup([[NSBundle mainBundle].bundlePath UTF8String], gameDir);
+                boot_log([NSString stringWithFormat:@"setup 返回 %d——%@",
+                    rc,
+                    rc == 0 ? @"改写完成，请彻底关闭 app（上划划掉）再打开，即进引擎"
+                           : @"改写没完成（原因在上面日志），可重试或换打包好的 zip"]);
+            } else {
+                boot_log(@"引擎模式：游戏目录在且已改写，主线程直接跑引擎（宿主 UIKit 退位）");
+                const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];
+                const char *home = [NSHomeDirectory() UTF8String];
+                int rc = run_engine(bundle, home);
+                boot_log([NSString stringWithFormat:@"引擎模式结束（run_engine 返回 %d）——落回诊断界面", rc]);
+            }
         }
 
         boot_log(@"UIApplicationMain 开始");

@@ -28,4 +28,9 @@ int port17_find_game(const char *home, char *out, size_t cap);
 // 引擎启动前必须让三角形收尾）：置停止位并等循环退出（有超时，从没跑过则立刻返回）。
 void triangle_stop(void);
 
+// 设备内游戏改写（setup/ 的 Port17Setup.dll 上 CoreCLR 跑，安卓 SetupService 的 iOS 对应
+// 物）：iOS 无 fork，本进程的 CoreCLR 配额被它用掉——跑完由调用方回落诊断界面提示重开。
+// 0 = 成功（port17-setup.stamp 已写）；负数 = 失败（日志有因）。
+int port17_run_setup(const char *bundle, const char *game);
+
 #endif

@@ -234,8 +234,14 @@ xcrun -sdk "$SDK" clang \
     -o "$APP/libsteam_api64.dylib" \
     "$ROOT/host/stubs/steam_api64.c"
 
+# 4.98) 设备内 setup 件（安卓 SetupService 的 iOS 对应物）：Port17Setup.dll（setup/，
+#      Cecil 统一三道补丁 + 机器类型）与它的 Mono.Cecil 依赖进 bundle——宿主在游戏
+#      目录没有改写戳时先用本进程的 CoreCLR 跑它（iOS 无 fork），完成提示重开进引擎。
+dotnet build "$ROOT/setup/Port17Setup.csproj" -c Release -o "$ROOT/build-m2/setup"
+cp "$ROOT/build-m2/setup/Port17Setup.dll" "$ROOT/build-m2/setup/Mono.Cecil.dll" "$APP/"
+
 # 5) 宿主可执行（M2 骨架 + 三角形 + 音频/原生库自检 + .NET 探针诊断件 + 引擎装载件
-#    + zip 自动安装件；解压用系统 libz 的 raw inflate）
+#    + zip 自动安装件 + setup 运行件；解压用系统 libz 的 raw inflate）
 xcrun -sdk "$SDK" clang \
     -target "$TARGET" \
     -fobjc-arc -DPORT17_INTERP=1 \
@@ -244,7 +250,7 @@ xcrun -sdk "$SDK" clang \
     -L "$APP" -lglfw -lvulkan -lwaylithaudio -lz \
     -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics -framework Metal -framework CoreFoundation \
     -o "$APP/Port17Host" \
-    "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/engine.c" "$ROOT/host/app/unzip.c" "$ROOT/host/app/triangle.c" "$ROOT/host/app/audio_test.c" "$ROOT/host/app/libs_check.c"
+    "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/engine.c" "$ROOT/host/app/setup.c" "$ROOT/host/app/unzip.c" "$ROOT/host/app/triangle.c" "$ROOT/host/app/audio_test.c" "$ROOT/host/app/libs_check.c"
 cp "$ROOT/host/app/Info.plist" "$APP/"
 
 # 6) .NET 探针诊断件（M1 全套：官方运行时 + Hello，平铺 .app 根——CoreLib 同目录原则）

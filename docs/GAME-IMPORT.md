@@ -1,7 +1,17 @@
 # 游戏文件导入（M2 收官：引擎最小画面）
 
-**推荐流程 = 一个 zip 自动安装**：PC 上把 game 文件夹打成一个 `port17-game.zip`，
-拖进 Port17 的 Documents，开 app 自动解压安装。目录约定（安装后的形态）：
+**两种玩法，任选**：
+
+- **A. Steam 原件直接拷（推荐，安卓同款体验）**：把 Steam 游戏文件夹里 `Assets.zip`、
+  `Version.txt`、`Data/`、`Rendering/` 和 63 个游戏程序集（清单见下）拖进 Port17 的
+  Documents 下一个 `game` 文件夹（或者整个打成一个 zip 拖进去自动解压——**无需在 PC 上
+  跑任何补丁脚本**）。开 app 后**自动在设备内改写游戏文件**（setup，约半分钟，日志滚动
+  `[setup] …`），完成后提示重开 app，再开即引擎模式。机器类型、OS 探测、iOS 硬墙改写
+  全部由 app 自己做（setup/Port17Setup.dll，Mono.Cecil）——安卓 SetupService 的对应物。
+- **B. PC 侧打包**：`python scripts/pack-game-zip.py` 自动串全部补丁出 `port17-game.zip`
+  （设备端零改写直接跑；调试新补丁时用这条）。
+
+目录约定（两种玩法安装后的形态）：
 
 ```
 Documents/
@@ -22,7 +32,7 @@ Documents/
 zip 安装语义：`Documents/game` 已有而新 zip 又到 = **换新版**（旧 game 自动挪成
 `game.previous` 保留，确认新版能跑后手动删）；解压失败自动清理半成品并回落诊断界面。
 
-## 在 PC 上准备（两步，都在仓库目录里做）
+## 在 PC 上准备（玩法 B；玩法 A 不需要任何 PC 步骤）
 
 1. **放游戏文件**：`game-staging/`（gitignored）放上面清单的内容——从 Steam 目录
    （如 `D:\SteamLibrary\steamapps\common\RimWorld`，需 1.7.x）拷 `Assets.zip`、
@@ -31,6 +41,8 @@ zip 安装语义：`Documents/game` 已有而新 zip 又到 = **换新版**（�
    `patch-os-detect.py`（OS 探测字节补丁，详见下节）+ `patch-platform`（Cecil 平台改写，
    安卓 patch 管线的 iOS 雏形，iOS 硬墙逐条记在 scripts/patch-platform/Program.cs 的改写表），
    产出仓库根的 `port17-game.zip`（0.98 GB → 约 0.78 GB；已压缩内容按 stored 存，设备端解压快）。
+   设备内 setup（setup/Setup.cs）与这两个 PC 工具是同一副改写表的两个宿主——新硬墙
+   两边同步加条目。
 
 拷贝取舍：`Assets.zip`（339 MB）、`Version.txt`、`Data/` 整个（642 MB，Core 必需，
 各 DLC 有则全带）、`Rendering/`、63 个 `.dll`。**框架副本不用拷**（app 自带 .NET 11
