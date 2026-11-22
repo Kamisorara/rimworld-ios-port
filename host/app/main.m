@@ -806,7 +806,7 @@ int main(int argc, char *argv[])
         boot_log([NSString stringWithFormat:@"安装后 plist 键（%@ 个）：%@",
             @([NSBundle mainBundle].infoDictionary.count),
             [[NSBundle mainBundle].infoDictionary.allKeys sortedArrayUsingSelector:@selector(compare:)]
-                componentsJoinedByString:@", "]]);
+                componentsJoinedByString:@", "]);
         signal(SIGSEGV, crash_handler);
         signal(SIGBUS, crash_handler);
         signal(SIGABRT, crash_handler);
