@@ -1402,12 +1402,13 @@ EXPORT void wa_set_allocator(void* alloc, void* realloc_, void* free_)
 }
 
 // PORT17 心跳：引擎每帧调一次 wa_update（g_updates 计数）。装载期引擎安静（stdout
-// 无输出），这行是帧循环死活的唯一信号——15 秒差值为 0 = 帧循环停了（卡在
-// Initializing 排查用，配合宿主的主 runloop 心跳区分"主线程忙/引擎循环卡"）。
-// 帧停摆看门狗：前台连续 4 个窗口（60 秒）零增量就 abort——COMPlus_EnableCrashReport=1
-// 下 SIGABRT 触发 .NET 崩溃报告，把所有线程的托管栈写进 coreclr-stderr.log，卡死从
-// "无声挂起"变成"自动诊断数据"（十五/十六跑的 slang 死点就靠下一发它定位）。后台
-// （熄屏/切走）显示链接本来就停，不算停摆——宿主经 wa_port17_set_active 通报状态。
+// 无输出），这行是帧循环死活的唯一信号。帧停摆看门狗：前台连续 4 个窗口（60 秒）每窗
+// 增量不足 30 帧就 abort——COMPlus_EnableCrashReport=1 下 SIGABRT 触发 .NET 崩溃报告，
+// 把所有线程的托管栈写进 coreclr-stderr.log，卡死从"无声挂起"变成"自动诊断数据"。
+// 60 秒而非 45：十四跑死前的 ~45 秒停摆可能是合法的殖民地生成同步长事件（解释器），
+// 永久死锁（十五/十六跑形态）60 秒照样抓住。用阈值不用零增量：临终一帧 +11913 差点
+// 把看门狗重置掉，滴流帧不再豁免（健康装载 ≥200 帧/窗，30 是十倍余量）。后台（熄屏/
+// 切走）显示链接本来就停，不算停摆——宿主经 wa_port17_set_active 通报状态。
 static volatile int g_appActive = 1;
 static int g_stallWindows = 0;
 
@@ -1426,12 +1427,13 @@ static void* port17_frame_heartbeat(void* unused)
     {
         nanosleep(&ts, NULL);
         uint64_t now = g_updates;  // 引擎帧驱动的更新计数（良性数据竞争，只读）
-        LOGI("port17 活性: 引擎帧更新 %llu 次（15 秒内 +%llu）", (unsigned long long)now, (unsigned long long)(now - last));
-        if (now == last)
+        uint64_t delta = now - last;
+        LOGI("port17 活性: 引擎帧更新 %llu 次（15 秒内 +%llu）", (unsigned long long)now, (unsigned long long)delta);
+        if (delta < 30)
         {
             if (g_appActive && ++g_stallWindows >= 4)
             {
-                LOGI("port17 看门狗: 前台帧循环停 60 秒——abort 触发崩溃报告抓全部线程托管栈");
+                LOGI("port17 看门狗: 前台 60 秒帧停摆（最后计数 %llu）——abort 触发崩溃报告抓全部线程托管栈", (unsigned long long)now);
                 abort();
             }
         }
