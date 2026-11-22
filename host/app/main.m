@@ -803,10 +803,10 @@ int main(int argc, char *argv[])
             [NSBundle mainBundle].bundleIdentifier,
             [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?",
             [NSBundle mainBundle].bundlePath.lastPathComponent]);
-        boot_log([NSString stringWithFormat:@"安装后 plist 键（%@ 个）：%@",
-            @([NSBundle mainBundle].infoDictionary.count),
-            [[NSBundle mainBundle].infoDictionary.allKeys sortedArrayUsingSelector:@selector(compare:)]
-                componentsJoinedByString:@", "]);
+        NSArray<NSString *> *plistKeys = [[NSBundle mainBundle].infoDictionary.allKeys
+            sortedArrayUsingSelector:@selector(compare:)];
+        boot_log([NSString stringWithFormat:@"安装后 plist 键（%lu 个）：%@",
+            (unsigned long)plistKeys.count, [plistKeys componentsJoinedByString:@", "]]);
         signal(SIGSEGV, crash_handler);
         signal(SIGBUS, crash_handler);
         signal(SIGABRT, crash_handler);
