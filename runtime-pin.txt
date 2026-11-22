@@ -1,7 +1,9 @@
-86ee4f57ebc
-# dotnet/runtime release/11.0 @ 2026-11-05 (86ee4f57ebc...)
-# 版本事实（2026-11-23 校正）：GA tag v11.0.0 的提交在 10-21（tag 先切、11-10 才发
-# NuGet），本 pin 比 GA tag 新 15 天——0.3.2 的缩水桩问题从来不是源码版本问题，
-# 是 collect 回退链缺 net11.0-unix 一级（unix 族库在 -os ios 下产出 net11.0-unix
-# 真实现，旧 collect 直接抓 net11.0 = PNSE 桩）。官方 NuGet 包由微软打包管线构建。
+v11.0.0
+# dotnet/runtime GA tag v11.0.0（tag 提交 2026-10-21，NuGet 11-10 发布）——与 M2 时期
+# 真机跑通游戏的官方包 Microsoft.NETCore.App.Runtime.ios-arm64 11.0.0 同源，源码级
+# 对齐被证明的工件（0.3.3 定版决策：解释器与 JIT 两种模式共同回到已知好源码）。
+# 版本事实备忘：此前的 86ee4f57ebc（11-05）比 GA tag 新 15 天（tag 先切、打包测试
+# 三周才发版）；缩水桩问题与源码版本无关，是 collect 缺 net11.0-unix 回退级——
+# 该修复独立于 pin 选择，必须保留（我们自己的 -os ios 构建在 GA 上同样产出
+# net11.0-unix 变体结构）。
 # 之后跟随 11.0.x 服务版本。
