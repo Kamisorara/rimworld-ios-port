@@ -746,15 +746,15 @@ int main(int argc, char *argv[])
         if (installed < 0)
             boot_log(@"zip 安装失败——见日志；继续按有无 game 判定");
 
-        // 引擎模式：Documents/game 有游戏就走。5014 引擎的 iOS 窗口后端（Waylith.Windowing
-        // 的 Backends.IOS）要求主线程、自己调 UIApplicationMain 建 UIWindowScene/CAMetalLayer
-        // （VK_EXT_metal_surface 与我们的三角形同一条 Vulkan 路）——宿主的 UIKit 不能先占
-        // 主线程，所以引擎在 main 线程直接上 CoreCLR，诊断 UI 退位。引擎返回（失败或游戏
-        // 退出）再落回诊断界面，port17-ui.log 回放把过程直接摆在屏幕上。
-        NSString *gameDll = [docDir
-            stringByAppendingPathComponent:@"game/RimWorld.dll"];
-        if ([fm fileExistsAtPath:gameDll]) {
-            boot_log(@"引擎模式：Documents/game 在，主线程直接跑引擎（宿主 UIKit 退位）");
+        // 引擎模式：Documents/game 有游戏就走（port17_find_game 也认手动解压套了一层/改名
+        // 的目录）。5014 引擎的 iOS 窗口后端（Waylith.Windowing 的 Backends.IOS）要求主线程、
+        // 自己调 UIApplicationMain 建 UIWindowScene/CAMetalLayer（VK_EXT_metal_surface 与我们
+        // 的三角形同一条 Vulkan 路）——宿主的 UIKit 不能先占主线程，所以引擎在 main 线程直接
+        // 上 CoreCLR，诊断 UI 退位。引擎返回（失败或游戏退出）再落回诊断界面，port17-ui.log
+        // 回放把过程直接摆在屏幕上。
+        char gameDir[1024];
+        if (port17_find_game(NSHomeDirectory().UTF8String, gameDir, sizeof gameDir) == 0) {
+            boot_log(@"引擎模式：游戏目录在，主线程直接跑引擎（宿主 UIKit 退位）");
             const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];
             const char *home = [NSHomeDirectory() UTF8String];
             int rc = run_engine(bundle, home);

@@ -18,6 +18,10 @@ int run_probe(const char *bundle_dir);
 // bundle_dir 同上；home = NSHomeDirectory。返回引擎退出码；负数是宿主自身错误。
 int run_engine(const char *bundle_dir, const char *home);
 
+// 游戏目录解析：Documents/game 直达，或手动解压套了一层（game/<一层>/RimWorld.dll、
+// Documents/<其它名>/RimWorld.dll）也认（唯一候选才认）。0 = out 里是找到的目录。
+int port17_find_game(const char *home, char *out, size_t cap);
+
 // 三角形渲染循环的停止开关（引擎与三角形共用一个 CAMetalLayer 和 GLFW 垫片的单窗口槽，
 // 引擎启动前必须让三角形收尾）：置停止位并等循环退出（有超时，从没跑过则立刻返回）。
 void triangle_stop(void);

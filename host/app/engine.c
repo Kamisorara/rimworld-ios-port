@@ -155,6 +155,62 @@ static int file_exists(const char *path)
     return stat(path, &st) == 0;
 }
 
+// The game folder as the host understands it: <home>/Documents/game with RimWorld.dll in it.
+// A folder unpacked by hand often sits one level deep (iOS's own unzip wraps everything in a
+// folder named after the zip), so a single wrapper below game/ — or a game folder under
+// another name directly in Documents (port17-game, game-staging…) — is accepted too. Returns
+// 0 with the found folder in out; negative when nothing unambiguous is there.
+int port17_find_game(const char *home, char *out, size_t cap)
+{
+    char direct[1100];
+    snprintf(direct, sizeof direct, "%s/Documents/game/RimWorld.dll", home);
+    if (file_exists(direct))
+    {
+        snprintf(out, cap, "%s/Documents/game", home);
+        return 0;
+    }
+    // One wrapper level: <dir>/<one folder>/RimWorld.dll for dir = Documents/game, then Documents.
+    static const char *const scan[] = { "Documents/game", "Documents" };
+    for (size_t i = 0; i < sizeof scan / sizeof scan[0]; i++)
+    {
+        char scanDir[1100];
+        snprintf(scanDir, sizeof scanDir, "%s/%s", home, scan[i]);
+        DIR *dir = opendir(scanDir);
+        if (dir == NULL)
+            continue;
+        char found[1100];
+        int hits = 0;
+        struct dirent *e;
+        while ((e = readdir(dir)) != NULL)
+        {
+            if (e->d_name[0] == '.')
+                continue;
+            char probe[1300];
+            snprintf(probe, sizeof probe, "%s/%s/RimWorld.dll", scanDir, e->d_name);
+            if (file_exists(probe))
+            {
+                hits++;
+                snprintf(found, sizeof found, "%s/%s", scanDir, e->d_name);
+            }
+        }
+        closedir(dir);
+        if (hits == 1)
+        {
+            snprintf(out, cap, "%s", found);
+            char line[1300];
+            snprintf(line, sizeof line, "引擎：游戏目录识别为 %s（手动解压套了一层，宿主自动认了）", out);
+            host_log(line);
+            return 0;
+        }
+        if (hits > 1)
+        {
+            host_log("引擎：Documents 里游戏目录候选不止一个（都带 RimWorld.dll）——只留一份再试");
+            return -2;
+        }
+    }
+    return -1;
+}
+
 // Appends dir/*.dll to the TPA list (':' separated). A name that also exists in skipDir is
 // left out, so the game folder's framework copies do not shadow the bundle runtime's.
 static void add_assemblies(char *list, size_t cap, const char *dir, const char *skipDir, int *count)
@@ -232,12 +288,63 @@ static int mark_arm64_all(const char *game)
     return changed;
 }
 
+// 眼睛：把一个目录里实际有什么摆进日志（找不到游戏时的自查——宿主看到的文件系统
+// 和文件 app 里看到的到底差在哪，一次看清）。最多 max 项，装不下的以 … 收尾。
+static void list_dir_into_log(const char *dir, int max)
+{
+    DIR *d = opendir(dir);
+    if (d == NULL)
+    {
+        char line[1300];
+        snprintf(line, sizeof line, "引擎：目录 %s 打不开（不存在？）", dir);
+        host_log(line);
+        return;
+    }
+    char line[1300];
+    int shown = 0;
+    struct dirent *e;
+    snprintf(line, sizeof line, "引擎：%s 里有：", dir);
+    size_t len = strlen(line);
+    while ((e = readdir(d)) != NULL)
+    {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+            continue;
+        if (shown >= max)
+        {
+            snprintf(line + len, sizeof line - len, " …");
+            break;
+        }
+        snprintf(line + len, sizeof line - len, "%s%s", shown > 0 ? "、" : "", e->d_name);
+        len = strlen(line);
+        shown++;
+    }
+    closedir(d);
+    if (shown == 0)
+        snprintf(line + len, sizeof line - len, "（空）");
+    host_log(line);
+}
+
 int run_engine(const char *bundle_dir, const char *home)
 {
     char game[1024], gameSlash[1024], tmp[1024], buf[1300];
-    snprintf(game, sizeof game, "%s/Documents/game", home);
-    snprintf(gameSlash, sizeof gameSlash, "%s/", game);
     snprintf(tmp, sizeof tmp, "%s/tmp", home);
+
+    // The game folder: <home>/Documents/game, or one wrapper deep (a hand-unpacked zip often
+    // sits one level down), or a differently-named folder in Documents. No guesswork: when
+    // nothing is found, the listings below show exactly what the process can see.
+    game[0] = '\0';
+    if (port17_find_game(home, game, sizeof game) != 0)
+    {
+        host_log("引擎：找不到游戏目录——宿主的视角如下（对照文件 app 里看到的排查）");
+        char docs[1024];
+        snprintf(docs, sizeof docs, "%s/Documents", home);
+        list_dir_into_log(docs, 20);
+        snprintf(buf, sizeof buf, "%s/game", docs);
+        list_dir_into_log(buf, 20);
+        host_log("引擎：期待 Documents/game/RimWorld.dll（PC 上 game 文件夹的内容，或丢一个 port17-game.zip 进 Documents 自动装）");
+        return -1;
+    }
+    snprintf(gameSlash, sizeof gameSlash, "%s/", game);
 
     // What the engine cannot start without, in words the tester can act on.
     int missing = 0;
@@ -250,7 +357,7 @@ int run_engine(const char *bundle_dir, const char *home)
         if (!file_exists(buf))
         {
             missing = 1;
-            snprintf(buf, sizeof buf, "引擎：缺 %s——把 PC 游戏文件夹的文件放进 文件 app → Port17 → Documents/game/", wanted[i]);
+            snprintf(buf, sizeof buf, "引擎：缺 %s（目录 %s）", wanted[i], game);
             host_log(buf);
         }
     }
