@@ -22,14 +22,15 @@ Documents/
 zip 安装语义：`Documents/game` 已有而新 zip 又到 = **换新版**（旧 game 自动挪成
 `game.previous` 保留，确认新版能跑后手动删）；解压失败自动清理半成品并回落诊断界面。
 
-## 在 PC 上准备（三步，都在仓库目录里做）
+## 在 PC 上准备（两步，都在仓库目录里做）
 
 1. **放游戏文件**：`game-staging/`（gitignored）放上面清单的内容——从 Steam 目录
    （如 `D:\SteamLibrary\steamapps\common\RimWorld`，需 1.7.x）拷 `Assets.zip`、
    `Version.txt`、`Data/`、`Rendering/` 和 63 个游戏程序集（清单见下）。
-2. **打 OS 探测补丁**（详见下节）：`python scripts/patch-os-detect.py game-staging`
-3. **打包**：`python scripts/pack-game-zip.py`（默认读 game-staging，产出仓库根的
-   `port17-game.zip`，0.98 GB → 约 0.78 GB；已压缩内容按 stored 存，设备端解压快）
+2. **打包**：`python scripts/pack-game-zip.py`——打包前自动串两道补丁（都幂等）：
+   `patch-os-detect.py`（OS 探测字节补丁，详见下节）+ `patch-platform`（Cecil 平台改写，
+   安卓 patch 管线的 iOS 雏形，iOS 硬墙逐条记在 scripts/patch-platform/Program.cs 的改写表），
+   产出仓库根的 `port17-game.zip`（0.98 GB → 约 0.78 GB；已压缩内容按 stored 存，设备端解压快）。
 
 拷贝取舍：`Assets.zip`（339 MB）、`Version.txt`、`Data/` 整个（642 MB，Core 必需，
 各 DLC 有则全带）、`Rendering/`、63 个 `.dll`。**框架副本不用拷**（app 自带 .NET 11
@@ -52,21 +53,22 @@ Steam（1）：`com.rlabrecque.steamworks.net.dll`
 清单由 `scripts/copy-list.py <PC游戏目录> <官方 ios-arm64 运行时包 nupkg> [输出文件]` 生成
 （规则 = 安卓 Setup.cs 的取舍：托管、不在运行时包里、非 .Native./DiaSymReader）。
 
-### OS 探测补丁（拷完必跑的一步）
+### OS 探测补丁与平台改写（pack 脚本自动串，无需手动）
 
 5014 引擎的原生绑定只认 Windows/Linux/macOS，iOS 上两处静态构造是硬墙：
 `Brutal.Vulkan.dll` 的 Vulkan 装载链（iOS 全假 → "Failed to load Vulkan library"）与
 `Brutal.Core.Common.dll` 的 Platform 家族判定（→ PlatformNotSupportedException）。
-补丁在 PC 上对 game 文件夹跑（原地 5 字节/处，幂等，写 `os-detect.port17` 戳）：
+`patch-os-detect.py` 原地 5 字节/处改写（dnfile 定 token，幂等，写 `os-detect.port17` 戳）。
+此外 iOS 的 .NET 构建里没有 `PosixSignalRegistration`（ProcessLifetime 注册信号即炸），
+`patch-platform`（Mono.Cecil，安卓 Patch.cs 同款配方）把
+`Waylith.Diagnostics.ProcessLifetime::RegisterPosixSignal` 改成 `return null`（Windows
+一直走的路径；后续每个 iOS 硬墙都往这个改写表里加条目）。两者 `pack-game-zip.py`
+都会自动跑；单独重跑也行：
 
 ```
-pip install dnfile
-python scripts/patch-os-detect.py <game文件夹>        # 打补丁
-python scripts/patch-os-detect.py <game文件夹> --check  # 只看状态
+python scripts/patch-os-detect.py <game文件夹>          # 或 --check 只看状态
+dotnet run --project scripts/patch-platform -- <game文件夹>
 ```
-
-`--check` 各报 `call 命中 1 处（可补）` 即正常。没打补丁的文件拷上机，宿主会点名提醒，
-引擎也会给出上面对应的报错——都不会静默。
 
 ## 传到 iPad
 

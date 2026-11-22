@@ -7,7 +7,7 @@
 #
 # 用法：python pack-game-zip.py [game目录] [输出zip]
 #   默认 game 目录 = 仓库里的 game-staging，输出 = 仓库根的 port17-game.zip（gitignored）。
-import os, sys, zipfile
+import os, subprocess, sys, zipfile
 
 STORED = {".zip", ".png", ".jpg", ".jpeg", ".ogg", ".wav", ".mp3", ".mp4", ".webp",
           ".astc", ".ktx", ".ktx2", ".basis", ".bnk", ".bank", ".dds", ".tga"}
@@ -17,9 +17,17 @@ def main():
     game = sys.argv[1] if len(sys.argv) > 1 else os.path.join(root, "game-staging")
     out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(root, "port17-game.zip")
     if not os.path.isfile(os.path.join(game, "RimWorld.dll")):
-        print(f"::error::{game} 里没有 RimWorld.dll（先放好游戏文件并跑 patch-os-detect.py）")
+        print(f"::error::{game} 里没有 RimWorld.dll（先把游戏文件放进来）")
         sys.exit(1)
-    stamp = os.path.isfile(os.path.join(game, "os-detect.port17"))
+    # 打包前自动跑两道补丁（都幂等）：OS 探测字节补丁 + Cecil 平台改写（安卓 patch 管线的 iOS 雏形）
+    print("== 补丁 1/2：OS 探测（Brutal.Vulkan 装载链 / Brutal.Core.Common Platform 家族）")
+    subprocess.check_call([sys.executable, "-I",
+                           os.path.join(root, "scripts", "patch-os-detect.py"), game])
+    print("== 补丁 2/2：平台改写（Cecil：iOS 硬墙逐条）")
+    subprocess.check_call(["dotnet", "run", "--project",
+                           os.path.join(root, "scripts", "patch-platform"), "--", game])
+    stamp = os.path.isfile(os.path.join(game, "os-detect.port17")) and \
+            os.path.isfile(os.path.join(game, "platform.port17"))
     count, stored, total = 0, 0, 0
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as z:
         for dirpath, dirnames, filenames in os.walk(game):
