@@ -4,6 +4,8 @@
 #ifndef PORT17_PROBE_HOST_H
 #define PORT17_PROBE_HOST_H
 
+#include <stddef.h> // size_t（port17_find_game 的声明用）
+
 // main.m 设置日志回调；host.c 和托管侧的 host_log 都走这里
 void host_set_log_sink(void (*sink)(const char *));
 
