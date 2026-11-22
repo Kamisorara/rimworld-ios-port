@@ -13,4 +13,4 @@ test_work/
 .DS_Store
 build-native-deps/
 game-staging/
-port17-game.zip
+*.zip
