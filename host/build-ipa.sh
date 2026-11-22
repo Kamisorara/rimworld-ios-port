@@ -161,14 +161,26 @@ xcrun -sdk "$SDK" clang \
     -o "$APP/libslang.dylib" \
     "$ROOT/host/native/slang_proxy.c"
 # @rpath 的"路"本身（m2-engine-14 实测坑）：dyld 对主程序自己的 @rpath 依赖有"可执行
-# 文件目录"兜底（Port17Host 一条 LC_RPATH 都没有，libglfw 照样装载），但对 dlopen 链上
-# 的库没有这个兜底——引擎 NativeLibrary.Load("slang") 命中 libslang.dylib 后，它的
-# @rpath/libslang-compiler.dylib 只试了 .app/Frameworks/ 就放弃（GpuProbe 装载失败，GPU
-# 档被降到保守档）。给 slang 四件各钉一条 @executable_path 的 LC_RPATH，@rpath 即解析
-# 到 .app 根。必须在第 7 步签名之前。
+# 文件目录"兜底（Port17Host 的 libglfw 照样装载），但对 dlopen 链上的库既不套用主程序
+# 的 LC_RPATH、也没有目录兜底——引擎 NativeLibrary.Load("slang") 命中 libslang.dylib 后，
+# 它的 @rpath/libslang-compiler.dylib 只试了 .app/Frameworks/ 就放弃（GpuProbe 装载失败，
+# GPU 档被降到保守档）。双保险：① 代理的依赖直接改 @loader_path（解析到代理自己的目录
+# = .app 根，完全不依赖 rpath 机制，任何 dyld 都认）；② 四件各钉 @executable_path 与
+# @loader_path 两条 LC_RPATH（新工具链写成 0x8000001c 带位变体——otool 认、python 手解
+# 要掩码，别被"没有 rpath"的假象骗了）。必须在第 7 步签名之前。
+install_name_tool -change @rpath/libslang-compiler.dylib @loader_path/libslang-compiler.dylib "$APP/libslang.dylib"
+add_rpath_unless() {  # <文件> <路径>：已带同名 rpath 时 -add_rpath 会报重复并死构建，先查
+    otool -l "$1" | grep -q "path $2" || install_name_tool -add_rpath "$2" "$1"
+}
 for f in libslang.dylib libslang-compiler.dylib libslang-glslang-2026.19.so libslang-glsl-module-2026.19.so; do
-    install_name_tool -add_rpath @executable_path "$APP/$f"
+    add_rpath_unless "$APP/$f" @executable_path
+    add_rpath_unless "$APP/$f" @loader_path
 done
+# 防回归：装载命令必须已是 @loader_path 形态
+if ! otool -l "$APP/libslang.dylib" | grep -A 2 LC_LOAD_DYLIB | grep -q "@loader_path/libslang-compiler.dylib"; then
+    echo "::error::libslang.dylib 的依赖还不是 @loader_path/libslang-compiler.dylib"
+    exit 1
+fi
 
 # 4.9) ImGui（Dear ImGui 1.92.2 docking + 平铺 C 面 imgui_c.cpp）与其 FreeType 加载器。
 #      安卓版的两个补丁（上游 1.92.3 的字体图矩槽复用修复、FreeType 字形加载的线程锁）打在副本上。
