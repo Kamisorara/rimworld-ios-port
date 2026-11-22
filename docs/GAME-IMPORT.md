@@ -1,36 +1,41 @@
 # 游戏文件导入（M2 收官：引擎最小画面）
 
-游戏文件经 **文件 app → 我的 iPhone/iPad → Port17 → Documents** 放进 app 容器
-（Info.plist 已开 UIFileSharingEnabled）。目录约定：
+**推荐流程 = 一个 zip 自动安装**：PC 上把 game 文件夹打成一个 `port17-game.zip`，
+拖进 Port17 的 Documents，开 app 自动解压安装。目录约定（安装后的形态）：
 
 ```
 Documents/
-  game/                 ← 游戏目录（名字固定）
-    RimWorld.dll        等游戏程序集（见下）
+  port17-game.zip          ← 你拷进来的安装包（装完自动改名 .installed，可删）
+  game/                    ← 宿主解压安装出来的游戏目录
+    RimWorld.dll           等游戏程序集（见下）
     Assets.zip
     Version.txt
-    Data/               Core + 各 DLC 目录
-    Rendering/          Shaders/
-    args.txt            可选：命令行，每行一个参数（默认只有 -NoCrashDialog）
-    runtime.env         可选：NAME=value 每行一个，在宿主内建环境变量之后设置（NAME= 单独出现=取消）
-    runtime.properties  可选：key=value 每行一个，CoreCLR 属性（可覆盖内建默认）
-    PortHooks.dll       M3 之后放这里（STARTUP_HOOKS 自动生效）
+    Data/                  Core + 各 DLC 目录
+    Rendering/             Shaders/
+    args.txt               可选：命令行，每行一个参数（默认只有 -NoCrashDialog）
+    runtime.env            可选：NAME=value 每行一个，在宿主内建环境变量之后设置（NAME= 单独出现=取消）
+    runtime.properties     可选：key=value 每行一个，CoreCLR 属性（可覆盖内建默认）
+    PortHooks.dll          M3 之后放这里（STARTUP_HOOKS 自动生效）
+  port17-ui.log 等          ← 宿主日志（在 Documents 根）
 ```
 
-## 在 PC 上准备 game 文件夹
+zip 安装语义：`Documents/game` 已有而新 zip 又到 = **换新版**（旧 game 自动挪成
+`game.previous` 保留，确认新版能跑后手动删）；解压失败自动清理半成品并回落诊断界面。
 
-从 Steam 游戏目录（如 `D:\SteamLibrary\steamapps\common\RimWorld`，需 1.7.x）拷出：
+## 在 PC 上准备（三步，都在仓库目录里做）
 
-| 拷什么 | 说明 |
-|---|---|
-| `Assets.zip`（339 MB） | 引擎资源包 |
-| `Version.txt` | 版本号（宿主校验用不上，引擎读） |
-| `Data/` 整个目录（642 MB） | Core 必需；Royalty/Ideology/Biotech/Anomaly/Odyssey 有则全带 |
-| `Rendering/` 整个目录 | 引擎着色器源 |
-| 下面 63 个 `.dll` | 游戏程序集（框架副本不用拷——app 自带 .NET 11 运行时；Windows 原生 dll 不用拷——iOS 用 app 自带的同名 .dylib） |
+1. **放游戏文件**：`game-staging/`（gitignored）放上面清单的内容——从 Steam 目录
+   （如 `D:\SteamLibrary\steamapps\common\RimWorld`，需 1.7.x）拷 `Assets.zip`、
+   `Version.txt`、`Data/`、`Rendering/` 和 63 个游戏程序集（清单见下）。
+2. **打 OS 探测补丁**（详见下节）：`python scripts/patch-os-detect.py game-staging`
+3. **打包**：`python scripts/pack-game-zip.py`（默认读 game-staging，产出仓库根的
+   `port17-game.zip`，0.98 GB → 约 0.78 GB；已压缩内容按 stored 存，设备端解压快）
 
-**偷懒法**：把游戏目录里所有 `.dll` 都拷进去也无害（框架副本进不了 TPA、原生 dll 不会被装载），
-但 exe / steam_api64* / *.vdf / *.html / 说明 txt 不必拷。
+拷贝取舍：`Assets.zip`（339 MB）、`Version.txt`、`Data/` 整个（642 MB，Core 必需，
+各 DLC 有则全带）、`Rendering/`、63 个 `.dll`。**框架副本不用拷**（app 自带 .NET 11
+运行时），**Windows 原生 dll 不用拷**（iOS 用 app 自带的同名 .dylib）。偷懒法：游戏
+目录里所有 `.dll` 全拷也无害（框架副本进不了 TPA、原生 dll 不会被装载），但 exe /
+steam_api64* / *.vdf / *.html / 说明 txt 不必拷。
 
 ### 63 个游戏程序集清单
 
@@ -65,27 +70,29 @@ python scripts/patch-os-detect.py <game文件夹> --check  # 只看状态
 
 ## 传到 iPad
 
-任选：
-- **USB + Finder**（最稳，1 GB 量级）：iPad 连线 → Finder → 设备 → 文件 → Port17 →
-  把 `game` 文件夹拖进 Port17 的 Documents；
-- **文件 app**：game 文件夹经隔空投送/iCloud/网盘到 文件 app，再移动到
-  「我的 iPhone/iPad → Port17 → Documents」下。
+把 **`port17-game.zip` 这一个文件**拖进 Port17 的 Documents：
+
+- **USB + Finder**：iPad 连线 → Finder → 设备 → 文件 → Port17 → 拖 zip 进去；
+- **文件 app**：zip 经隔空投送/iCloud/网盘进 文件 app，移到「我的 iPhone/iPad →
+  Port17 → Documents」。
+
+然后开 Port17：自动安装（解压约十几秒，日志可见 `安装：…`）→ 引擎模式。
 
 ## 启动（引擎模式）
 
-**Documents/game 里放了 RimWorld.dll，app 一打开就直接进引擎**（引擎模式）：5014 引擎的
-iOS 窗口后端（Waylith.Windowing 的 Backends.IOS）要求主线程、自己调 UIApplicationMain
-建 UIWindowScene/CAMetalLayer，走 VK_EXT_metal_surface + 我们的 libvulkan→MoltenVK——
-宿主的诊断界面为此退位。预期过程：黑屏较久（引擎装载 + Assets/Data 加载，stdout 顺序落
-port17-ui.log），然后出画面。
+**Documents/game 里放了 RimWorld.dll，app 一打开就直接进引擎**（引擎模式；zip 安装完
+自动满足）：5014 引擎的 iOS 窗口后端（Waylith.Windowing 的 Backends.IOS）要求主线程、
+自己调 UIApplicationMain 建 UIWindowScene/CAMetalLayer，走 VK_EXT_metal_surface +
+我们的 libvulkan→MoltenVK——宿主的诊断界面为此退位。预期过程：黑屏较久（引擎装载 +
+Assets/Data 加载，stdout 顺序落 port17-ui.log），然后出画面。
 
 引擎返回（失败或游戏退出）自动落回诊断界面，port17-ui.log 回放把过程摆上屏。
 删掉/改名 Documents/game 再开 app = 回到纯诊断界面（三角形/探针/音频/库自检）。
 
-预期日志链（port17-ui.log）：`引擎模式：Documents/game 在…` → `==== 引擎启动` →
-`机器类型补写 N 个程序集`（首次会写 RimWorld.dll 和 com.rlabrecque.steamworks.net.dll，
-幂等）→ `TPA 共 N（运行时 … + 游戏 …）` → `初始化 CoreCLR` → `CoreCLR 就绪` →
-引擎 stdout 滚动 → 画面。
+预期日志链（port17-ui.log）：`安装：port17-game.zip 找到…` → `安装：game 就位` →
+`引擎模式：Documents/game 在…` → `==== 引擎启动` → `机器类型补写 N 个程序集`（首次会写
+RimWorld.dll 和 com.rlabrecque.steamworks.net.dll，幂等）→ `TPA 共 N（运行时 … + 游戏 …）`
+→ `初始化 CoreCLR` → `CoreCLR 就绪` → 引擎 stdout 滚动 → 画面。
 
 黑屏/闪退时：`Documents/port17-ui.log` 与 `Documents/coreclr-stderr.log` 拷回给开发
 （整个 Documents 目录即可）。宿主对 Documents/game 的程序集做**原地** AMD64→ARM64

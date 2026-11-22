@@ -216,16 +216,17 @@ xcrun -sdk "$SDK" clang++ -target "$TARGET" -std=c++17 -O2 -shared -fvisibility=
     "$IMGUI_BUILD/misc/freetype/imgui_freetype.cpp" "$ROOT/host/native/imgui_freetype_c.cpp" \
     "$FTOBJ/libfreetype.a" -L "$APP" -limgui
 
-# 5) 宿主可执行（M2 骨架 + 三角形 + 音频/原生库自检 + .NET 探针诊断件 + 引擎装载件）
+# 5) 宿主可执行（M2 骨架 + 三角形 + 音频/原生库自检 + .NET 探针诊断件 + 引擎装载件
+#    + zip 自动安装件；解压用系统 libz 的 raw inflate）
 xcrun -sdk "$SDK" clang \
     -target "$TARGET" \
     -fobjc-arc -DPORT17_INTERP=1 \
     -I "$ROOT/host/app" -I "$INC" \
     -Wl,-rpath,@executable_path \
-    -L "$APP" -lglfw -lvulkan -lwaylithaudio \
-    -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics -framework Metal \
+    -L "$APP" -lglfw -lvulkan -lwaylithaudio -lz \
+    -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics -framework Metal -framework CoreFoundation \
     -o "$APP/Port17Host" \
-    "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/engine.c" "$ROOT/host/app/triangle.c" "$ROOT/host/app/audio_test.c" "$ROOT/host/app/libs_check.c"
+    "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/engine.c" "$ROOT/host/app/unzip.c" "$ROOT/host/app/triangle.c" "$ROOT/host/app/audio_test.c" "$ROOT/host/app/libs_check.c"
 cp "$ROOT/host/app/Info.plist" "$APP/"
 
 # 6) .NET 探针诊断件（M1 全套：官方运行时 + Hello，平铺 .app 根——CoreLib 同目录原则）

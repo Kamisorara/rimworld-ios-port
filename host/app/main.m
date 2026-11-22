@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #import "host.h"
+#import "unzip.h"
 #import "../glfw/glfw_ios.h"
 
 int triangle_main(void);
@@ -597,6 +598,7 @@ static int engine_thread(void)
     boot_log(@"engine 线程启动（16MB 栈）");
     const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];
     const char *home = [NSHomeDirectory() UTF8String];
+    port17_install_game_zip(home); // 诊断模式里丢进来的 zip 也装上（装完再判定）
     int rc = run_engine(bundle, home);
     char buf[64];
     snprintf(buf, sizeof(buf), "run_engine 返回 %d", rc);
@@ -735,6 +737,14 @@ int main(int argc, char *argv[])
         // 同一风险面，关掉只影响性能优化路径，不影响功能。
         setenv("MVK_CONFIG_RESIDENCY_SETS", "0", 0);
         setenv("MVK_CONFIG_USE_MTLRESIDENCYSETS", "0", 0);
+
+        // zip 自动安装：Documents/port17-game.zip 在就解压成 Documents/game（PC 上
+        // scripts/pack-game-zip.py 的产物；换新版游戏也是丢一个新 zip 的事——旧 game 自动
+        // 挪 game.previous）。主线程上活儿放线程里干，runloop 切片泵着等（launch watchdog
+        // 数的是 app 不伺候 runloop 的秒数）。
+        int installed = port17_install_game_zip(NSHomeDirectory().UTF8String);
+        if (installed < 0)
+            boot_log(@"zip 安装失败——见日志；继续按有无 game 判定");
 
         // 引擎模式：Documents/game 有游戏就走。5014 引擎的 iOS 窗口后端（Waylith.Windowing
         // 的 Backends.IOS）要求主线程、自己调 UIApplicationMain 建 UIWindowScene/CAMetalLayer
