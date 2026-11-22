@@ -500,7 +500,8 @@ static void run_on_big_thread(int (*fn)(void))
     m_engineRan = YES;
     if (m_probeRan)
         append_log("注意：探针已用过 CoreCLR——引擎的 coreclr_initialize 大概率 0x80131022，重启 app 直接点「引擎」最稳");
-    append_log("停止三角形，启动引擎（Documents/game 的 RimWorld.dll；首屏前 stdout 滚动是正常进度）");
+    append_log("诊断模式试跑引擎：装载链（TPA/CLR/程序集/引擎 Main）全验证；窗口后端例外——");
+    append_log("5014 引擎的 iOS 后端要求主线程并自建 UIApplicationMain，只能由重启后的引擎模式（Documents/game 在即自动）满足");
     g_text.hidden = NO; // 引导期看得见装载日志；「日志」按钮随时收起
     // triangle_stop 最多等 2 秒循环收尾，别冻主线程。
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
@@ -621,17 +622,48 @@ static int run_probe_thread(void)
 @property (strong, nonatomic) UIWindow *window;
 @end
 
+// 场景生命周期：Info.plist 开了 UIApplicationSceneManifest（引擎的 iOS 后端要它——
+// WaylithApplicationDelegate 经 configurationForConnectingSceneSession 给自己的 scene
+// delegate），我们的诊断 UI 也跟着搬到 scene 里，否则清单在而窗口不走 scene = 黑屏。
+@interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
+@property (strong, nonatomic) UIWindow *window;
+@end
+
+@implementation SceneDelegate
+
+- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options
+{
+    (void)session;
+    (void)options;
+    UIWindowScene *windowScene = (UIWindowScene *)scene;
+    self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
+    self.window.rootViewController = [[HostVC alloc] init];
+    [self.window makeKeyAndVisible];
+}
+
+@end
+
 @implementation AppDelegate
 
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)options
 {
-    self.window = [[UIWindow alloc]
-        initWithFrame:UIScreen.mainScreen.bounds];
-    self.window.rootViewController = [[HostVC alloc] init];
-    [self.window makeKeyAndVisible];
-    host_set_log_sink(append_log);
-    return YES;
+    (void)application;
+    (void)options;
+    return YES; // 日志 sink 已在 main() 装好（引擎模式要更早）
+}
+
+- (UISceneConfiguration *)application:(UIApplication *)application
+    configurationForConnectingSceneSession:(UISceneSession *)connectingSceneSession
+    options:(UISceneConnectionOptions *)options
+{
+    (void)application;
+    (void)connectingSceneSession;
+    (void)options;
+    UISceneConfiguration *config = [UISceneConfiguration configurationWithName:@"diagnostics"
+                                                             sessionRole:connectingSceneSession.role];
+    config.delegateClass = SceneDelegate.class;
+    return config;
 }
 
 @end
@@ -692,6 +724,9 @@ int main(int argc, char *argv[])
         signal(SIGABRT, crash_handler);
         signal(SIGTRAP, crash_handler);
         signal(SIGILL, crash_handler);
+        // 日志 sink 一开始就装：引擎模式下宿主 UIKit 还没起来，host_log 的行经
+        // append_log 落 port17-ui.log（UI 部分排队等 UIApplicationMain 后补上屏）。
+        host_set_log_sink(append_log);
         setenv("HELLO_OUT", [[NSHomeDirectory()
             stringByAppendingPathComponent:@"Documents/hello.log"]
             fileSystemRepresentation], 1);
@@ -700,6 +735,22 @@ int main(int argc, char *argv[])
         // 同一风险面，关掉只影响性能优化路径，不影响功能。
         setenv("MVK_CONFIG_RESIDENCY_SETS", "0", 0);
         setenv("MVK_CONFIG_USE_MTLRESIDENCYSETS", "0", 0);
+
+        // 引擎模式：Documents/game 有游戏就走。5014 引擎的 iOS 窗口后端（Waylith.Windowing
+        // 的 Backends.IOS）要求主线程、自己调 UIApplicationMain 建 UIWindowScene/CAMetalLayer
+        // （VK_EXT_metal_surface 与我们的三角形同一条 Vulkan 路）——宿主的 UIKit 不能先占
+        // 主线程，所以引擎在 main 线程直接上 CoreCLR，诊断 UI 退位。引擎返回（失败或游戏
+        // 退出）再落回诊断界面，port17-ui.log 回放把过程直接摆在屏幕上。
+        NSString *gameDll = [docDir
+            stringByAppendingPathComponent:@"game/RimWorld.dll"];
+        if ([fm fileExistsAtPath:gameDll]) {
+            boot_log(@"引擎模式：Documents/game 在，主线程直接跑引擎（宿主 UIKit 退位）");
+            const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];
+            const char *home = [NSHomeDirectory() UTF8String];
+            int rc = run_engine(bundle, home);
+            boot_log([NSString stringWithFormat:@"引擎模式结束（run_engine 返回 %d）——落回诊断界面", rc]);
+        }
+
         boot_log(@"UIApplicationMain 开始");
         int rc = UIApplicationMain(argc, argv, nil,
                                    NSStringFromClass([AppDelegate class]));

@@ -55,13 +55,26 @@ Steam（1）：`com.rlabrecque.steamworks.net.dll`
 - **文件 app**：game 文件夹经隔空投送/iCloud/网盘到 文件 app，再移动到
   「我的 iPhone/iPad → Port17 → Documents」下。
 
-## 启动
+## 启动（引擎模式）
 
-开 Port17 → 点「**引擎**」。预期日志链：`==== 引擎启动` → `机器类型补写 N 个程序集`
-（首两次会写 RimWorld.dll 和 com.rlabrecque.steamworks.net.dll，幂等）→ `TPA 共 N（运行时 … + 游戏 …）`
-→ `初始化 CoreCLR` → `CoreCLR 就绪` → 引擎 stdout 滚动（Assets/Data 加载）→ 画面。
+**Documents/game 里放了 RimWorld.dll，app 一打开就直接进引擎**（引擎模式）：5014 引擎的
+iOS 窗口后端（Waylith.Windowing 的 Backends.IOS）要求主线程、自己调 UIApplicationMain
+建 UIWindowScene/CAMetalLayer，走 VK_EXT_metal_surface + 我们的 libvulkan→MoltenVK——
+宿主的诊断界面为此退位。预期过程：黑屏较久（引擎装载 + Assets/Data 加载，stdout 顺序落
+port17-ui.log），然后出画面。
 
-黑屏/闪退时：日志回放看 `Documents/port17-ui.log` 与 `Documents/coreclr-stderr.log`
-（拷回给开发：整个 Documents 目录即可）。宿主对 Documents/game 的程序集做**原地**
-AMD64→ARM64 机器类型补写（纯 IL 的 2 字节标记修正，安卓 Setup.MarkArm64 同款）——
-介意的话重新拷一份覆盖回来即可复原。
+引擎返回（失败或游戏退出）自动落回诊断界面，port17-ui.log 回放把过程摆上屏。
+删掉/改名 Documents/game 再开 app = 回到纯诊断界面（三角形/探针/音频/库自检）。
+
+预期日志链（port17-ui.log）：`引擎模式：Documents/game 在…` → `==== 引擎启动` →
+`机器类型补写 N 个程序集`（首次会写 RimWorld.dll 和 com.rlabrecque.steamworks.net.dll，
+幂等）→ `TPA 共 N（运行时 … + 游戏 …）` → `初始化 CoreCLR` → `CoreCLR 就绪` →
+引擎 stdout 滚动 → 画面。
+
+黑屏/闪退时：`Documents/port17-ui.log` 与 `Documents/coreclr-stderr.log` 拷回给开发
+（整个 Documents 目录即可）。宿主对 Documents/game 的程序集做**原地** AMD64→ARM64
+机器类型补写（纯 IL 的 2 字节标记修正，安卓 Setup.MarkArm64 同款）——介意的话重新拷
+一份覆盖回来即可复原。
+
+设备端实验旋钮（都放 Documents/game/）：`args.txt`（命令行）、`runtime.env`（环境变量）、
+`runtime.properties`（CoreCLR 属性，可覆盖默认）。

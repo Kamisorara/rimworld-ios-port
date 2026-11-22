@@ -38,6 +38,9 @@ extern int glfwCreateWindowSurface(void* instance, GLFWwindow* window, const voi
 extern GLFWcharfun glfwSetCharCallback(GLFWwindow* w, GLFWcharfun cb);
 extern GLFWkeyfun glfwSetKeyCallback(GLFWwindow* w, GLFWkeyfun cb);
 extern int glfwGetError(const char** description);
+// The teardown that hands the shim's single window slot back (the engine's pre-flight).
+extern void glfwDestroyWindow(GLFWwindow* w);
+extern void glfwTerminate(void);
 // The raw touch queue (the managed layer's path), the Android name.
 #include "../glfw/glfw_ios.h"
 
