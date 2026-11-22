@@ -412,7 +412,26 @@ int run_engine(const char *bundle_dir, const char *home)
     setenv("DOTNET_Thread_DefaultStackSize", "0x1000000", 1);
     // The interpreter line of M1: the official iOS pack is a JIT/interpreter mix and InterpMode=2
     // (disable R2R, run interpreted) is what made it start at all.
-    setenv("COMPlus_InterpMode", "2", 1);
+    //
+    // JIT experiment (M3): <game>/jit.on present -> try the native JIT (InterpMode=0). M1 already
+    // proved the official build's JIT actually works on an authorized device (its W^X calls are
+    // statically linked properly); ReadyToRun=0 keeps the R2R images out — the M1 SIGABRT came
+    // from R2R loading, not the JIT itself. The interpreter stays the default: game files patched
+    // by setup behave identically under either execution mode (all patches are IL/metadata level),
+    // so flipping this is a runtime-config-only change.
+    char jitFlag[1100];
+    snprintf(jitFlag, sizeof jitFlag, "%s/jit.on", game);
+    if (file_exists(jitFlag))
+    {
+        setenv("COMPlus_InterpMode", "0", 1);
+        setenv("DOTNET_ReadyToRun", "0", 1);
+        host_log("引擎：JIT 实验模式（jit.on 在）——InterpMode=0 + R2R 关闭（M1 死点在 R2R 装载，不在 JIT 本体）");
+    }
+    else
+    {
+        setenv("COMPlus_InterpMode", "2", 1);
+        host_log("引擎：解释器模式（要试 JIT：在 game 目录建 jit.on 空文件后重开）");
+    }
     setenv("COMPlus_EnableCrashReport", "1", 1);
     setenv("COMPlus_EnableDiagnostics", "1", 1);
 
