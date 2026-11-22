@@ -15,6 +15,11 @@
 //        （System.Console 在 POSIX 用同一个不支持的 API 实现 CancelKeyPress）。
 //     4. 机器类型：RimWorld.dll 与 Steamworks.NET 的 AMD64 标记改 ARM64（.NET 11 实测不拒，
 //        与安卓 10.0 行为不同，但改了无害且防回归）。
+//     5. WaylithClr.* 改道：引擎程序集把这些类型按"住在 System.Runtime"引用（Ludeon 定制
+//        运行时 10.0.15-waylithclr 的私货），官方 11.0 没有——Bootstrap.Initialize 第一步
+//        PrepatcherCompat.Install 装载字段注入层时静态构造就 TypeLoadException（m2-engine-13）。
+//        引用整体改道到 bundle 里的 PortHooks.dll 替身（行为=电脑上关掉这些功能；安卓
+//        patch/Patch.cs 的同款手术，全游戏+92 mod 实测姿势）。
 //   成功写 port17-setup.stamp（宿主认它决定进引擎还是先跑 setup）。
 using System;
 using System.Collections.Generic;
@@ -59,6 +64,7 @@ namespace Port17Setup
                 NullifyRegisterPosixSignal(game, ref changed, ref kept);
                 VoidifyLifetimeHooks(game, ref changed, ref kept); // 2.5：含 3 的删行（Hook/Dispose 已整哑）
                 RedirectProcessPath(game, ref changed, ref kept);
+                RetargetWaylithClr(game, ref changed, ref kept);
                 MarkArm64(game);
             }
             catch (Exception e)
@@ -66,8 +72,8 @@ namespace Port17Setup
                 Say("[setup] failed: " + e);
                 return 3;
             }
-            File.WriteAllLines(Path.Combine(game, "port17-setup.v4.stamp"),
-                new[] { "Port17Setup v4", "changed=" + changed, "kept=" + kept });
+            File.WriteAllLines(Path.Combine(game, "port17-setup.v5.stamp"),
+                new[] { "Port17Setup v5", "changed=" + changed, "kept=" + kept });
             Say($"[setup] done: {changed} rewritten, {kept} already");
             return 0;
         }
@@ -400,7 +406,86 @@ namespace Port17Setup
             }
         }
 
-        // ---- 5. 机器类型 AMD64 → ARM64（原地 2 字节，幂等） ----
+        // ---- 5. WaylithClr.* 引用改道 PortHooks（m2-engine-13 的墙） ----
+
+        // Ludeon 的运行时分支（10.0.15-waylithclr）在自己的 System.Runtime 里加了一族
+        // WaylithClr.* 类型：字段注入、方法体替换/变换管线、自分析器。引擎程序集按"住在
+        // System.Runtime"引用它们（Version 统一到已装载的 11.0 后按类型名找，找不到就抛
+        // TypeLoadException）。bundle 里的 PortHooks.dll（安卓 hooks/WaylithClr.cs 同源）带
+        // 全套替身——行为=电脑上关掉这些功能：IsSupported=false、Commit 抛 Ludeon 的
+        // NotSupportedException，引擎自己降级。这里把 scope=System.Runtime 的 WaylithClr.*
+        // TypeRef 改道到 PortHooks（安卓 patch/Patch.cs 的同款 10 行手术）。
+        // 只动元数据的解析范围，方法体一根毛都不碰。
+        private static void RetargetWaylithClr(string game, ref int changed, ref int kept)
+        {
+            // 快筛：引用者的 #Strings 堆里必有 "WaylithClr" 字面量（命名空间串）。解释器上
+            // 全量 Cecil 读 60 多个 dll 太慢，先按字节扫，含字面量的才打开。
+            byte[] needle = System.Text.Encoding.UTF8.GetBytes("WaylithClr");
+            int touched = 0, total = 0;
+            foreach (string path in Directory.EnumerateFiles(game, "*.dll"))
+            {
+                string name = Path.GetFileName(path);
+                // 游戏自带的定制运行时件（System.* 命名）永远轮不到引擎装载（TPA 里 bundle
+                // 同名件优先），不改写它们——尤其 System.Private.CoreLib 有几十 MB，白写费时。
+                if (name.StartsWith("System", StringComparison.Ordinal))
+                    continue;
+                if (!ContainsBytes(path, needle))
+                    continue;
+                var asm = Open(game, name);
+                if (asm == null)
+                    continue;
+                using (asm)
+                {
+                    var portHooks = asm.MainModule.AssemblyReferences.FirstOrDefault(r => r.Name == "PortHooks");
+                    if (portHooks == null)
+                    {
+                        portHooks = new AssemblyNameReference("PortHooks", new Version(1, 0, 0, 0));
+                        asm.MainModule.AssemblyReferences.Add(portHooks);
+                    }
+                    int did = 0;
+                    foreach (TypeReference t in asm.MainModule.GetTypeReferences())
+                    {
+                        if (t.FullName.StartsWith("WaylithClr.", StringComparison.Ordinal) &&
+                            t.Scope is AssemblyNameReference scope && scope.Name == "System.Runtime")
+                        {
+                            t.Scope = portHooks;
+                            did++;
+                        }
+                    }
+                    if (did > 0)
+                    {
+                        Save(game, name, asm);
+                        Say($"[setup] {name}: WaylithClr.* → PortHooks ×{did}");
+                        touched++;
+                        total += did;
+                    }
+                }
+            }
+            changed += total;
+            Say(touched > 0
+                ? $"[setup] WaylithClr 改道：{touched} 个程序集 / {total} 处引用 → PortHooks.dll"
+                : "[setup] WaylithClr：没有要改道的引用（已在或不存在）");
+            if (touched == 0)
+                kept++;
+        }
+
+        private static bool ContainsBytes(string path, byte[] needle)
+        {
+            byte[] hay = File.ReadAllBytes(path);
+            for (int i = 0; i + needle.Length <= hay.Length; i++)
+            {
+                if (hay[i] != needle[0])
+                    continue;
+                int j = 1;
+                while (j < needle.Length && hay[i + j] == needle[j])
+                    j++;
+                if (j == needle.Length)
+                    return true;
+            }
+            return false;
+        }
+
+        // ---- 6. 机器类型 AMD64 → ARM64（原地 2 字节，幂等） ----
 
         private static void MarkArm64(string game)
         {

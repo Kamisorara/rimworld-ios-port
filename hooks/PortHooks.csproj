@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>PortHooks</AssemblyName>
+    <RootNamespace>WaylithClr</RootNamespace>
+    <!-- 纯托管件：引擎在设备的官方 iOS 运行时上按简单名从 TPA 装载（net8.0 IL 兼容，
+         框架引用按 TPA 名字解析到 11.0——游戏自己的 10.0.15-waylithclr 引用同理）。
+         程序集版本钉 1.0.0.0：setup/Setup.cs 的 RetargetWaylithClr 按这个名字与版本改道。 -->
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+  </PropertyGroup>
+</Project>
