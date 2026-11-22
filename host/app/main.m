@@ -639,6 +639,31 @@ static int run_probe_thread(void)
 
 @implementation SceneDelegate
 
+// 引擎会话的后台任务断言。iOS 在 app 进后台（熄屏/上划/切走）时拒绝执行 Metal 命令缓冲
+// （kIOGPUCommandBufferCallbackErrorBackgroundExecutionNotPermitted），而 MoltenVK 对这个
+// 错误无条件判 VK_ERROR_DEVICE_LOST——v1.4.2 与上游 main 同款：handleMTLCommandBufferError
+// 的 NotPermitted 分支把 markDeviceLoss 强制 true，无视 MVK_CONFIG_RESUME_LOST_DEVICE（引擎
+// 自己配的救不了）——m2-engine-14 的熄屏闪退链：在途命令缓冲被杀 → 设备丢失 → 引擎退出
+// 路径 RenderThread.Stop 再撞 → UIKit 循环未处理异常 FailFast。持有 UIKit 后台断言后 iOS
+// 给 ~30 秒"完成在途工作"窗口（Metal 后台的标准姿势）；引擎自己的 HoldBackgroundTask 只在
+// 抑制节流时才拿，装载期是空的。过期干净归还，回前台重新持有（下一次熄屏又有窗口）。
+static UIBackgroundTaskIdentifier g_engineBgTask = UIBackgroundTaskInvalid;
+static id g_bgTaskObserver = nil; // 观察者令牌要持有（不持有可能被提前释放，重挂静默失效）
+static void engine_hold_background_task(void)
+{
+    if (g_engineBgTask != UIBackgroundTaskInvalid)
+        return;
+    g_engineBgTask = [[UIApplication sharedApplication]
+        beginBackgroundTaskWithExpirationHandler:^{
+            if (g_engineBgTask != UIBackgroundTaskInvalid)
+            {
+                [[UIApplication sharedApplication] endBackgroundTask:g_engineBgTask];
+                g_engineBgTask = UIBackgroundTaskInvalid;
+            }
+        }];
+    append_log("🛡️ 引擎后台断言已持有（熄屏/切走时在途 GPU 工作有约 30 秒完成窗口）");
+}
+
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options
 {
     // 引擎的 UIKit 会话把 scene 交到了我们手里（七跑铁证：execute 活着、引擎的
@@ -650,6 +675,12 @@ static int run_probe_thread(void)
     if (waylith != NULL)
     {
         append_log("⚠️ scene 转交引擎（WaylithSceneDelegate 在，实例化并转发 willConnect）");
+        // 先持断言再转交（此时 UIApplicationMain 已在跑，sharedApplication 可用）
+        engine_hold_background_task();
+        g_bgTaskObserver = [[NSNotificationCenter defaultCenter]
+            addObserverForName:UIApplicationDidBecomeActiveNotification
+                        object:nil queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *_) { engine_hold_background_task(); }];
         id engineDelegate = [[waylith alloc] init];
         scene.delegate = engineDelegate;
         if ([engineDelegate respondsToSelector:@selector(scene:willConnectToSession:options:)])

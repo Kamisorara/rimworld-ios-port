@@ -160,6 +160,15 @@ xcrun -sdk "$SDK" clang \
     -L "$APP" -lslang-compiler \
     -o "$APP/libslang.dylib" \
     "$ROOT/host/native/slang_proxy.c"
+# @rpath 的"路"本身（m2-engine-14 实测坑）：dyld 对主程序自己的 @rpath 依赖有"可执行
+# 文件目录"兜底（Port17Host 一条 LC_RPATH 都没有，libglfw 照样装载），但对 dlopen 链上
+# 的库没有这个兜底——引擎 NativeLibrary.Load("slang") 命中 libslang.dylib 后，它的
+# @rpath/libslang-compiler.dylib 只试了 .app/Frameworks/ 就放弃（GpuProbe 装载失败，GPU
+# 档被降到保守档）。给 slang 四件各钉一条 @executable_path 的 LC_RPATH，@rpath 即解析
+# 到 .app 根。必须在第 7 步签名之前。
+for f in libslang.dylib libslang-compiler.dylib libslang-glslang-2026.19.so libslang-glsl-module-2026.19.so; do
+    install_name_tool -add_rpath @executable_path "$APP/$f"
+done
 
 # 4.9) ImGui（Dear ImGui 1.92.2 docking + 平铺 C 面 imgui_c.cpp）与其 FreeType 加载器。
 #      安卓版的两个补丁（上游 1.92.3 的字体图矩槽复用修复、FreeType 字形加载的线程锁）打在副本上。
