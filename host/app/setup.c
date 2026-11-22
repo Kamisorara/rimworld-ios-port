@@ -170,9 +170,11 @@ static int run_setup_now(const char *bundle, const char *game)
         host_log(buf);
         return -5;
     }
-    char *argv[1] = { (char *)game };
+    // v9 起 PortMobileSupport/HarmonyCompat 要从 bundle 解析 PortHooks.dll 的成员（钩点
+    // 回调与 Harmony 兼容垫片都在那），托管 Main 收 (game, bundle) 两个参数。
+    char *argv[2] = { (char *)game, (char *)bundle };
     unsigned int exitCode = 0;
-    hr = exec(host, domain, 1, argv, setupDll, &exitCode);
+    hr = exec(host, domain, 2, argv, setupDll, &exitCode);
     if (hr != 0)
     {
         char buf[64];

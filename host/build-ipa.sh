@@ -266,13 +266,17 @@ xcrun -sdk "$SDK" clang \
 dotnet build "$ROOT/setup/Port17Setup.csproj" -c Release -o "$ROOT/build-m2/setup"
 cp "$ROOT/build-m2/setup/Port17Setup.dll" "$ROOT/build-m2/setup/Mono.Cecil.dll" "$APP/"
 
-# 4.99) PortHooks.dll：Ludeon 运行时分支的 WaylithClr.* 替身（安卓 hooks/WaylithClr.cs
-#      同源）。引擎程序集把这些类型按"住在 System.Runtime"引用，官方 11.0 没有——
-#      Bootstrap.Initialize 第一步 PrepatcherCompat.Install 就 TypeLoadException（m2-engine-13）。
-#      setup（RetargetWaylithClr）把引用改道到本程序集；放 .app 根即进引擎 TPA
-#      （add_assemblies 平铺枚举，引擎按简单名装载），行为=电脑上关掉这些功能。
-dotnet build "$ROOT/hooks/PortHooks.csproj" -c Release -o "$ROOT/build-m2/hooks"
-cp "$ROOT/build-m2/hooks/PortHooks.dll" "$APP/"
+# 4.99) PortHooks.dll：完整版（安卓 hooks/ 全量：StartupHook/PortPlatform/ModPrepHost/
+#      HarmonyCompat/InlineWatch/MonoModArch/... + WaylithClr 替身）。引擎的 WaylithClr.*
+#      引用改道到它（setup v8 RetargetWaylithClr）；UIRoot_Entry.Init 的钩点（setup v9
+#      插入）回调它的 OnEntryUIInit 拉起 PortMobile 触控层——两层与安卓同源，glfwAndroid*
+#      接口契约零改动。CI 无游戏文件（红线）不出这个件：Windows 本地跑
+#      scripts/build-portlayers.py（PortMobile 引用 relaxed 游戏副本），产物入仓 prebuilt/，
+#      这里拷进 .app 根（TPA 平铺；PortMobile.dll 同根，StartupHook 在
+#      AppContext.BaseDirectory 找它）。
+[ -f "$ROOT/prebuilt/PortHooks.dll" ] || { echo "::error::prebuilt/PortHooks.dll 缺（本地跑 scripts/build-portlayers.py）"; exit 1; }
+[ -f "$ROOT/prebuilt/PortMobile.dll" ] || { echo "::error::prebuilt/PortMobile.dll 缺（本地跑 scripts/build-portlayers.py）"; exit 1; }
+cp "$ROOT/prebuilt/PortHooks.dll" "$ROOT/prebuilt/PortMobile.dll" "$APP/"
 
 # 5) 宿主可执行（M2 骨架 + 三角形 + 音频/原生库自检 + .NET 探针诊断件 + 引擎装载件
 #    + zip 自动安装件 + setup 运行件；解压用系统 libz 的 raw inflate）

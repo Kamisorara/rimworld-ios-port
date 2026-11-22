@@ -15,3 +15,8 @@ build-native-deps/
 game-staging/
 *.zip
 game-steam/
+# M4 本地构建与测试现场
+game-stage-relaxed/
+setup-test/
+prebuilt/*.rsp
+prebuilt/BuiltFor.cs

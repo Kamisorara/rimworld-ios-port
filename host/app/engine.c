@@ -393,7 +393,7 @@ int run_engine(const char *bundle_dir, const char *home)
     // 文件后来被替换过。（只认当前版戳；老的 os-detect+platform 组合不再放行。）
     {
         char stamp[1100];
-        snprintf(stamp, sizeof stamp, "%s/port17-setup.v8.stamp", game);
+        snprintf(stamp, sizeof stamp, "%s/port17-setup.v9.stamp", game);
         if (!file_exists(stamp))
             host_log("引擎：没有当前版改写戳（port17-setup.v7.stamp）——这份游戏文件没被最新 setup 改写过；"
                      "重开 app 会让宿主自动跑设备内 setup");

@@ -696,6 +696,16 @@ API void glfwAndroidPrepareExit(void)
     log_line("the game is quitting");
 }
 
+// 安卓版是 call_activity("restartGame")——activity 重建；iOS 的 app 不能自己拉起自己，
+// 唯一合法形态是干净退出（用户回主屏再点一次）。exit(0) 走正常终止（_exit 不行：
+// 跳过 atexit 与文件缓冲冲洗），PortMobile 的重开对话按"已重启"继续。
+API int glfwAndroidRestart(void)
+{
+    log_line("glfw: restart of the game asked for - clean exit (iOS cannot relaunch itself; reopen the app)");
+    exit(0);
+    return 0;
+}
+
 // ---- engine-thread side: dispatching ----
 static void dispatch(const Event* e)
 {

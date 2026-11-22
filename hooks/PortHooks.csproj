@@ -10,5 +10,11 @@
          程序集版本钉 1.0.0.0：setup/Setup.cs 的 RetargetWaylithClr 按这个名字与版本改道。 -->
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <FileVersion>1.0.0.0</FileVersion>
+    <!-- M4：hooks/ 目录现在是安卓仓库同步来的完整 PortHooks 源码（24 文件 + ModPrep），
+         编译它们要游戏程序集引用——CI 没有游戏文件（红线），只编 WaylithClr.cs 这一个
+         占位件维持现状；完整 PortHooks.dll 在 Windows 本地构建（scripts/build-portlayers.py，
+         对 relaxed staging），产物入仓 prebuilt/PortHooks.dll，build-ipa.sh 拷它进 .app。 -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <Compile Include="WaylithClr.cs" />
   </PropertyGroup>
 </Project>
