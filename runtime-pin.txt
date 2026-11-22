@@ -1,3 +1,6 @@
-86ee4f57ebc
-# dotnet/runtime release/11.0 @ 2026-11-05 (86ee4f57ebc...)
-# v11.0.0 GA tag 发布后升级到该 tag，之后跟随 11.0.x 服务版本
+v11.0.0
+# dotnet/runtime GA tag v11.0.0（2026-11-10 发布，官方 NuGet 包同源）——0.3.3 从
+# 86ee4f57ebc（11-05 预览）升级：GA 的 ios libs 构建 92/179 程序集从能力桩换为
+# 真实现（System.IO.MemoryMappedFiles 等——0.3.2 m3-jit-3 的 Assets.zip "缺失"
+# FailFast 根因即 MMF 桩），JIT 与解释器两种模式共同回到与官方包同源的 BCL。
+# 之后跟随 11.0.x 服务版本。
