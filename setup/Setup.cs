@@ -57,7 +57,7 @@ namespace Port17Setup
             {
                 PatchOsDetection(game, ref changed, ref kept);
                 NullifyRegisterPosixSignal(game, ref changed, ref kept);
-                StripCancelKeyPress(game, ref changed, ref kept);
+                VoidifyLifetimeHooks(game, ref changed, ref kept); // 2.5：含 3 的删行（Hook/Dispose 已整哑）
                 MarkArm64(game);
             }
             catch (Exception e)
@@ -65,8 +65,8 @@ namespace Port17Setup
                 Say("[setup] failed: " + e);
                 return 3;
             }
-            File.WriteAllLines(Path.Combine(game, "port17-setup.stamp"),
-                new[] { "Port17Setup v1", "changed=" + changed, "kept=" + kept });
+            File.WriteAllLines(Path.Combine(game, "port17-setup.v2.stamp"),
+                new[] { "Port17Setup v2", "changed=" + changed, "kept=" + kept });
             Say($"[setup] done: {changed} rewritten, {kept} already");
             return 0;
         }
@@ -198,6 +198,56 @@ namespace Port17Setup
                 Save(game, dll, asm);
                 Say($"[setup] {dll}: {type}::{method} → return null");
                 changed++;
+            }
+        }
+
+        // ---- 2.5 ProcessLifetime 的 Hook/Dispose 整体哑掉（方法体 = ret）----
+        // 真机四跑：删掉 CancelKeyPress 后崩在保留的下一个订阅上——AppDomain.ProcessExit +=
+        // 触发 Delegate.Combine→InternalEqualTypes→GetType 的原生 SIGSEGV（无 "Stack overflow"
+        // 字样，非溢出形态）。这三个钩子只服务优雅退出（Ctrl+C/SIGTERM/收尾），iOS 没有这些
+        // 交互也不影响出画面——整族绕开。void 方法：体 = 单条 ret。
+
+        private static readonly (string dll, string type, string method)[] VoidReturns =
+        {
+            ("Waylith.dll", "Waylith.Diagnostics.ProcessLifetime", "Hook"),
+            ("Waylith.dll", "Waylith.Diagnostics.ProcessLifetime", "Dispose"),
+        };
+
+        private static void VoidifyLifetimeHooks(string game, ref int changed, ref int kept)
+        {
+            const string dll = "Waylith.dll", type = "Waylith.Diagnostics.ProcessLifetime";
+            var asm = Open(game, dll);
+            if (asm == null)
+            {
+                Say($"[setup] {dll}: not present, skipped");
+                return;
+            }
+            using (asm)
+            {
+                var t = FindType(asm, type) ?? throw new InvalidOperationException($"{dll}: {type} 不在");
+                int did = 0;
+                foreach (var (_, _, name) in VoidReturns)
+                {
+                    var m = t.Methods.FirstOrDefault(x => x.Name == name && x.HasBody);
+                    if (m == null)
+                        continue;
+                    if (m.Body.Instructions.Count == 1 && m.Body.Instructions[0].OpCode == OpCodes.Ret)
+                        continue; // 已哑
+                    m.Body = new MethodBody(m) { InitLocals = false, MaxStackSize = 0 };
+                    m.Body.GetILProcessor().Emit(OpCodes.Ret);
+                    did++;
+                }
+                if (did > 0)
+                {
+                    Save(game, dll, asm);
+                    Say($"[setup] {dll}: ProcessLifetime Hook/Dispose 哑化 ×{did}（优雅退出一族整体绕开）");
+                    changed++;
+                }
+                else
+                {
+                    Say($"[setup] {dll}: Hook/Dispose 已哑化（跳过）");
+                    kept++;
+                }
             }
         }
 

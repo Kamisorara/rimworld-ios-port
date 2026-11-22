@@ -753,7 +753,7 @@ int main(int argc, char *argv[])
         char gameDir[1024];
         if (port17_find_game(NSHomeDirectory().UTF8String, gameDir, sizeof gameDir) == 0) {
             NSString *gameNS = [NSString stringWithUTF8String:gameDir];
-            NSString *stamp = [gameNS stringByAppendingPathComponent:@"port17-setup.stamp"];
+            NSString *stamp = [gameNS stringByAppendingPathComponent:@"port17-setup.v2.stamp"];
             NSString *legacyA = [gameNS stringByAppendingPathComponent:@"os-detect.port17"];
             NSString *legacyB = [gameNS stringByAppendingPathComponent:@"platform.port17"];
             BOOL setupDone = [fm fileExistsAtPath:stamp] ||
