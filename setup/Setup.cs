@@ -74,6 +74,7 @@ namespace Port17Setup
                 RetargetWaylithClr(game, ref changed, ref kept);
                 ForceConservativeTier(game, ref changed, ref kept);
                 CheapTextureChain(game, ref changed, ref kept);
+                PersistentDataUnderDocuments(game, ref changed, ref kept);
                 MarkArm64(game);
             }
             catch (Exception e)
@@ -81,8 +82,8 @@ namespace Port17Setup
                 Say("[setup] failed: " + e);
                 return 3;
             }
-            File.WriteAllLines(Path.Combine(game, "port17-setup.v7.stamp"),
-                new[] { "Port17Setup v7", "changed=" + changed, "kept=" + kept });
+            File.WriteAllLines(Path.Combine(game, "port17-setup.v8.stamp"),
+                new[] { "Port17Setup v8", "changed=" + changed, "kept=" + kept });
             Say($"[setup] done: {changed} rewritten, {kept} already");
             return 0;
         }
@@ -599,7 +600,46 @@ namespace Port17Setup
             }
         }
 
-        // ---- 8. 机器类型 AMD64 → ARM64（原地 2 字节，幂等） ----
+        // ---- 8. 持久数据根改道 Documents（真容器容器根禁写） ----
+
+        // m2-engine-23 定案：GetLocalAppDataLow 的 Windows 兜底组出 home/AppData/LocalLow
+        // （shell32 替身必然失败 → 必走此路）。LiveContainer 的"家"是嵌套普通文件夹、根
+        // 可写 → 一直没炸；SideStore 直装的家是真沙盒容器，现代 iOS 禁止在容器根新建
+        // 目录 → EPERM → "Critical error in root Start()" → 全黑 + NullReferenceException
+        // 连环。改道：ldstr "AppData" → "Documents/AppData"，组合出
+        // home/Documents/AppData/LocalLow——Documents 在两种环境都可写。旧安装（LC）的
+        // 存档在老家 AppData/LocalLow 下，升级后要迁移的手工拷到新位置。
+        private static void PersistentDataUnderDocuments(string game, ref int changed, ref int kept)
+        {
+            const string dll = "RimWorld.dll", type = "RimWorldWaylith.Bootstrap", method = "GetLocalAppDataLow";
+            var asm = Open(game, dll);
+            if (asm == null)
+            {
+                Say($"[setup] {dll}: not present, skipped");
+                return;
+            }
+            using (asm)
+            {
+                var t = FindType(asm, type) ?? throw new InvalidOperationException($"{dll}: {type} 不在");
+                var m = t.Methods.FirstOrDefault(x => x.Name == method && x.HasBody)
+                    ?? throw new InvalidOperationException($"{dll}: {type}::{method} 不在——版本变了？");
+                if (m.Body.Instructions.Any(i => i.OpCode == OpCodes.Ldstr && (string)i.Operand == "Documents/AppData"))
+                {
+                    Say($"[setup] {dll}: GetLocalAppDataLow 已在 Documents 下（跳过）");
+                    kept++;
+                    return;
+                }
+                var hits = m.Body.Instructions.Where(i => i.OpCode == OpCodes.Ldstr && (string)i.Operand == "AppData").ToList();
+                if (hits.Count != 1)
+                    throw new InvalidOperationException($"{dll}: {method} 里 \"AppData\" 字面量有 {hits.Count} 处（期望 1）——版本变了，不动");
+                hits[0].Operand = "Documents/AppData";
+                Save(game, dll, asm);
+                Say($"[setup] {dll}: GetLocalAppDataLow → Documents/AppData/LocalLow（真容器根禁写的正解）");
+                changed++;
+            }
+        }
+
+        // ---- 9. 机器类型 AMD64 → ARM64（原地 2 字节，幂等） ----
 
         private static void MarkArm64(string game)
         {
