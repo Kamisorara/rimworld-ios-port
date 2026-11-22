@@ -23,6 +23,8 @@ int audio_test(void);
 int libs_check(void);
 static int run_probe_thread(void);
 static int engine_thread(void);
+// 本进程的 CoreCLR 是否已被 setup 用掉（引擎按钮据此直接指引重开，不去撞 0x80131022）。
+static BOOL g_clrSpentBySetup = NO;
 
 static UITextView *g_text = nil;
 
@@ -609,9 +611,6 @@ static int engine_thread(void)
     append_log(buf);
     return rc;
 }
-
-// 本进程的 CoreCLR 是否已被 setup 用掉（引擎按钮据此直接指引重开，不去撞 0x80131022）。
-static BOOL g_clrSpentBySetup = NO;
 
 // run_probe wants the plain signature the thread spawner takes.
 static int run_probe_thread(void)
