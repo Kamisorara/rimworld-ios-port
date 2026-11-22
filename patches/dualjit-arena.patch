@@ -15,6 +15,24 @@ index 8584b8852dc..179dd18b2a1 100644
   add_definitions(-DFEATURE_MAP_THUNKS_FROM_IMAGE)
  endif()
  
+diff --git a/src/coreclr/dlls/mscoree/coreclr/CMakeLists.txt b/src/coreclr/dlls/mscoree/coreclr/CMakeLists.txt
+index d510519874a..257e7b517c3 100644
+--- a/src/coreclr/dlls/mscoree/coreclr/CMakeLists.txt
++++ b/src/coreclr/dlls/mscoree/coreclr/CMakeLists.txt
+@@ -153,7 +153,12 @@ if (FEATURE_STATICALLY_LINKED)
+     if (FEATURE_DYNAMIC_CODE_COMPILED)
+         set(CLRJIT_STATIC clrjit_static gcinfo)
+     endif(FEATURE_DYNAMIC_CODE_COMPILED)
+-    if (FEATURE_INTERPRETER)
++    # Port17 hybrid: with dynamic code compiled, the JIT takes the static slot
++    # and the interpreter stays an on-demand dylib (LoadInterpreter dlopens
++    # clrinterpreter; the host points DOTNET_InterpreterName at it). Statically
++    # linking both would collide getJit/jitStartup across clrjit_static and
++    # clrinterpreter_objects - a matrix cell Microsoft CI never builds.
++    if (FEATURE_INTERPRETER AND NOT FEATURE_DYNAMIC_CODE_COMPILED)
+         set(CLRINTERPRETER_STATIC clrinterpreter_objects dn-containers gcinfo)
+     endif(FEATURE_INTERPRETER)
+ endif(FEATURE_STATICALLY_LINKED)
 diff --git a/src/coreclr/inc/executableallocator.h b/src/coreclr/inc/executableallocator.h
 index 93c4758956f..4b34fb57be9 100644
 --- a/src/coreclr/inc/executableallocator.h
@@ -95,7 +113,7 @@ index 93c4758956f..4b34fb57be9 100644
  
      ~ExecutableWriterHolder()
 diff --git a/src/coreclr/minipal/Unix/doublemapping.cpp b/src/coreclr/minipal/Unix/doublemapping.cpp
-index 997d7a523e8..82d841e7297 100644
+index 997d7a523e8..8d84288a982 100644
 --- a/src/coreclr/minipal/Unix/doublemapping.cpp
 +++ b/src/coreclr/minipal/Unix/doublemapping.cpp
 @@ -42,6 +42,13 @@
@@ -674,7 +692,7 @@ index 997d7a523e8..82d841e7297 100644
  
  #ifndef TARGET_APPLE
 diff --git a/src/coreclr/utilcode/executableallocator.cpp b/src/coreclr/utilcode/executableallocator.cpp
-index f982fa1f940..4e366290b9b 100644
+index f982fa1f940..2f1c1beb907 100644
 --- a/src/coreclr/utilcode/executableallocator.cpp
 +++ b/src/coreclr/utilcode/executableallocator.cpp
 @@ -124,7 +124,7 @@ bool ExecutableAllocator::IsDoubleMappingEnabled()
@@ -686,22 +704,28 @@ index f982fa1f940..4e366290b9b 100644
      return false;
  #else
      return g_isWXorXEnabled;
-@@ -262,6 +262,14 @@ HRESULT ExecutableAllocator::StaticInitialize(FatalErrorHandler fatalErrorHandle
+@@ -262,6 +262,20 @@ HRESULT ExecutableAllocator::StaticInitialize(FatalErrorHandler fatalErrorHandle
  
      g_fatalErrorHandler = fatalErrorHandler;
      g_isWXorXEnabled = Configuration::GetKnobBooleanValue(W("System.Runtime.EnableWriteXorExecute"), CLRConfig::EXTERNAL_EnableWriteXorExecute);
 +#if defined(HOST_APPLE) && defined(HOST_ARM64)
-+    // Port17: on Apple arm64 the legacy path (MAP_JIT + pthread_jit_write_protect_np)
-+    // can never write JIT code on iOS (the toggle is not exported), and iOS 26
-+    // refuses to execute self-created RWX mappings. Force the double-mapped
-+    // arena backend on; its probes (minipal/Unix/doublemapping.cpp) degrade
-+    // gracefully and restore the legacy path when nothing is usable.
-+    g_isWXorXEnabled = true;
++    // Port17 hybrid: force the arena-backed double mapping only when methods
++    // will actually be JIT-compiled (InterpMode == 0; the host hands the arena
++    // over through PORT17_JIT_*). Interpreted sessions keep the knob's default
++    // and run the exact configuration of the official interpreter-only iOS
++    // pack: single-mapped legacy allocator, no arena handshake, no fail-closed
++    // startup. The legacy path can never write JIT code on iOS and iOS 26+
++    // refuses to execute self-created RWX - which is fine, because nothing
++    // jits in those sessions (precodes and thunks behave as in the pack).
++    if (CLRConfig::GetConfigValue(CLRConfig::EXTERNAL_InterpMode) == 0)
++    {
++        g_isWXorXEnabled = true;
++    }
 +#endif
      g_instance = new (nothrow) ExecutableAllocator();
      if (g_instance == NULL)
      {
-@@ -288,6 +296,13 @@ bool ExecutableAllocator::Initialize()
+@@ -288,6 +302,13 @@ bool ExecutableAllocator::Initialize()
          if (!VMToOSInterface::CreateDoubleMemoryMapper(&m_doubleMemoryMapperHandle, &m_maxExecutableCodeSize))
          {
              g_isWXorXEnabled = false;

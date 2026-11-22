@@ -48,13 +48,13 @@ for p in "$ROOT"/patches/*.patch; do
     fi
 done
 
-# -DFEATURE_INTERPRETER=0：Apple mobile 强制静态链接，而 FEATURE_INTERPRETER 的默认值是个
-# configure 期未求值的生成器表达式字符串（$<IF:$<CONFIG:Debug,Checked>,1,0>），链接清单处的
-# if(FEATURE_INTERPRETER) 会把它当真值 → 解释器与 JIT 同时静态链入 libcoreclr.dylib，
-# getJit/jitStartup 等 8 个符号重复。显式定义为 0（JIT 变体不需要解释器）绕过该组合
-# （静态链接 + 动态代码，微软 CI 不构建的矩阵格）。
+# FEATURE_INTERPRETER=1（混合构建，2026-11-22 JIT 线复活）：JIT 静态链入 + 解释器作为
+# 按需 dylib（libclrinterpreter.dylib，宿主用 DOTNET_InterpreterName 指绝对路径装载）。
+# 两者的链接冲突（getJit/jitStartup 等 8 符号重复）由补丁里 mscoree/coreclr 的 CMake
+# 门控解开：静态链入只在非 DCC 构建发生。注意别用默认值（不传）——那是 configure 期
+# 未求值的生成器表达式字符串，if() 会把它当真值，恰好等于要修的 bug 形态。
 ./build.sh clr+libs -os "$CLROS" -arch arm64 -c Release \
     --dynamiccodecompiled true \
-    -cmakeargs "-DFEATURE_INTERPRETER=0"
+    -cmakeargs "-DFEATURE_INTERPRETER=1"
 
 echo "build done ${OUTDIR_NOTE}: $(find artifacts/bin/coreclr -maxdepth 1 -type d -iname "$BIN_MATCH")"

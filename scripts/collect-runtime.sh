@@ -41,6 +41,13 @@ while IFS= read -r -d '' d; do
     cp -n "$d" "$OUT/" 2>/dev/null || true
 done
 
+# 混合构建的解释器 dylib（InterpMode!=0 时运行时按需 dlopen；宿主把
+# DOTNET_InterpreterName 指到平铺目录）。构建目标有自己的输出目录，find 兜底。
+find "$SRC/artifacts/bin" -name 'libclrinterpreter.dylib' -print0 |
+while IFS= read -r -d '' d; do
+    cp -n "$d" "$OUT/" 2>/dev/null || true
+done
+
 # 其余 BCL：先 ios 专属变体（cp -n 之后不再覆盖），再 RID 无关版本补齐
 find "$SRC/artifacts/bin" -type d -path '*/Release/net11.0-ios' -print0 |
 while IFS= read -r -d '' d; do
@@ -60,6 +67,9 @@ if [ ! -e "$OUT/libcoreclr.dylib" ]; then
 fi
 if [ ! -e "$OUT/libSystem.Native.dylib" ]; then
     echo "::warning::runtime-out 里没有 libSystem.Native.dylib（类库原生部分），运行时会 0x80070002"
+fi
+if [ ! -e "$OUT/libclrinterpreter.dylib" ]; then
+    echo "::warning::runtime-out 里没有 libclrinterpreter.dylib（混合构建的解释器 dylib），解释器会话起不来"
 fi
 if [ ! -e "$OUT/managed/System.Private.CoreLib.dll" ]; then
     echo "::warning::managed 里没有 System.Private.CoreLib.dll，产物不完整"
