@@ -160,27 +160,16 @@ xcrun -sdk "$SDK" clang \
     -L "$APP" -lslang-compiler \
     -o "$APP/libslang.dylib" \
     "$ROOT/host/native/slang_proxy.c"
-# @rpath 的"路"本身（m2-engine-14 实测坑）：dyld 对主程序自己的 @rpath 依赖有"可执行
-# 文件目录"兜底（Port17Host 的 libglfw 照样装载），但对 dlopen 链上的库既不套用主程序
-# 的 LC_RPATH、也没有目录兜底——引擎 NativeLibrary.Load("slang") 命中 libslang.dylib 后，
-# 它的 @rpath/libslang-compiler.dylib 只试了 .app/Frameworks/ 就放弃（GpuProbe 装载失败，
-# GPU 档被降到保守档）。双保险：① 代理的依赖直接改 @loader_path（解析到代理自己的目录
-# = .app 根，完全不依赖 rpath 机制，任何 dyld 都认）；② 四件各钉 @executable_path 与
-# @loader_path 两条 LC_RPATH（新工具链写成 0x8000001c 带位变体——otool 认、python 手解
-# 要掩码，别被"没有 rpath"的假象骗了）。必须在第 7 步签名之前。
-install_name_tool -change @rpath/libslang-compiler.dylib @loader_path/libslang-compiler.dylib "$APP/libslang.dylib"
-add_rpath_unless() {  # <文件> <路径>：已带同名 rpath 时 -add_rpath 会报重复并死构建，先查
-    otool -l "$1" | grep -q "path $2" || install_name_tool -add_rpath "$2" "$1"
-}
-for f in libslang.dylib libslang-compiler.dylib libslang-glslang-2026.19.so libslang-glsl-module-2026.19.so; do
-    add_rpath_unless "$APP/$f" @executable_path
-    add_rpath_unless "$APP/$f" @loader_path
-done
-# 防回归：装载命令必须已是 @loader_path 形态
-if ! otool -l "$APP/libslang.dylib" | grep -A 2 LC_LOAD_DYLIB | grep -q "@loader_path/libslang-compiler.dylib"; then
-    echo "::error::libslang.dylib 的依赖还不是 @loader_path/libslang-compiler.dylib"
-    exit 1
-fi
+# ⚠️ slang 装载修复暂缓（十五/十六跑回归，2026-11-22）：@loader_path 改道让 slang 真正
+# 装载成功后，装载期 ~30-45 秒处主队列卡死（💓 主 runloop 心跳 14:06:01 起停跳、引擎帧
+# 计数停在 740、进程活着——音频线程心跳持续），卡 Initializing。GpuProbe 能用 slang 编
+# 测试 kernel（215ms 实测 2327 GFLOP/s），死点在装载期更深的运行时着色器编译路径。
+# 十四跑（slang 装载失败 → GpuProbe 降保守档）全流程可玩——游戏本体着色器走预编译
+# SPIR-V，slang 只影响运行时编译。先保持"不可装载"的已知好状态（依赖留在 @rpath，
+# iOS 的 dyld 对 dlopen 链不套用主程序的 rpath 也不给目录兜底 → 装载即失败），
+# M3 用帧停摆看门狗的崩溃报告栈转储定位 slang 死点后再启用（改回 -change @loader_path
+# + 四件各钉 @executable_path/@loader_path 双 rpath，注意新工具链把 LC_RPATH 写成
+# 0x8000001c 带位变体，手解 Mach-O 要掩码）。
 
 # 4.9) ImGui（Dear ImGui 1.92.2 docking + 平铺 C 面 imgui_c.cpp）与其 FreeType 加载器。
 #      安卓版的两个补丁（上游 1.92.3 的字体图矩槽复用修复、FreeType 字形加载的线程锁）打在副本上。

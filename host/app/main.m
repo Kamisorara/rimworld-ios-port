@@ -649,6 +649,11 @@ static int run_probe_thread(void)
 // 抑制节流时才拿，装载期是空的。过期干净归还，回前台重新持有（下一次熄屏又有窗口）。
 static UIBackgroundTaskIdentifier g_engineBgTask = (UIBackgroundTaskIdentifier)~(NSUInteger)0; // = UIBackgroundTaskInvalid（extern const 当不了编译期常量）
 static id g_bgTaskObserver = nil; // 观察者令牌要持有（不持有可能被提前释放，重挂静默失效）
+static id g_activeObserver = nil, g_inactiveObserver = nil;
+
+// waylithaudio 的帧停摆看门狗要区分前后台（后台显示链接本来就停，不算停摆）——宿主
+// 在这里通报状态。宿主链接了 -lwaylithaudio，符号直接可用。
+extern void wa_port17_set_active(int active);
 
 // 装载期观测：主 runloop 心跳。引擎装载期 stdout 安静（卡 Initializing 排查），这行
 // 是主线程死活的信号——主 runloop 卡死即停跳（主队列的 dispatch_after 不再伺候）；
@@ -692,7 +697,14 @@ static void engine_hold_background_task(void)
         g_bgTaskObserver = [[NSNotificationCenter defaultCenter]
             addObserverForName:UIApplicationDidBecomeActiveNotification
                         object:nil queue:[NSOperationQueue mainQueue]
-                    usingBlock:^(NSNotification *_) { engine_hold_background_task(); }];
+                    usingBlock:^(NSNotification *_) {
+                        wa_port17_set_active(1);
+                        engine_hold_background_task();
+                    }];
+        g_inactiveObserver = [[NSNotificationCenter defaultCenter]
+            addObserverForName:UIApplicationDidEnterBackgroundNotification
+                        object:nil queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *_) { wa_port17_set_active(0); }];
         id engineDelegate = [[waylith alloc] init];
         scene.delegate = engineDelegate;
         if ([engineDelegate respondsToSelector:@selector(scene:willConnectToSession:options:)])

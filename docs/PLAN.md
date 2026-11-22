@@ -106,6 +106,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 - **main.m scene 转交时持有 UIKit 后台任务断言**（`beginBackgroundTaskWithExpirationHandler`，过期干净归还 + 回前台重挂）：iOS 给 ~30 秒"完成在途 GPU 工作"窗口，正是 Metal 后台的标准姿势；引擎自己的 HoldBackgroundTask 只在抑制节流时才拿，装载期是空的。显示链接在熄屏即停（引擎后续不再提交），唯一在途的那帧有窗口完成。
 - **build-ipa.sh 给 slang 四件钉 LC_RPATH @executable_path**：dyld 对主程序自己的 @rpath 依赖有"可执行文件目录"兜底（Port17Host 无任何 LC_RPATH，libglfw 照样装载——本地解包 Mach-O 证实），**对 dlopen 链上的库没有**——`NativeLibrary.Load("slang")` 命中 libslang.dylib 后其 `@rpath/libslang-compiler.dylib` 只试了 .app/Frameworks/ 就放弃。此修复同时解开 GpuProbe（GPU 档）与运行时着色器编译（世界生成的 compute kernel 需要——slang 死则后续 kernel 编译必炸）。
 
+**十二/十三跑（m2-engine-15/16，2026-11-22）**：两修复验证生效——slang 装载通（GpuProbe 215ms 实测 2327 GFLOP/s 不再降保守档）、boot 13 分钟（Assets.zip 首解缓存）→3 秒。**新回归：卡 Initializing**（用户对照实验：m2-engine-14 的包可玩、15/16 卡——15 相对 14 仅两变量：slang 装载修复 + 后台断言，头号嫌疑 slang：装载成功后装载期 ~30-45s 处**主队列卡死**（💓 主 runloop 心跳 14:06:01 起停跳、引擎帧计数停 740、进程活——音频线程心跳持续）；GpuProbe 自己能编 kernel，死点在更深的运行时着色器编译路径）。**处置（十四跑包）：slang 恢复"不可装载"已知好态**（依赖留 @rpath 不解析，GpuProbe 降保守档、游戏着色器走预编译 SPIR-V 不受影响）；**加帧停摆看门狗**（waylithaudio 心跳线程：前台连续 4×15s 零帧增量 → abort → COMPlus_EnableCrashReport 的 .NET 崩溃报告把全部线程托管栈写进 stderr——卡死从此自带诊断数据；后台不算停摆，宿主经 wa_port17_set_active 通报前后台）。M3 议题：slang 死点定位（看门狗栈转储）→ 修复后恢复 @loader_path 装载修复（配方在 build-ipa.sh 注释里）。
+
 **引擎首跑情报（2026-11-22 真机，run 44973988560 的包）**：
 - **托管 Main 已在真机执行**：目录自动识别（用户文件夹名 " game" 带前导空格 + folder-app 数据容器路径 `Documents/Data/Application/<UUID>/Documents/`——SideStore folder-app 的 NSHomeDirectory 即该数据容器，文件 app 的 Port17 同源）、TPA 245（运行时 182 + 游戏 63）、CoreCLR 就绪、`RimWorldWaylith.Program.Main` 进入。
 - **.NET 11 不拒 AMD64 标记的纯 IL**（机器补写 0 个也装载执行）——安卓 10.0 的拒载行为在 11 不复现，MarkArm64 变成无害保留。
