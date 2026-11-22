@@ -11,6 +11,18 @@
 - **B. PC 侧打包**：`python scripts/pack-game-zip.py` 自动串全部补丁出 `port17-game.zip`
   （设备端零改写直接跑；调试新补丁时用这条）。
 
+**进设备的口子（0.2.6 起，任选其一）**：
+
+- **app 内「导入 zip」按钮（不依赖 Files 文件夹）**：诊断界面点「导入 zip」→ 系统文件
+  选择器里挑 `port17-game.zip`（iCloud/隔空投送到手的/别的 app 文件夹都行）→ 拷成
+  `Documents/port17-game.zip` 后自动安装。Files 里看不到 Port17 文件夹时这是正路。
+- **「打开方式 → Port17」**：文件 app 里点 `port17` 开头的 zip → 分享 → 打开方式 →
+  Port17，冷启动收件自动安装（`Documents/Inbox`）。
+- **Files 文件夹直拷**：`On My iPad/Port17/Documents` 直接放 zip（文件夹可见时）。
+
+导出：诊断界面「导出」按钮把存档+偏好（`Documents/AppData` 打包成
+`port17-saves-backup.zip`）和 `port17-ui.log` 送上分享面板（隔空投送/存储到文件/微信）。
+
 目录约定（两种玩法安装后的形态）：
 
 ```

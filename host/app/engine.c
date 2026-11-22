@@ -14,12 +14,17 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <setjmp.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <libkern/OSCacheControl.h>
+#include <mach/mach.h>
 
 typedef int (*coreclr_initialize_fn)(
     const char *exePath, const char *appDomainName, int propertyCount,
@@ -30,6 +35,90 @@ typedef int (*coreclr_execute_assembly_fn)(
     const char *managedAssemblyPath, unsigned int *exitCode);
 typedef int (*coreclr_shutdown_fn)(void *hostHandle, unsigned int domainId);
 typedef void (*coreclr_set_error_writer_fn)(void (*)(const char *message));
+
+// ---- JIT authorization (M3) ----
+// iOS grants no dynamic-codesigning entitlement to sideloaded apps; the JIT authorization
+// bit is CS_DEBUGGED, set the moment a debugger (StikDebug's debugserver session, an
+// Xcode attach, …) takes the task over. csops on one's own pid is unprivileged.
+// CS_DEBUGGED = 0x10000000 (xnu cs_blobs.h: "currently or has previously been debugged
+// and allowed to run with invalid pages"). MeloNX's checkDebugged() is this exact call.
+extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
+#define PORT17_CS_OPS_STATUS 0
+#define PORT17_CS_DEBUGGED 0x10000000u
+
+static int jit_cs_debugged(void)
+{
+    unsigned int flags = 0;
+    if (csops(getpid(), PORT17_CS_OPS_STATUS, &flags, sizeof flags) != 0)
+        return -1; // can't tell: treat as unauthorized, the log says so
+    return (flags & PORT17_CS_DEBUGGED) ? 1 : 0;
+}
+
+// The execution probe of the dual-mapping recipe the runtime itself uses on Apple arm64
+// (IsWXORXEnabled() is unconditionally true there; the official ios-arm64 binary imports
+// vm_remap + sys_icache_invalidate and never pthread_jit_write_protect_np): mmap one RX
+// page, vm_remap a copy=FALSE alias, vm_protect the alias RW, write "mov x0,#42; ret",
+// flush the icache, call through the RX view. iOS 26+/TXM refuses to EXECUTE self-made
+// RWX — but this RX+RW-alias shape under CS_DEBUGGED is the sanctioned one (MeloNX's
+// testDualMappedExecution, device-proven on M4-class TXM hardware). A fault at the call
+// is caught (sigsetjmp) so a hostile kernel answers the question instead of killing us.
+static sigjmp_buf g_jitProbeJmp;
+static volatile sig_atomic_t g_jitProbeFaulted;
+static void jit_probe_fault(int sig, siginfo_t *info, void *ctx)
+{
+    (void)sig;
+    (void)info;
+    (void)ctx;
+    g_jitProbeFaulted = 1;
+    siglongjmp(g_jitProbeJmp, 1);
+}
+
+static int jit_probe_dualmap(void)
+{
+    static const uint32_t code[2] = { 0x52800540, 0xD65F03C0 }; // mov x0,#42 ; ret
+    long ps = sysconf(_SC_PAGESIZE);
+    if (ps <= 0)
+        return 0;
+    size_t page = (size_t)ps;
+    void *rx = mmap(NULL, page, PROT_READ | PROT_EXEC, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (rx == MAP_FAILED)
+        return 0; // PROT_EXEC mmap EPERM: the everyday shape of "no authorization"
+    vm_address_t rw = 0;
+    vm_prot_t cur = 0, max = 0;
+    kern_return_t kr = vm_remap(mach_task_self(), &rw, (vm_size_t)page, 0, VM_FLAGS_ANYWHERE,
+                                mach_task_self(), (vm_address_t)rx, FALSE,
+                                &cur, &max, VM_INHERIT_NONE);
+    if (kr != KERN_SUCCESS || vm_protect(mach_task_self(), rw, (vm_size_t)page, 0,
+                                         VM_PROT_READ | VM_PROT_WRITE) != KERN_SUCCESS)
+    {
+        if (kr == KERN_SUCCESS)
+            munmap((void *)rw, page);
+        munmap(rx, page);
+        return 0;
+    }
+    memcpy((void *)rw, code, sizeof code);
+    sys_icache_invalidate(rx, page);
+
+    struct sigaction sa, oldSEGV, oldBUS;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = jit_probe_fault;
+    sa.sa_flags = SA_SIGINFO | SA_NODEFER;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, &oldSEGV);
+    sigaction(SIGBUS, &sa, &oldBUS);
+    g_jitProbeFaulted = 0;
+    int result = -1;
+    if (sigsetjmp(g_jitProbeJmp, 1) == 0)
+        result = ((int (*)(void))rx)();
+    sigaction(SIGSEGV, &oldSEGV, NULL);
+    sigaction(SIGBUS, &oldBUS, NULL);
+    munmap((void *)rw, page);
+    munmap(rx, page);
+    if (g_jitProbeFaulted)
+        return 0; // the kernel let the mapping stand and refused the execution
+    return result == 42 ? 1 : 0;
+}
+
 
 // The tail of the engine's stderr, logged when the run ends: the runtime's last words before
 // an unhandled exception or a fatal error are here (the crash handler rescues them on a signal).
@@ -413,20 +502,37 @@ int run_engine(const char *bundle_dir, const char *home)
     // The interpreter line of M1: the official iOS pack is a JIT/interpreter mix and InterpMode=2
     // (disable R2R, run interpreted) is what made it start at all.
     //
-    // JIT experiment (M3): <game>/jit.on present -> try the native JIT (InterpMode=0). M1 already
-    // proved the official build's JIT actually works on an authorized device (its W^X calls are
-    // statically linked properly); ReadyToRun=0 keeps the R2R images out — the M1 SIGABRT came
-    // from R2R loading, not the JIT itself. The interpreter stays the default: game files patched
-    // by setup behave identically under either execution mode (all patches are IL/metadata level),
-    // so flipping this is a runtime-config-only change.
+    // JIT (M3): authorization is measured, not assumed. CS_DEBUGGED (csops on our own pid —
+    // StikDebug's session sets it before our first instruction) plus the dual-mapping probe
+    // (the runtime's own W^X recipe, executed once here) gate an AUTOMATIC switch to
+    // InterpMode=0 + ReadyToRun=0; anything less keeps the interpreter. jit.on remains the
+    // manual force (with a loud warning when it is forced without authorization — the runtime
+    // dies at startup in that shape). runtime.env still overrides both; the unified report
+    // below tells what actually took effect.
+    int csdbg = jit_cs_debugged();
+    int dualOk = csdbg == 1 ? jit_probe_dualmap() : 0;
+    snprintf(buf, sizeof buf, "引擎：JIT 授权检测 CS_DEBUGGED=%d%s（%s）",
+             csdbg,
+             csdbg == 1 ? (dualOk == 1 ? "，双映射探针通过" : "，双映射探针未通过") : "",
+             csdbg == 1 ? "调试器已接管（StikDebug/Xcode 拉起）"
+                        : csdbg == 0 ? "未接管（普通启动，无授权）" : "csops 查询失败");
+    host_log(buf);
     char jitFlag[1100];
     snprintf(jitFlag, sizeof jitFlag, "%s/jit.on", game);
     if (file_exists(jitFlag))
     {
-        // jit.on：默认切 JIT（runtime.env 仍可覆盖——生效模式见下方统一上报）。
+        // jit.on：强制 JIT（runtime.env 仍可覆盖——生效模式见下方统一上报）。
         setenv("COMPlus_InterpMode", "0", 1);
         setenv("DOTNET_ReadyToRun", "0", 1);
-        host_log("引擎：jit.on 在——默认 InterpMode=0 + R2R 关（runtime.env 可覆盖）");
+        if (csdbg != 1)
+            host_log("引擎：⚠️ jit.on 强制 JIT 但 CS_DEBUGGED 未置位——未经调试器拉起时运行时退回解释器执行（m2-engine-21 实测形态：不崩但无 JIT 收益）");
+        host_log("引擎：jit.on 在——InterpMode=0 + R2R 关（runtime.env 可覆盖）");
+    }
+    else if (csdbg == 1 && dualOk == 1)
+    {
+        setenv("COMPlus_InterpMode", "0", 1);
+        setenv("DOTNET_ReadyToRun", "0", 1);
+        host_log("引擎：JIT 已授权（CS_DEBUGGED + 双映射探针通过）——自动 InterpMode=0 + R2R 关");
     }
     else
     {

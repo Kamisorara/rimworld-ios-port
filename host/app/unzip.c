@@ -408,3 +408,197 @@ int port17_install_game_zip(const char *home)
     pthread_join(t, NULL);
     return arg.result;
 }
+
+// ---- the zip writer (the export side) ----
+// The reader above, run backwards: walk a tree, emit local headers + raw bytes + a central
+// directory + EOCD, all STORE (method 0). The local header's crc/sizes are patched in place
+// after the bytes are counted (no data descriptor — the reader prefers real fields anyway).
+
+struct zentry
+{
+    char name[960]; // zip-relative, '/' separators
+    uint16_t fnlen;
+    uint32_t crc, csize, usize, lho;
+};
+
+static void wr16(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+}
+static void wr32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+static int zadd_file(FILE *zf, const char *disk_path, const char *zip_name,
+                     struct zentry *entries, size_t *count)
+{
+    if (*count >= 32767) // EOCD counts in a u16; more than this is not our tree
+        return -1;
+    struct zentry e;
+    snprintf(e.name, sizeof e.name, "%s", zip_name);
+    e.fnlen = (uint16_t)strlen(e.name);
+    FILE *in = fopen(disk_path, "rb");
+    if (in == NULL)
+        return -2;
+    long lho = ftell(zf);
+    if (lho < 0)
+    {
+        fclose(in);
+        return -3;
+    }
+    e.lho = (uint32_t)lho;
+
+    uint8_t head[30 + sizeof e.name];
+    wr32(head, 0x04034b50);
+    wr16(head + 4, 20);     // version needed: 2.0
+    wr16(head + 6, 0x0800); // bit 11: the name is UTF-8 (save names are any language)
+    wr16(head + 8, 0);      // method: STORE
+    wr16(head + 10, 0);     // mod time
+    wr16(head + 12, 0x21);  // mod date: 1980-01-01 — the bytes are what's being kept
+    wr32(head + 14, 0);     // crc: patched below
+    wr32(head + 18, 0);     // csize: patched below
+    wr32(head + 22, 0);     // usize: patched below
+    wr16(head + 26, e.fnlen);
+    wr16(head + 28, 0); // no extra field
+    memcpy(head + 30, e.name, e.fnlen);
+    if (fwrite(head, 1, 30u + e.fnlen, zf) != 30u + e.fnlen)
+    {
+        fclose(in);
+        return -4;
+    }
+
+    uint8_t buf[ZIP_CHUNK];
+    uLong crc = crc32(0, Z_NULL, 0);
+    uint64_t total = 0;
+    size_t got;
+    while ((got = fread(buf, 1, sizeof buf, in)) > 0)
+    {
+        crc = crc32(crc, buf, (uInt)got);
+        if (fwrite(buf, 1, got, zf) != got)
+        {
+            fclose(in);
+            return -5;
+        }
+        total += got;
+    }
+    int ferr = ferror(in);
+    fclose(in);
+    if (ferr)
+        return -6;
+    if (total > 0xFFFFFFFFull) // would need zip64 fields: not ours
+        return -7;
+    e.crc = (uint32_t)crc;
+    e.csize = (uint32_t)total;
+    e.usize = (uint32_t)total;
+    if (fseek(zf, lho + 14, SEEK_SET) != 0) // crc(14) csize(18) usize(22)
+        return -8;
+    uint8_t fix[12];
+    wr32(fix, e.crc);
+    wr32(fix + 4, e.csize);
+    wr32(fix + 8, e.usize);
+    if (fwrite(fix, 1, 12, zf) != 12)
+        return -9;
+    if (fseek(zf, 0, SEEK_END) != 0)
+        return -10;
+    entries[(*count)++] = e;
+    return 0;
+}
+
+static int zwalk(FILE *zf, const char *disk_dir, const char *zip_prefix,
+                 struct zentry *entries, size_t *count)
+{
+    DIR *d = opendir(disk_dir);
+    if (d == NULL)
+        return -20;
+    struct dirent *de;
+    int rc = 0;
+    while (rc == 0 && (de = readdir(d)) != NULL)
+    {
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+            continue;
+        char child[1100], zname[960];
+        snprintf(child, sizeof child, "%s/%s", disk_dir, de->d_name);
+        if (zip_prefix[0])
+            snprintf(zname, sizeof zname, "%s/%s", zip_prefix, de->d_name);
+        else
+            snprintf(zname, sizeof zname, "%s", de->d_name);
+        struct stat st;
+        if (stat(child, &st) != 0)
+            continue; // raced away between readdir and stat: not packable, not fatal
+        if (S_ISDIR(st.st_mode))
+            rc = zwalk(zf, child, zname, entries, count);
+        else if (S_ISREG(st.st_mode))
+            rc = zadd_file(zf, child, zname, entries, count);
+    }
+    closedir(d);
+    return rc;
+}
+
+int port17_zip_tree(const char *srcDir, const char *destZip)
+{
+    struct zentry *entries = malloc(32767 * sizeof *entries);
+    if (entries == NULL)
+        return -30;
+    FILE *zf = fopen(destZip, "wb+");
+    if (zf == NULL)
+    {
+        free(entries);
+        return -31;
+    }
+    size_t count = 0;
+    int rc = zwalk(zf, srcDir, "", entries, &count);
+    long cdoff = rc == 0 ? ftell(zf) : -1;
+    if (rc == 0 && cdoff < 0)
+        rc = -32;
+    for (size_t i = 0; rc == 0 && i < count; i++)
+    {
+        struct zentry *e = &entries[i];
+        uint8_t cd[46 + sizeof e->name];
+        wr32(cd, 0x02014b50);
+        wr16(cd + 4, 20);     // version made by
+        wr16(cd + 6, 20);     // version needed
+        wr16(cd + 8, 0x0800); // UTF-8 name
+        wr16(cd + 10, 0);     // STORE
+        wr16(cd + 12, 0);     // mod time
+        wr16(cd + 14, 0x21);  // mod date
+        wr32(cd + 16, e->crc);
+        wr32(cd + 20, e->csize);
+        wr32(cd + 24, e->usize);
+        wr16(cd + 28, e->fnlen);
+        wr16(cd + 30, 0); // no extra
+        wr16(cd + 32, 0); // no comment
+        wr16(cd + 34, 0); // disk number start
+        wr16(cd + 36, 0); // internal attrs
+        wr32(cd + 38, 0); // external attrs
+        wr32(cd + 42, e->lho);
+        memcpy(cd + 46, e->name, e->fnlen);
+        if (fwrite(cd, 1, 46u + e->fnlen, zf) != 46u + e->fnlen)
+            rc = -33;
+    }
+    long cdend = rc == 0 ? ftell(zf) : -1;
+    if (rc == 0 && cdend >= 0)
+    {
+        uint8_t eocd[22];
+        wr32(eocd, 0x06054b50);
+        wr16(eocd + 4, 0); // this disk
+        wr16(eocd + 6, 0); // disk with the central directory
+        wr16(eocd + 8, (uint16_t)count);
+        wr16(eocd + 10, (uint16_t)count);
+        wr32(eocd + 12, (uint32_t)(cdend - cdoff));
+        wr32(eocd + 16, (uint32_t)cdoff);
+        wr16(eocd + 20, 0); // no comment
+        if (fwrite(eocd, 1, 22, zf) != 22)
+            rc = -34;
+    }
+    if (fclose(zf) != 0)
+        rc = rc != 0 ? rc : -35;
+    if (rc != 0)
+        unlink(destZip); // a half-zip is worse than none
+    free(entries);
+    return rc == 0 ? (int)count : rc;
+}

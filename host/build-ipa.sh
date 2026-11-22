@@ -279,6 +279,7 @@ xcrun -sdk "$SDK" clang \
     -Wl,-rpath,@executable_path \
     -L "$APP" -lglfw -lvulkan -lwaylithaudio -lz \
     -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics -framework Metal -framework CoreFoundation \
+    -framework UniformTypeIdentifiers \
     -o "$APP/Port17Host" \
     "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/engine.c" "$ROOT/host/app/setup.c" "$ROOT/host/app/unzip.c" "$ROOT/host/app/triangle.c" "$ROOT/host/app/audio_test.c" "$ROOT/host/app/libs_check.c"
 cp "$ROOT/host/app/Info.plist" "$APP/"

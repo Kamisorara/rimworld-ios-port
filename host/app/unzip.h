@@ -21,4 +21,11 @@ int port17_unzip(const char *zipPath, const char *destDir);
 // was), negative when something is missing or failed (the log says what).
 int port17_install_game_zip(const char *home);
 
+// The reader's mirror for the export side: packs srcDir (recursively, regular files only)
+// into destZip as STORE entries (the saves are gzip inside already, the log is text — a
+// container, not compression, is what's needed). Names are UTF-8 (bit 11). Returns the
+// number of files packed, or a negative when something failed (a half-written zip is
+// removed). Not for more than 4 GB or 32767 files — zip64 numbers, which we don't write.
+int port17_zip_tree(const char *srcDir, const char *destZip);
+
 #endif

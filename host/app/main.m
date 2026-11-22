@@ -9,6 +9,7 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <Metal/Metal.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <dlfcn.h>
 #include <signal.h>
 #include <stdio.h>
@@ -63,6 +64,15 @@ static void append_log(const char *msg)
 
 // triangle.c calls host_log — host.c defines it (routed through host_set_log_sink, which the app
 // delegate installs as append_log below); no definition here, or the link sees it twice.
+
+// The diagnostics-hold switch (HostVC「下次诊断」writes it): present = next launch skips
+// engine mode AND setup, straight to the diagnostics screen (repeated import/export/debug
+// rounds without the game taking the start).
+static NSString *port17_diag_hold_path(void)
+{
+    return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/port17-diag.on"];
+}
+
 
 // ---- the window: a CAMetalLayer the whole screen ----
 
@@ -337,7 +347,7 @@ static void run_on_big_thread(int (*fn)(void))
 
 // ---- the view controller ----
 
-@interface HostVC : UIViewController
+@interface HostVC : UIViewController <UIDocumentPickerDelegate>
 @property (strong, nonatomic) MetalView *gameView;
 @property (strong, nonatomic) KeyboardField *keyboard;
 @property (strong, nonatomic) UITextView *log;
@@ -376,12 +386,24 @@ static void run_on_big_thread(int (*fn)(void))
     g_text.hidden = YES;
     [self.view addSubview:g_text];
 
-    // The buttons of the diagnostics: the engine (M2's closing line), the triangle (auto-runs),
-    // the .NET probe, the log, the keyboard, the audio, the libraries.
+    // The buttons of the diagnostics: the engine (M2's closing line), the import/export of
+    // the fallback world (the Files folder may never come — with these two the app needs
+    // nothing from it), the diagnostics-hold toggle, the triangle (auto-runs), the .NET
+    // probe, the log, the keyboard, the audio, the libraries.
     UIButton *engineBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     [engineBtn setTitle:@"引擎" forState:UIControlStateNormal];
     [engineBtn.titleLabel setFont:[UIFont boldSystemFontOfSize:17]];
     [engineBtn addTarget:self action:@selector(engineTapped:) forControlEvents:UIControlEventTouchUpInside];
+    UIButton *importBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [importBtn setTitle:@"导入 zip" forState:UIControlStateNormal];
+    [importBtn addTarget:self action:@selector(importTapped:) forControlEvents:UIControlEventTouchUpInside];
+    UIButton *exportBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [exportBtn setTitle:@"导出" forState:UIControlStateNormal];
+    [exportBtn addTarget:self action:@selector(exportTapped:) forControlEvents:UIControlEventTouchUpInside];
+    UIButton *diagBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    [diagBtn setTitle:[self.class diagHoldOn] ? @"下次进引擎" : @"下次诊断"
+            forState:UIControlStateNormal];
+    [diagBtn addTarget:self action:@selector(diagTapped:) forControlEvents:UIControlEventTouchUpInside];
     UIButton *tri = [UIButton buttonWithType:UIButtonTypeSystem];
     [tri setTitle:@"三角形" forState:UIControlStateNormal];
     [tri addTarget:self action:@selector(triangleTapped:) forControlEvents:UIControlEventTouchUpInside];
@@ -403,8 +425,9 @@ static void run_on_big_thread(int (*fn)(void))
     UIStackView *bar = [[UIStackView alloc] initWithFrame:CGRectZero];
     bar.translatesAutoresizingMaskIntoConstraints = NO;
     bar.axis = UILayoutConstraintAxisHorizontal;
-    bar.spacing = 12;
-    for (UIView *v in @[engineBtn, tri, probe, logBtn, kbBtn, audioBtn, libsBtn]) [bar addArrangedSubview:v];
+    bar.spacing = 8;
+    for (UIView *v in @[engineBtn, importBtn, exportBtn, diagBtn, tri, probe, logBtn, kbBtn, audioBtn, libsBtn])
+        [bar addArrangedSubview:v];
 
     [self.view addSubview:bar];
     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
@@ -525,6 +548,116 @@ static void run_on_big_thread(int (*fn)(void))
     } else {
         append_log("三角形已在跑（一个实例；重启 app 再来一次）");
     }
+}
+
+// ---- the fallback world's doors: import/export through system pickers ----
+// The Files folder's fate is the system's; these two make the app self-sufficient: the
+// game zip comes in through UIDocumentPicker (a copy, no security-scope dance), the saves
+// and the log go out through the share sheet. The toggle keeps diagnostics reachable
+// across launches (engine mode would otherwise take every start once a game is installed).
+
++ (BOOL)diagHoldOn
+{
+    return [NSFileManager.defaultManager
+        fileExistsAtPath:port17_diag_hold_path()];
+}
+
+- (void)diagTapped:(UIButton *)sender
+{
+    NSString *flag = port17_diag_hold_path();
+    NSFileManager *fm = NSFileManager.defaultManager;
+    if ([fm fileExistsAtPath:flag]) {
+        [fm removeItemAtPath:flag error:nil];
+        boot_log(@"诊断保持已关——下次启动照常（有游戏即引擎）");
+        [sender setTitle:@"下次诊断" forState:UIControlStateNormal];
+    } else {
+        [fm createFileAtPath:flag contents:[@"on" dataUsingEncoding:NSUTF8StringEncoding] error:nil];
+        boot_log(@"诊断保持已开——下次启动还进这个界面（引擎先让路；再点一次恢复）");
+        [sender setTitle:@"下次进引擎" forState:UIControlStateNormal];
+    }
+}
+
+- (void)importTapped:(id)sender
+{
+    UIDocumentPickerViewController *picker =
+        [[UIDocumentPickerViewController alloc] initWithForOpeningContentTypes:@[UTTypeZIP]
+                                                                        asCopy:YES];
+    picker.delegate = self;
+    picker.allowsMultipleSelection = NO;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
+{
+    if (urls.count == 0)
+        return;
+    NSString *dest = [NSHomeDirectory()
+        stringByAppendingPathComponent:@"Documents/port17-game.zip"];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    [fm removeItemAtPath:dest error:nil]; // 旧的一份先清（.installed 记录保留——Inbox 收件同规矩）
+    NSError *err = nil;
+    if (![fm copyItemAtURL:urls[0] toURL:[NSURL fileURLWithPath:dest] error:&err]) {
+        boot_log([NSString stringWithFormat:@"导入：拷到 port17-game.zip 失败（%@）",
+                  err.localizedDescription]);
+        return;
+    }
+    unsigned long long size = [[fm attributesOfItemAtPath:dest error:nil] fileSize];
+    boot_log([NSString stringWithFormat:@"导入：%@ 已就位（%.2f GB），开始安装…",
+              urls[0].lastPathComponent, size / 1073741824.0]);
+    g_text.hidden = NO; // 看得见安装进度（每 500 项一行）
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+        int rc = port17_install_game_zip(NSHomeDirectory().UTF8String);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            boot_log(rc == 0
+                ? @"✅ 游戏就位——彻底关闭 app（上划划掉）再打开：第一次会自动跑 setup"
+                   @"（改写游戏文件）并自己退出，再打开即引擎"
+                : [NSString stringWithFormat:@"❌ 安装失败（返回 %d，原因在上面日志里）——换一份 zip 再试", rc]);
+        });
+    });
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller
+{
+    boot_log(@"导入：取消了（没选文件）");
+}
+
+- (void)exportTapped:(UIButton *)sender
+{
+    NSString *home = NSHomeDirectory();
+    boot_log(@"导出：打包 Documents/AppData（存档+偏好）为 port17-saves-backup.zip …");
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+        char zipPath[1024], srcDir[1024];
+        snprintf(zipPath, sizeof zipPath, "%s/Documents/port17-saves-backup.zip",
+                 home.UTF8String);
+        snprintf(srcDir, sizeof srcDir, "%s/Documents/AppData", home.UTF8String);
+        int n = port17_zip_tree(srcDir, zipPath);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSMutableArray<NSURL *> *items = [NSMutableArray array];
+            if (n >= 0) {
+                boot_log([NSString stringWithFormat:@"导出：AppData 打包完成（%d 个文件）——分享面板里可「存储到文件」或隔空投送", n]);
+                [items addObject:[NSURL fileURLWithPath:[NSString stringWithUTF8String:zipPath]]];
+            } else {
+                boot_log(n == -20
+                    ? @"导出：Documents/AppData 不在（还没有存档？）——只分享日志"
+                    : [NSString stringWithFormat:@"导出：AppData 打包失败（%d）——只分享日志", n]);
+            }
+            NSURL *logURL = [NSURL fileURLWithPath:
+                [home stringByAppendingPathComponent:@"Documents/port17-ui.log"]];
+            if ([NSFileManager.defaultManager fileExistsAtPath:logURL.path])
+                [items addObject:logURL];
+            if (items.count == 0) {
+                boot_log(@"导出：日志和 AppData 都不在——没有可导出的");
+                return;
+            }
+            UIActivityViewController *act =
+                [[UIActivityViewController alloc] initWithActivityItems:items
+                                                    applicationActivities:nil];
+            act.popoverPresentationController.sourceView = sender; // iPad 必须：分享面板要锚点
+            act.popoverPresentationController.sourceRect = sender.bounds;
+            [self presentViewController:act animated:YES completion:nil];
+        });
+    });
 }
 
 - (void)probeTapped:(id)sender
@@ -859,8 +992,12 @@ int main(int argc, char *argv[])
         // 的目录）。游戏目录没有改写戳（Steam 原件直接拷的场景）→ 先跑设备内 setup（安卓
         // SetupService 的体验：app 自己改写游戏文件，玩家无感 PC）；setup 用掉本进程的
         // CoreCLR（iOS 无 fork），完成或失败都回落诊断界面——重开即引擎。
+        // 诊断保持开着则整个让路（导入/导出/JIT 实验的反复回合不用跟游戏抢启动）。
+        BOOL diagHold = [fm fileExistsAtPath:port17_diag_hold_path()];
+        if (diagHold)
+            boot_log(@"诊断保持开着（port17-diag.on）——引擎与 setup 让路，直接诊断界面");
         char gameDir[1024];
-        if (port17_find_game(NSHomeDirectory().UTF8String, gameDir, sizeof gameDir) == 0) {
+        if (!diagHold && port17_find_game(NSHomeDirectory().UTF8String, gameDir, sizeof gameDir) == 0) {
             NSString *gameNS = [NSString stringWithUTF8String:gameDir];
             // 只认当前版本的 setup 戳——旧的 os-detect+platform 组合旁路曾把版本轮换架空
             // （v6 补丁在设备上从未执行：用户游戏目录里有这对老戳，setupDone 恒真）。
