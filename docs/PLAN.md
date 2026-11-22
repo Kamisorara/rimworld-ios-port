@@ -102,6 +102,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **十七跑：游戏本体在真机跑通（2026-11-22，m2-engine-20，run 44998324091）**：v7 setup 真执行（5 秒 40 处改写）→ 引擎 boot 快路径 → 菜单 30fps 稳定 → **15:51 创建新世界（全部 6 个 DLC）** → 世界生成+进入游戏 12-30fps 持续运行、游戏音效在响（7-10 voice）、会话 17 分钟零崩溃。遗留小项：boot 中段一次 45 秒停摆（首轮贴图缓存构建，自愈）；Application.OpenURL 不支持（wiki/背景故事链接，无害）；M2 验收线（引擎最小画面）已超额完成——**M3/M4 的性能与 mod 工作直接在可玩基线上展开**。M3 性能关键事实：游戏当前纯解释器执行（崩溃栈中 Vector128.ShuffleFallback = 内建未内联化的铁证；安卓是 JIT），设备有 RWX 授权，官方混合包开 JIT 是下一个大项。
 
+**JIT 真机可用确认（2026-11-22 晚，m2-engine-21，runtime.env 实验首轮）**：InterpMode=0 + ReadyToRun=0（runtime.env 两行，覆盖内置默认）→ 纯 JIT 配置下游戏稳定运行 3 分钟：主菜单、读解释器会话创建的存档（跨模式存档继承 ✓）、3D 定位音效、零 W^X 死点。**源码语义钉死（runtime-110 eeconfig.cpp）**：InterpMode!=0 才开解释器（0=纯 JIT）、>=2 时 R2R/解释器互斥（M1 用 2 的原因）、!=0 还会关分层编译（0 时 TieredCompilation+PGO 正常）。**帧率没变（菜单 +450/15s=30fps）的原因**：引擎经 CADisplayLink 按窗口 PreferredFrameRate 钉帧率（诊断三角形的 328fps 证明硬件能力远高于此）——菜单帧率区分不了两种执行模式；JIT 收益在 CPU-bound 阶段（def 装载、存档解析、殖民地 sim tick、寻路），需 A/B 定量（同存档两模式各跑，比载入秒数 + 帧心跳分布）。jit.on 开关已进宿主（engine.c，Files app 可建空文件切换）。
+
 **M2 总验收线已过（2026-11-22 十一跑，m2-engine-14，run 44986348215 的包）**：WaylithClr 替身生效——引擎完整跑过 Bootstrap/PrepatcherCompat（降级日志按预期）、自建窗口、Vulkan 全链、**主菜单可见可操作，用户推进到创建新世界**。引擎会话持续 14 分钟后死于 iOS 的 GPU 后台限制（详见下一条）。同轮暴露的次级问题：GpuProbe 的 slang 装载失败 → GPU 档降保守（根因见十二跑）。
 
 **十二跑诊断（m2-engine-14 日志，熄屏闪退链）**：世界生成装载中熄屏/后台 → iOS 拒绝执行在途 Metal 命令缓冲（`kIOGPUCommandBufferCallbackErrorBackgroundExecutionNotPermitted`）→ MoltenVK 判 `VK_ERROR_DEVICE_LOST`（**v1.4.2 与上游 main 同：`handleMTLCommandBufferError` 的 `NotPermitted` 分支把 markDeviceLoss 强制 true，无视 `MVK_CONFIG_RESUME_LOST_DEVICE`**——引擎自配的该开关救不了，MoltenVK 无配置可绕）→ 引擎按致命退出，退出路径 `RenderThread.Stop()` 再撞 vkDeviceWaitIdle 同错 → UIKit 循环未处理异常 → FailFast。**修法（十二跑包）**：
