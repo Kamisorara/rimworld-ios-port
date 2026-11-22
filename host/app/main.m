@@ -581,8 +581,12 @@ static void run_on_big_thread(int (*fn)(void))
 
 - (void)importTapped:(id)sender
 {
+    // 经典初始化器（iOS 8 起就有，SDK 各代可见；新的 forOpeningContentTypes 家族在
+    // CI 的 SDK 下两代形态都报 no visible @interface）。Import 模式 = 系统把文件拷进
+    // 我们的 tmp 再交 URL——天然的拷贝语义，安全域包装都省。
     UIDocumentPickerViewController *picker =
-        [[UIDocumentPickerViewController alloc] initWithForOpeningContentTypes:@[UTTypeZIP]];
+        [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[UTTypeZIP.identifier]
+                                                                inMode:UIDocumentPickerModeImport];
     picker.delegate = self;
     picker.allowsMultipleSelection = NO;
     [self presentViewController:picker animated:YES completion:nil];
