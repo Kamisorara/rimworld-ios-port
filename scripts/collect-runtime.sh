@@ -53,8 +53,15 @@ find "$SRC/artifacts/bin" -type d -path '*/Release/net11.0-ios' -print0 |
 while IFS= read -r -d '' d; do
     cp -n "$d"/*.dll "$OUT/managed/" 2>/dev/null || true
 done
+# net11.0-unix：unix 族库（MemoryMappedFiles/System.IO.Compression 等）在 -os ios
+# 下产出的真实现——旧 collect 缺这一级，回退直接抓 net11.0，而 TargetPlatformIdentifier
+# 为空时那些库生成的就是 PNSE 桩（0.3.2 的 Assets.zip FailFast 即此）。
+find "$SRC/artifacts/bin" -type d -path '*/Release/net11.0-unix' -print0 |
+while IFS= read -r -d '' d; do
+    cp -n "$d"/*.dll "$OUT/managed/" 2>/dev/null || true
+done
 find "$SRC/artifacts/bin" -type d -path '*/Release/net11.0' \
-    -not -path '*/stub/*' -not -path '*/ref/*' -print0 |
+    -not -path '*/stub/*' -not -path '*/ref/*' -not -path '*/net11.0-ios/*' -not -path '*/net11.0-unix/*' -print0 |
 while IFS= read -r -d '' d; do
     cp -n "$d"/*.dll "$OUT/managed/" 2>/dev/null || true
 done
