@@ -765,6 +765,10 @@ int main(int argc, char *argv[])
                     rc,
                     rc == 0 ? @"改写完成，请彻底关闭 app（上划划掉）再打开，即进引擎"
                            : @"改写没完成（原因在上面日志），可重试或换打包好的 zip"]);
+                if (rc == 0)
+                    append_log("✅ 游戏文件改写完成——请上划彻底关闭 app，再重新打开即进引擎（本进程的运行时已被 setup 用掉，不能直接切）");
+                else
+                    append_log("⚠️ setup 没有完成——按日志里的原因处理（重开 app 会再试一次）");
             } else {
                 boot_log(@"引擎模式：游戏目录在且已改写，主线程直接跑引擎（宿主 UIKit 退位）");
                 const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];

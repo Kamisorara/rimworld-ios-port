@@ -27,17 +27,29 @@ namespace Port17Setup
 {
     internal static class Program
     {
+        private static string logPath;
+
+        // 设备上 Console 的去向不稳（宿主的 stdout 泵偶尔接不住）：每行同时落
+        // <game>/setup-log.txt，永远有据可查。
+        private static void Say(string line)
+        {
+            Console.WriteLine(line); // 本体（批量替换输出调用时别动这一行）
+            try { File.AppendAllText(logPath, DateTime.Now.ToString("HH:mm:ss ") + line + "\n"); }
+            catch { /* 日志失败不拦改写 */ }
+        }
+
         private static int Main(string[] args)
         {
             if (args.Length < 1)
             {
-                Console.WriteLine("[setup] usage: Port17Setup.dll <game folder>");
+                Say("[setup] usage: Port17Setup.dll <game folder>");
                 return 2;
             }
             string game = args[0];
+            logPath = Path.Combine(game, "setup-log.txt");
             if (!File.Exists(Path.Combine(game, "RimWorld.dll")))
             {
-                Console.WriteLine("[setup] no RimWorld.dll in " + game);
+                Say("[setup] no RimWorld.dll in " + game);
                 return 1;
             }
             int changed = 0, kept = 0;
@@ -50,12 +62,12 @@ namespace Port17Setup
             }
             catch (Exception e)
             {
-                Console.WriteLine("[setup] failed: " + e);
+                Say("[setup] failed: " + e);
                 return 3;
             }
             File.WriteAllLines(Path.Combine(game, "port17-setup.stamp"),
                 new[] { "Port17Setup v1", "changed=" + changed, "kept=" + kept });
-            Console.WriteLine($"[setup] done: {changed} rewritten, {kept} already");
+            Say($"[setup] done: {changed} rewritten, {kept} already");
             return 0;
         }
 
@@ -110,7 +122,7 @@ namespace Port17Setup
                 var asm = Open(game, dll);
                 if (asm == null)
                 {
-                    Console.WriteLine($"[setup] {dll}: not present, skipped");
+                    Say($"[setup] {dll}: not present, skipped");
                     continue;
                 }
                 int did = 0;
@@ -145,10 +157,10 @@ namespace Port17Setup
                     if (did > 0)
                     {
                         Save(game, dll, asm);
-                        Console.WriteLine($"[setup] {dll}: OperatingSystem::{probe}() → true ×{did}");
+                        Say($"[setup] {dll}: OperatingSystem::{probe}() → true ×{did}");
                     }
                     else
-                        Console.WriteLine($"[setup] {dll}: {probe} 已改或不在（跳过）");
+                        Say($"[setup] {dll}: {probe} 已改或不在（跳过）");
                 }
                 if (did > 0) changed += did; else kept++;
             }
@@ -162,7 +174,7 @@ namespace Port17Setup
             var asm = Open(game, dll);
             if (asm == null)
             {
-                Console.WriteLine($"[setup] {dll}: not present, skipped");
+                Say($"[setup] {dll}: not present, skipped");
                 return;
             }
             using (asm)
@@ -175,7 +187,7 @@ namespace Port17Setup
                     m.Body.Instructions[1].OpCode == OpCodes.Ret;
                 if (nulled)
                 {
-                    Console.WriteLine($"[setup] {dll}: {method} 已是 return null（跳过）");
+                    Say($"[setup] {dll}: {method} 已是 return null（跳过）");
                     kept++;
                     return;
                 }
@@ -184,7 +196,7 @@ namespace Port17Setup
                 il.Emit(OpCodes.Ldnull);
                 il.Emit(OpCodes.Ret);
                 Save(game, dll, asm);
-                Console.WriteLine($"[setup] {dll}: {type}::{method} → return null");
+                Say($"[setup] {dll}: {type}::{method} → return null");
                 changed++;
             }
         }
@@ -198,7 +210,7 @@ namespace Port17Setup
             var asm = Open(game, dll);
             if (asm == null)
             {
-                Console.WriteLine($"[setup] {dll}: not present, skipped");
+                Say($"[setup] {dll}: not present, skipped");
                 return;
             }
             using (asm)
@@ -215,12 +227,12 @@ namespace Port17Setup
                 if (did > 0)
                 {
                     Save(game, dll, asm);
-                    Console.WriteLine($"[setup] {dll}: Console.CancelKeyPress 订阅删除 ×{did}");
+                    Say($"[setup] {dll}: Console.CancelKeyPress 订阅删除 ×{did}");
                     changed++;
                 }
                 else
                 {
-                    Console.WriteLine($"[setup] {dll}: 无 CancelKeyPress 订阅（跳过）");
+                    Say($"[setup] {dll}: 无 CancelKeyPress 订阅（跳过）");
                     kept++;
                 }
             }
@@ -283,7 +295,7 @@ namespace Port17Setup
                     f.Position = pe + 4;
                     f.Write(new byte[] { 0x64, 0xaa }, 0, 2); // ARM64（0xaa64 小端）
                     changed++;
-                    Console.WriteLine($"[setup] {Path.GetFileName(path)}: AMD64 -> ARM64");
+                    Say($"[setup] {Path.GetFileName(path)}: AMD64 -> ARM64");
                 }
                 catch (IOException)
                 {
@@ -291,7 +303,7 @@ namespace Port17Setup
                 }
             }
             if (changed == 0)
-                Console.WriteLine("[setup] 机器类型：没有要改的（0 或已改）");
+                Say("[setup] 机器类型：没有要改的（0 或已改）");
         }
     }
 }
