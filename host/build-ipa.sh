@@ -169,13 +169,20 @@ IMGUI_DEFS="-DIMGUI_DISABLE_OBSOLETE_FUNCTIONS -DIMGUI_USE_WCHAR32 -DNDEBUG -mms
 xcrun -sdk "$SDK" clang++ -target "$TARGET" -std=c++17 -O2 -fPIC $IMGUI_DEFS \
     -DImFileLoadToMemory=PortFontFileLoad -I "$IMGUI_BUILD" \
     -c -o "$ROOT/build-m2/imgui_draw.o" "$IMGUI_BUILD/imgui_draw.cpp"
+# darwin 符号变换：生成件的 1146 个导出别名是 __asm__("名")——Mach-O 上原样落符号（不带下划线），
+# 而 dlsym/NativeLibrary 查找时自动补 _，两边对不上（安卓的 ELF 两边都是裸名所以没事）。
+# 编译用副本给别名补下划线，生成件本身保持与安卓同源。
+sed 's/__asm__("/__asm__("_/' "$ROOT/host/native/imgui_c.cpp" > "$ROOT/build-m2/imgui_c_darwin.cpp"
 xcrun -sdk "$SDK" clang++ -target "$TARGET" -std=c++17 -O2 -shared -fvisibility=default \
     -Wl,-install_name,@rpath/libimgui.dylib \
     $IMGUI_DEFS -I "$IMGUI_BUILD" \
     -o "$APP/libimgui.dylib" \
     "$IMGUI_BUILD/imgui.cpp" "$ROOT/build-m2/imgui_draw.o" \
     "$IMGUI_BUILD/imgui_tables.cpp" "$IMGUI_BUILD/imgui_widgets.cpp" "$IMGUI_BUILD/imgui_demo.cpp" \
-    "$ROOT/host/native/port_fonts.cpp" "$ROOT/host/native/imgui_c.cpp"
+    "$ROOT/host/native/port_fonts.cpp" "$ROOT/build-m2/imgui_c_darwin.cpp"
+# 别名落位验证：引擎按这些名字解析，缺一个就是白编
+nm -gU "$APP/libimgui.dylib" | grep -q ' _AcceptDragDropPayload$' || {
+    echo "::error::libimgui 里没有 _AcceptDragDropPayload（asm 别名的下划线变换没生效）"; exit 1; }
 
 # FreeType 2.13.3 静态库 + imgui_freetype（引擎的 FreeType 字形加载器）
 FT="$NDEPS/freetype-VER-2-13-3"
