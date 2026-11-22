@@ -423,14 +423,14 @@ int run_engine(const char *bundle_dir, const char *home)
     snprintf(jitFlag, sizeof jitFlag, "%s/jit.on", game);
     if (file_exists(jitFlag))
     {
+        // jit.on：默认切 JIT（runtime.env 仍可覆盖——生效模式见下方统一上报）。
         setenv("COMPlus_InterpMode", "0", 1);
         setenv("DOTNET_ReadyToRun", "0", 1);
-        host_log("引擎：JIT 实验模式（jit.on 在）——InterpMode=0 + R2R 关闭（M1 死点在 R2R 装载，不在 JIT 本体）");
+        host_log("引擎：jit.on 在——默认 InterpMode=0 + R2R 关（runtime.env 可覆盖）");
     }
     else
     {
         setenv("COMPlus_InterpMode", "2", 1);
-        host_log("引擎：解释器模式（要试 JIT：在 game 目录建 jit.on 空文件后重开）");
     }
     setenv("COMPlus_EnableCrashReport", "1", 1);
     setenv("COMPlus_EnableDiagnostics", "1", 1);
@@ -455,6 +455,21 @@ int run_engine(const char *bundle_dir, const char *home)
             snprintf(buf, sizeof buf, "引擎：环境 %s=%s", lines[i], eq + 1);
             host_log(buf);
         }
+    }
+
+    // 生效执行模式统一上报——在 jit.on 默认与 runtime.env 覆盖都落定之后，以最终
+    // getenv 为准（之前"默认值"和"生效值"两张嘴，runtime.env 用户被"解释器模式"
+    // 一行误导过）。runtime 源码语义（eeconfig.cpp）：InterpMode != 0 才启用解释器
+    // （0/未设 = 纯 JIT，分层编译 + PGO 正常）；>= 2 时 R2R 被解释器顶掉（M1 的
+    // SIGABRT 死点在 R2R 装载，不在 JIT 本体）。
+    {
+        const char *im = getenv("COMPlus_InterpMode");
+        bool jit = (im == NULL || strcmp(im, "0") == 0);
+        snprintf(buf, sizeof buf, "引擎：生效执行模式 = %s（InterpMode=%s）",
+                 jit ? "JIT（分层编译+PGO；帧率若与解释器无差，用同存档 A/B 载入定量）"
+                     : "解释器",
+                 im ? im : "未设");
+        host_log(buf);
     }
 
     if (chdir(game) != 0)
