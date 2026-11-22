@@ -686,7 +686,7 @@ index 997d7a523e8..3f7703d0f53 100644
  
  #ifndef TARGET_APPLE
 diff --git a/src/coreclr/utilcode/executableallocator.cpp b/src/coreclr/utilcode/executableallocator.cpp
-index f982fa1f940..4a3166f53fc 100644
+index f982fa1f940..1b56322274c 100644
 --- a/src/coreclr/utilcode/executableallocator.cpp
 +++ b/src/coreclr/utilcode/executableallocator.cpp
 @@ -124,7 +124,7 @@ bool ExecutableAllocator::IsDoubleMappingEnabled()
@@ -698,7 +698,7 @@ index f982fa1f940..4a3166f53fc 100644
      return false;
  #else
      return g_isWXorXEnabled;
-@@ -262,6 +262,32 @@ HRESULT ExecutableAllocator::StaticInitialize(FatalErrorHandler fatalErrorHandle
+@@ -262,6 +262,41 @@ HRESULT ExecutableAllocator::StaticInitialize(FatalErrorHandler fatalErrorHandle
  
      g_fatalErrorHandler = fatalErrorHandler;
      g_isWXorXEnabled = Configuration::GetKnobBooleanValue(W("System.Runtime.EnableWriteXorExecute"), CLRConfig::EXTERNAL_EnableWriteXorExecute);
@@ -722,16 +722,25 @@ index f982fa1f940..4a3166f53fc 100644
 +#if defined(TARGET_OSX)
 +    g_isWXorXEnabled = true;
 +#else
++    // BOTH branches are explicit: the knob's DEFAULT is 1 on every non-RISCV64
++    // target (clrconfigvalues.h - Apple arm64 included), so merely skipping the
++    // force left g_isWXorXEnabled true and every non-arena session kept dying at
++    // coreclr_initialize (m4-touch-2: the PORT17_JIT_RX-only gate still failed the
++    // setup). The host signal decides, deterministically, both ways.
 +    if (getenv("PORT17_JIT_RX") != NULL)
 +    {
 +        g_isWXorXEnabled = true;
++    }
++    else
++    {
++        g_isWXorXEnabled = false;
 +    }
 +#endif
 +#endif
      g_instance = new (nothrow) ExecutableAllocator();
      if (g_instance == NULL)
      {
-@@ -288,6 +314,13 @@ bool ExecutableAllocator::Initialize()
+@@ -288,6 +323,13 @@ bool ExecutableAllocator::Initialize()
          if (!VMToOSInterface::CreateDoubleMemoryMapper(&m_doubleMemoryMapperHandle, &m_maxExecutableCodeSize))
          {
              g_isWXorXEnabled = false;
