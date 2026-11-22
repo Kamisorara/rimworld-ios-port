@@ -796,12 +796,17 @@ int main(int argc, char *argv[])
         BOOL docOk = [fm fileExistsAtPath:docDir isDirectory:&isDir] && isDir;
         boot_log(docOk ? @"Documents 目录存在（Files app：浏览 → 我的 iPhone → Port17）"
                        : @"Documents 目录缺失（沙盒异常，日志只剩屏幕一份）");
-        // 自证身份：安装管线的证据（App.app 改名/bundle id 被改写会在这里现形——
-        // SideStore 免费位的"改 id 安装"会重打整包，文件 app 文件夹不显示的头号嫌疑）。
+        // 自证身份 + 安装后 plist 完整性：运行时读到的就是 SideStore 重写后的 plist
+        // （ResignAppOperation 无条件重命名 App.app/注入 URL 类型）。如果
+        // UIFileSharingEnabled/CFBundleIcons 不在下面的键列表里 = 重写丢键实锤。
         boot_log([NSString stringWithFormat:@"安装身份：id=%@ 版本=%@ bundle=%@",
             [NSBundle mainBundle].bundleIdentifier,
             [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?",
             [NSBundle mainBundle].bundlePath.lastPathComponent]);
+        boot_log([NSString stringWithFormat:@"安装后 plist 键（%@ 个）：%@",
+            @([NSBundle mainBundle].infoDictionary.count),
+            [[NSBundle mainBundle].infoDictionary.allKeys sortedArrayUsingSelector:@selector(compare:)]
+                componentsJoinedByString:@", "]]);
         signal(SIGSEGV, crash_handler);
         signal(SIGBUS, crash_handler);
         signal(SIGABRT, crash_handler);
