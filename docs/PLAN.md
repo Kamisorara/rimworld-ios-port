@@ -127,8 +127,11 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **二十九轮（2026-11-22 深夜三更，0.2.7）：JIT 首航黑屏——探针执行段在 attach 态不可 fault，重做为纯分配链探针**：m2-jit-1 首次 StikDebug 会话拉起：日志停在「引擎启动」横幅后一字不出（连授权检测行都没到），黑屏不回落诊断界面＝进程卡在异常现场。死点定位＝0.2.6 探针的**执行段**（`mov x0,#42;ret` 走 RX 调用）——**attach 态下 mach 异常先送 debugserver，进程内 SIGSEGV 处理器（sigsetjmp 兜底）永远不跑**，fault 即卡死（M1 fault-loop 教训的重犯：那次是探针 fault→停→脚本 c→再 fault 无限循环）。0.2.7 探针重做：**全程不可 fault**——只验分配链（mmap RX→vm_remap 别名→vm_protect RW→经别名写、经 RX 读回比对），每步即时落日志（死点要留名）；执行可行性交运行时本体裁决（其失败形态是 21 轮实测的解释器回退，不崩）。授权检测行也拆开：CS_DEBUGGED 先打、探针各步自打。若 0.2.7 探针链路全通而运行时自身在代码页执行上 fault-loop（脚本窗口将刷 stopped 行），则转 M1/STS2 竞技场线（debugserver `_M` 代分配）。
 
+**三十轮（2026-11-22 深夜四更，0.2.7 真机裁决）：官方 iOS 包 = 解释器专用构建，JIT 物理不可能——M1"混合构建"结论正式推翻**：m2-jit-2（StikDebug 会话拉起 0.2.7）：授权链三行全绿（`CS_DEBUGGED=1` → `探针链路通（RX/RW 别名一致=1）` → `生效执行模式 = JIT（InterpMode=0）`），0.2.6 黑屏修复验证 ✓——**但装载停摆与解释器逐秒一致**（对照 m2-engine-20：两轮都是 +397/+382、+332/+367、**三连 +0 共 45 秒**、+66/+82 恢复窗——def 装载是纯托管 CPU 活，真 JIT 不可能一秒不差）。源码+二进制双重定位：vanilla `eeconfig.cpp` 里 InterpMode=0 且未设 `DOTNET_Interpreter` 时解释器仍运行的解释唯一剩 `!FEATURE_DYNAMIC_CODE_COMPILED`；二进制判据 `"Failed to load JIT compiler"`（UTF-16，DCC=1 必有/DCC=0 编译出局）：**安卓官方包=1（判据阳性对照，安卓实测 JIT 可用）vs iOS 官方包=0**。`jitinterface.cpp UnsafeJitFunction` 结构：解释器一旦装载即接管一切编译请求；JIT 路径失败是逐方法抛 InvalidProgram（游戏会坏，不会慢）——"以解释器速度稳定运行"只有解释器一条路。libclrjit.dylib（真 RyuJIT arm64，Clang 17 构建）是包清单随附件。**JIT 的唯一出路 = M1 自建 runtime 线（--dynamiccodecompiled true，封存于 53f7a4a 单 remap 改造后、真机验证前）**。附带观察：设备 runtime.env 残留 21 轮的 `DOTNET_JitDisasm=Program:Main`（checked-build 专属，release 无害）。
+
 ### M3 游戏程序集上机
 - `patch.dll` 增加 iOS 目标（平台检查改写、Harmony 适配 darwin）；
+
 - PortHooks 的 WaylithClr.* 替身已随 M2 收官进包（见上）；剩 CoreLib 补丁对 11.0 CoreLib 的重移植（20 个 `WaylithClr.*` 开关，安卓版是对 10.0.12 做的）与 PortHooks 的启动钩子/UnityStubs/ModPrep 件；
 - `libcoreclr.dylib` 二进制补丁的 iOS 版（安卓版是 `libcoreclr.so` 两处）。
 **验收**：玩家导入的游戏副本在真机进主菜单。
