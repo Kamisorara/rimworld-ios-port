@@ -649,6 +649,17 @@ static int run_probe_thread(void)
 // 抑制节流时才拿，装载期是空的。过期干净归还，回前台重新持有（下一次熄屏又有窗口）。
 static UIBackgroundTaskIdentifier g_engineBgTask = (UIBackgroundTaskIdentifier)~(NSUInteger)0; // = UIBackgroundTaskInvalid（extern const 当不了编译期常量）
 static id g_bgTaskObserver = nil; // 观察者令牌要持有（不持有可能被提前释放，重挂静默失效）
+
+// 装载期观测：主 runloop 心跳。引擎装载期 stdout 安静（卡 Initializing 排查），这行
+// 是主线程死活的信号——主 runloop 卡死即停跳（主队列的 dispatch_after 不再伺候）；
+// 配合 waylithaudio 的帧计数心跳区分三种形态：主 runloop 停+帧停=主线程忙/死锁，
+// 主 runloop 活+帧停=引擎循环卡，两者都活=纯慢，等就是了。
+static void engine_main_heartbeat(void)
+{
+    append_log("💓 主 runloop 存活（引擎装载期 stdout 安静属正常）");
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ engine_main_heartbeat(); });
+}
 static void engine_hold_background_task(void)
 {
     if (g_engineBgTask != UIBackgroundTaskInvalid)
@@ -677,6 +688,7 @@ static void engine_hold_background_task(void)
         append_log("⚠️ scene 转交引擎（WaylithSceneDelegate 在，实例化并转发 willConnect）");
         // 先持断言再转交（此时 UIApplicationMain 已在跑，sharedApplication 可用）
         engine_hold_background_task();
+        engine_main_heartbeat();
         g_bgTaskObserver = [[NSNotificationCenter defaultCenter]
             addObserverForName:UIApplicationDidBecomeActiveNotification
                         object:nil queue:[NSOperationQueue mainQueue]

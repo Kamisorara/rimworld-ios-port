@@ -1401,6 +1401,24 @@ EXPORT void wa_set_allocator(void* alloc, void* realloc_, void* free_)
     g_free = (void (*)(void*))free_;
 }
 
+// PORT17 心跳：引擎每帧调一次 wa_update（g_updates 计数）。装载期引擎安静（stdout
+// 无输出），这行是帧循环死活的唯一信号——15 秒差值为 0 = 帧循环停了（卡在
+// Initializing 排查用，配合宿主的主 runloop 心跳区分"主线程忙/引擎循环卡"）。
+static void* port17_frame_heartbeat(void* unused)
+{
+    (void)unused;
+    uint64_t last = 0;
+    struct timespec ts = { 15, 0 };
+    for (;;)
+    {
+        nanosleep(&ts, NULL);
+        uint64_t now = g_updates;  // 引擎帧驱动的更新计数（良性数据竞争，只读）
+        LOGI("port17 活性: 引擎帧更新 %llu 次（15 秒内 +%llu）", (unsigned long long)now, (unsigned long long)(now - last));
+        last = now;
+    }
+    return NULL;
+}
+
 EXPORT int wa_init(uint32_t sampleRate, uint32_t channels, int nullBackend)
 {
     if (g_initialized) return 0;
@@ -1459,6 +1477,12 @@ EXPORT int wa_init(uint32_t sampleRate, uint32_t channels, int nullBackend)
     g_initialized = 1;
     ma_device* device = ma_engine_get_device(&g_engine);
     LOGI("audio: miniaudio %s on %s, %u Hz, %u channels, period %u frames", ma_version_string(), device ? ma_get_backend_name(device->pContext->backend) : "no device", g_rate, g_channels, device ? device->playback.internalPeriodSizeInFrames : 0);
+    // PORT17 心跳：引擎每帧调一次 wa_update（g_updates 计数）。装载期引擎安静（stdout
+    // 无输出），这行是帧循环死活的唯一信号——15 秒差值为 0 = 帧循环停了（卡在
+    // Initializing 排查用，配合宿主的主 runloop 心跳区分"主线程忙/引擎循环卡"）。
+    pthread_t hb;
+    if (pthread_create(&hb, NULL, port17_frame_heartbeat, NULL) == 0)
+        pthread_detach(hb);
     return 0;
 }
 
