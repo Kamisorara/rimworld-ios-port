@@ -25,6 +25,17 @@ namespace PortMobile
 			}
 			started = true;
 			Console.WriteLine("[mobile] starting; Harmony " + typeof(Harmony).Assembly.GetName().Version + ", runtime " + Environment.Version);
+			// The launcher's status card "Mod（上次会话）": one structured line the host's log
+			// sink turns into Documents/port17-status.txt (launcher.m [port17-status] prefix).
+			// By UIRoot_Entry.Init every def is loaded, so the running-mod list is the truth.
+			try
+			{
+				Console.WriteLine("[port17-status] mods=" + Verse.LoadedModManager.RunningModsListForReading.Count);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine("[port17-status] mods=unknown（" + ex.Message + "）");
+			}
 			var harmony = new Harmony("port17.mobile");
 			// Before any of the port's patches: they are watched like every later one (see InlineGuard).
 			InlineGuard.Start(harmony);

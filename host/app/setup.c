@@ -3,6 +3,7 @@
 // minus the separate process (iOS has no fork: this spends the process's one CoreCLR, after
 // which the host drops to the diagnostics UI and the player reopens into the engine mode).
 #include "host.h"
+#include "status.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <dlfcn.h>
@@ -203,13 +204,34 @@ static void *setup_thread(void *argRaw)
 int port17_run_setup(const char *bundle, const char *game)
 {
     struct setup_arg arg = { bundle, game, -100 };
+    int rc;
     if (!pthread_main_np())
-        return run_setup_now(bundle, game);
-    pthread_t t;
-    if (pthread_create(&t, NULL, setup_thread, &arg) != 0)
-        return run_setup_now(bundle, game);
-    while (arg.result == -100)
-        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false); // keep the launch watchdog fed
-    pthread_join(t, NULL);
-    return arg.result;
+        rc = run_setup_now(bundle, game);
+    else
+    {
+        pthread_t t;
+        if (pthread_create(&t, NULL, setup_thread, &arg) != 0)
+            rc = run_setup_now(bundle, game);
+        else
+        {
+            while (arg.result == -100)
+                CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false); // keep the launch watchdog fed
+            pthread_join(t, NULL);
+            rc = arg.result;
+        }
+    }
+    // 启动器状态仓：失败记粗话（成功路径的改写计数由 launcher.m 认 [setup] done: 行
+    // 折进 setup_last——比这里只有 rc 的信息多，两边不重复写同一个键）。
+    if (rc != 0)
+    {
+        const char *h = getenv("HOME");
+        if (h != NULL)
+        {
+            char home[512], s[48];
+            snprintf(home, sizeof home, "%s", h);
+            snprintf(s, sizeof s, "失败 rc %d", rc);
+            port17_status_set(home, "setup_last", s);
+        }
+    }
+    return rc;
 }

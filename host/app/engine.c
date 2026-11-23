@@ -9,6 +9,7 @@
 // framework assemblies never make it into the TPA list (the name dedup of Android's add_assemblies).
 #include "host.h"
 #include "jit26.h"
+#include "status.h"
 
 #include <dlfcn.h>
 #include <dirent.h>
@@ -437,6 +438,10 @@ int run_engine(const char *bundle_dir, const char *home)
                         : csdbg == 0 ? "未接管（普通启动，无授权）" : "csops 查询失败");
     host_log(buf);
     int arena = csdbg == 1 ? port17_jit26_acquire() : 0; // 每步自带日志（0.2.6 教训：死点要留名）
+    // 启动器状态仓：竞技场结果（jit_arena）——granted / failed / skipped（无调试器）。
+    port17_status_set(home, "jit_arena",
+                      csdbg == 1 ? (arena == 1 ? "granted" : "failed")
+                                 : "skipped（无调试器）");
     char jitFlag[1100];
     snprintf(jitFlag, sizeof jitFlag, "%s/jit.on", game);
     if (file_exists(jitFlag))
@@ -496,6 +501,11 @@ int run_engine(const char *bundle_dir, const char *home)
                      : "解释器",
                  im ? im : "未设");
         host_log(buf);
+        // 启动器状态仓：生效模式（启动器「执行模式」卡片的数据源；日志行太长，这里存短话）
+        char eff[96];
+        snprintf(eff, sizeof eff, jit ? "JIT（InterpMode=%s）" : "解释器（InterpMode=%s）",
+                 im ? im : "未设");
+        port17_status_set(home, "jit_effective", eff);
     }
 
     if (chdir(game) != 0)
@@ -633,10 +643,14 @@ int run_engine(const char *bundle_dir, const char *home)
     {
         snprintf(buf, sizeof buf, "coreclr_initialize 失败：0x%08x", hr);
         host_log(buf);
+        char clr[32];
+        snprintf(clr, sizeof clr, "失败 0x%08x", hr);
+        port17_status_set(home, "coreclr_last", clr);
         log_stderr_tail(home);
         return -5;
     }
     host_log("CoreCLR 就绪（引擎装载中——首屏前 stdout 滚动是正常进度）");
+    port17_status_set(home, "coreclr_last", "ok");
 
     const char *argv[32];
     static char argStorage[8192];

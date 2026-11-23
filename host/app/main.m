@@ -1,777 +1,17 @@
-// The M2 game host, grown from the M1 probe app: a full-screen CAMetalLayer (the window the GLFW shim
-// hands the engine), raw touch capture (every finger, as on Android), the soft-keyboard bridge (a
-// hidden UITextField — the iOS TextInputView), and a collapsible log overlay. The diagnostics of M1
-// stay: the .NET probe (host.c) runs from a button, the Documents logs survive crashes, the stderr of
-// the whole process goes to a file.
-//
-// The triangle (host/app/triangle.c) starts on its own thread at launch: it draws through the shim and
-// MoltenVK, which is M2's proof before the engine itself comes.
+// The M2 game host: lifecycle and boot decisions live here — the engine mode (the game's
+// iOS backend takes the main thread and builds its own UIApplicationMain), the in-app setup
+// run (iOS has no fork: it spends the process's one CoreCLR, then exits back), the zip
+// auto-install, the crash rescue. All the UI — the s2arm-style launcher with its status
+// cards (jit mode, setup, mods) — and the log plumbing live in launcher.m; the sinks are
+// installed from main() before UIApplicationMain, so the engine mode still gets its log
+// lines to disk (Documents/port17-ui.log survives crashes; Files app can take them out).
 #import <UIKit/UIKit.h>
-#import <QuartzCore/QuartzCore.h>
-#import <Metal/Metal.h>
-#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
-#include <dlfcn.h>
 #include <signal.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <pthread.h>
 #import "host.h"
 #import "unzip.h"
-#import "../glfw/glfw_ios.h"
-
-int triangle_main(void);
-int audio_test(void);
-int libs_check(void);
-static int run_probe_thread(void);
-static int engine_thread(void);
-// 本进程的 CoreCLR 是否已被 setup 用掉（引擎按钮据此直接指引重开，不去撞 0x80131022）。
-static BOOL g_clrSpentBySetup = NO;
-
-static UITextView *g_text = nil;
-
-// UI 之外的地面真相：所有阶段打点同步落 Documents/port17-ui.log，黑屏/闪退时经 Files app
-// 也能拿到（Info.plist 开了文件共享）。M1 的规矩原样带过来。
-static void boot_log(NSString *line)
-{
-    NSString *path = [NSHomeDirectory()
-        stringByAppendingPathComponent:@"Documents/port17-ui.log"];
-    NSDate *now = [NSDate date];
-    NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
-    fmt.dateFormat = @"HH:mm:ss.SSS";
-    NSString *out = [NSString stringWithFormat:@"[%@] %@\n",
-                            [fmt stringFromDate:now], line];
-    FILE *f = fopen(path.fileSystemRepresentation, "a");
-    if (f != NULL) {
-        fputs(out.UTF8String, f);
-        fclose(f);
-    }
-}
-
-static void append_log(const char *msg)
-{
-    boot_log([NSString stringWithUTF8String:msg]);
-    NSString *line = [NSString stringWithUTF8String:msg];
-    dispatch_async(dispatch_get_main_queue(), ^{
-        // 引擎把 stdout 整个泵进来，覆盖层不能无界增长：留尾部的量（port17-ui.log 有全文）。
-        if (g_text.text.length > 200000)
-            g_text.text = [g_text.text substringFromIndex:g_text.text.length - 100000];
-        g_text.text = [g_text.text stringByAppendingString:
-                              [line stringByAppendingString:@"\n"]];
-        NSRange end = { g_text.text.length - 1, 1 };
-        [g_text scrollRangeToVisible:end];
-    });
-}
-
-// triangle.c calls host_log — host.c defines it (routed through host_set_log_sink, which the app
-// delegate installs as append_log below); no definition here, or the link sees it twice.
-
-// The diagnostics-hold switch (HostVC「下次诊断」writes it): present = next launch skips
-// engine mode AND setup, straight to the diagnostics screen (repeated import/export/debug
-// rounds without the game taking the start).
-static NSString *port17_diag_hold_path(void)
-{
-    return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/port17-diag.on"];
-}
-
-
-// ---- the window: a CAMetalLayer the whole screen ----
-
-// A USB HID usage (UIKey.keyCode) -> a GLFW key code. The contiguous blocks first, then the singles;
-// the values are glfw3.h's (docs/ENGINE-NATIVE-CONTRACT.md keeps the table).
-static int key_from_hid(int code)
-{
-    if (code >= 0x04 && code <= 0x1D) return 'A' + (code - 0x04);           // A-Z
-    if (code >= 0x1E && code <= 0x27) return '0' + (code - 0x1E);           // 0-9
-    if (code >= 0x3A && code <= 0x45) return 290 + (code - 0x3A);           // F1-F12
-    if (code >= 0x59 && code <= 0x61) return 321 + (code - 0x59);           // keypad 1-9
-    if (code == 0x62) return 320;                                           // keypad 0
-    if (code >= 0xE0 && code <= 0xE7)
-    {
-        // HID 0xE0 L-Ctrl, 0xE1 L-Shift, 0xE2 L-Alt, 0xE3 L-GUI, 0xE4 R-Ctrl, 0xE5 R-Shift, 0xE6 R-Alt,
-        // 0xE7 R-GUI; GLFW L-Shift 340, L-Control 341, L-Alt 342, L-Meta 343, R-Shift 344 …
-        static const int modifiers[8] = { 341, 340, 342, 343, 345, 344, 346, 347 };
-        return modifiers[code - 0xE0];
-    }
-    switch (code)
-    {
-    case 0x28: return 257;  // return
-    case 0x29: return 256;  // escape
-    case 0x2A: return 259;  // backspace
-    case 0x2B: return 258;  // tab
-    case 0x2C: return 32;   // space
-    case 0x2D: return 45;   // -
-    case 0x2E: return 61;   // =
-    case 0x2F: return 91;   // [
-    case 0x30: return 93;   // ]
-    case 0x31: return 92;   // backslash
-    case 0x33: return 59;   // ;
-    case 0x34: return 39;   // '
-    case 0x35: return 96;   // `
-    case 0x36: return 44;   // ,
-    case 0x37: return 46;   // .
-    case 0x38: return 47;   // /
-    case 0x39: return 280;  // caps lock
-    case 0x46: return 283;  // print screen (sysrq)
-    case 0x47: return 281;  // scroll lock
-    case 0x48: return 284;  // pause (break)
-    case 0x49: return 260;  // insert
-    case 0x4A: return 268;  // home
-    case 0x4B: return 266;  // page up
-    case 0x4C: return 261;  // delete
-    case 0x4D: return 269;  // end
-    case 0x4E: return 267;  // page down
-    case 0x4F: return 262;  // right
-    case 0x50: return 263;  // left
-    case 0x51: return 264;  // down
-    case 0x52: return 265;  // up
-    case 0x53: return 282;  // keypad num lock
-    case 0x54: return 331;  // keypad /
-    case 0x55: return 332;  // keypad *
-    case 0x56: return 333;  // keypad -
-    case 0x57: return 334;  // keypad +
-    case 0x58: return 335;  // keypad enter
-    case 0x63: return 330;  // keypad .
-    case 0x67: return 336;  // keypad =
-    case 0x65: return 348;  // application / menu
-    default: return -1;
-    }
-}
-
-static int mods_from_flags(UIKeyModifierFlags flags)
-{
-    int mods = 0;
-    if (flags & UIKeyModifierShift) mods |= 0x0001;
-    if (flags & UIKeyModifierControl) mods |= 0x0002;
-    if (flags & UIKeyModifierAlternate) mods |= 0x0004;
-    if (flags & UIKeyModifierCommand) mods |= 0x0008;
-    if (flags & UIKeyModifierAlphaShift) mods |= 0x0010;
-    return mods;
-}
-
-// Every finger of every phase goes to the shim as its raw event (the id is the UITouch object's
-// address: stable for the finger's life, as Android's pointer id is; the double cast keeps ARC's
-// pointer-introspection warning away).
-@interface MetalView : UIView
-@end
-
-@implementation MetalView
-
-+ (Class)layerClass { return [CAMetalLayer class]; }
-
-- (void)commonInit
-{
-    self.multipleTouchEnabled = YES;
-    self.exclusiveTouch = NO;
-    self.backgroundColor = UIColor.blackColor;
-}
-
-- (instancetype)initWithFrame:(CGRect)frame
-{
-    self = [super initWithFrame:frame];
-    if (self) [self commonInit];
-    return self;
-}
-
-- (void)awakeFromNib
-{
-    [super awakeFromNib];
-    [self commonInit];
-}
-
-static int touch_type(NSSet<UITouch *> *touches)
-{
-    // One phase per event (began/moved/ended/cancelled all carry one phase for their set).
-    UITouchPhase phase = [[touches anyObject] phase];
-    switch (phase)
-    {
-    case UITouchPhaseBegan: return 1;
-    case UITouchPhaseMoved: return 2;
-    case UITouchPhaseStationary: return 2;
-    case UITouchPhaseEnded: return 3;
-    case UITouchPhaseCancelled: return 4;
-    default: return 0;
-    }
-}
-
-- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { [self forward:touches]; }
-- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { [self forward:touches]; }
-- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { [self forward:touches]; }
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { [self forward:touches]; }
-
-- (void)forward:(NSSet<UITouch *> *)touches
-{
-    int type = touch_type(touches);
-    if (type == 0) return;
-    for (UITouch *touch in touches)
-    {
-        CGPoint p = [touch locationInView:self];
-        glfwIosTouch(type, (int)(intptr_t)(__bridge const void *)touch & 0x7fffffff, (float)p.x, (float)p.y);
-    }
-}
-
-// A hardware keyboard (USB, Bluetooth — or the Magic Keyboard): the shim gets the key and the text.
-- (void)pressesBegan:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event
-{
-    for (UIPress *press in presses)
-    {
-        UIKey *key = press.key;
-        if (key == nil) continue;
-        int glfwKey = key_from_hid((int)key.keyCode);
-        int mods = mods_from_flags(key.modifierFlags);
-        if (glfwKey >= 0) glfwIosKey(glfwKey, 1, mods);
-        // The text, unless a modifier owns the key (shortcuts): one code point of key.characters.
-        if (key.characters.length > 0 && (mods & ~0x0010) == 0)
-        {
-            unichar units[8] = { 0 };
-            [key.characters getCharacters:units range:NSMakeRange(0, MIN(key.characters.length, 8))];
-            unsigned int cp = units[0];
-            if (cp >= 0xD800 && cp <= 0xDBFF && key.characters.length > 1 &&
-                units[1] >= 0xDC00 && units[1] <= 0xDFFF)
-                cp = 0x10000 + ((cp - 0xD800) << 10) + (units[1] - 0xDC00);
-            glfwIosChar(cp, mods);
-        }
-    }
-}
-
-- (void)pressesEnded:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event
-{
-    for (UIPress *press in presses)
-    {
-        if (press.key == nil) continue;
-        int glfwKey = key_from_hid((int)press.key.keyCode);
-        if (glfwKey >= 0)
-            glfwIosKey(glfwKey, 0, mods_from_flags(press.key.modifierFlags));
-    }
-}
-
-@end
-
-// ---- the soft-keyboard bridge: the iOS TextInputView ----
-// A hidden UITextField: glfwAndroidShowKeyboard makes it the first responder, the system keyboard
-// comes up over the game, and its delegate turns the typing into the shim's char / backspace / action
-// events — exactly what Android's TextInputView gives through its JNI natives.
-
-@interface KeyboardField : UITextField <UITextFieldDelegate>
-@end
-
-@implementation KeyboardField
-
-- (instancetype)initWithFrame:(CGRect)frame
-{
-    self = [super initWithFrame:frame];
-    if (self)
-    {
-        self.delegate = self;
-        self.autocorrectionType = UITextAutocorrectionTypeNo;
-        self.autocapitalizationType = UITextAutocapitalizationTypeNone;
-        self.spellCheckingType = UITextSpellCheckingTypeNo;
-        self.keyboardType = UIKeyboardTypeDefault;
-        self.returnKeyType = UIReturnKeyDone;
-        self.alpha = 0.01;                 // in the hierarchy, invisible
-        self.userInteractionEnabled = YES;
-        // The Done bar: the editor action the managed side reads as "typing finished" (type 5).
-        UIToolbar *bar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, 0, 44)];
-        UIBarButtonItem *done = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
-                                                                              target:self
-                                                                              action:@selector(doneTapped:)];
-        UIBarButtonItem *space = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace
-                                                                               target:nil action:nil];
-        bar.items = @[space, done];
-        self.inputAccessoryView = bar;
-    }
-    return self;
-}
-
-- (void)doneTapped:(id)sender
-{
-    glfwIosEditorAction();
-    [self resignFirstResponder];
-}
-
-- (BOOL)textField:(UITextField *)textField shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString *)string
-{
-    if (string.length == 0)
-    {
-        glfwIosBackspace();
-        return NO;
-    }
-    // The text as whole code points (surrogate pairs joined).
-    unsigned int codepoints[64];
-    int n = 0;
-    for (int i = 0; i < (int)string.length && n < 64; i++)
-    {
-        unsigned int cp = [string characterAtIndex:i];
-        if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < (int)string.length)
-        {
-            unsigned int lo = [string characterAtIndex:(NSUInteger)(i + 1)];
-            if (lo >= 0xDC00 && lo <= 0xDFFF)
-            {
-                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-                i++;
-            }
-        }
-        codepoints[n++] = cp;
-    }
-    glfwIosTextCommit(codepoints, n);
-    return NO; // the field stays empty: the game owns the text, not the field
-}
-
-- (BOOL)textFieldShouldReturn:(UITextField *)textField
-{
-    glfwIosEditorAction();
-    return NO;
-}
-
-@end
-
-// ---- the host's own thread spawner (16 MB, the M1 lesson: GCD queues' ~512 KB stacks die in CoreCLR) ----
-
-static void *thread_run(void *arg)
-{
-    int (*fn)(void) = (int (*)(void))arg;
-    fn();
-    return NULL;
-}
-
-static void run_on_big_thread(int (*fn)(void))
-{
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, 16u * 1024 * 1024);
-    pthread_t tid;
-    if (pthread_create(&tid, &attr, thread_run, (void *)fn) != 0)
-        append_log("线程创建失败");
-    pthread_attr_destroy(&attr);
-    pthread_detach(tid);
-}
-
-// ---- the view controller ----
-
-@interface HostVC : UIViewController <UIDocumentPickerDelegate>
-@property (strong, nonatomic) MetalView *gameView;
-@property (strong, nonatomic) KeyboardField *keyboard;
-@property (strong, nonatomic) UITextView *log;
-@end
-
-@implementation HostVC
-{
-    BOOL m_triangleRan;
-    BOOL m_probeRan;
-    BOOL m_engineRan;
-}
-
-- (void)viewDidLoad
-{
-    [super viewDidLoad];
-    boot_log(@"viewDidLoad");
-    self.view.backgroundColor = UIColor.blackColor;
-
-    _gameView = [[MetalView alloc] initWithFrame:CGRectZero];
-    _gameView.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:_gameView];
-
-    _keyboard = [[KeyboardField alloc] initWithFrame:CGRectMake(8, 4, 120, 30)];
-    _keyboard.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:_keyboard]; // under everything, never seen
-
-    // The log overlay (M1's window, collapsible — the game gets the screen when it's away).
-    g_text = [[UITextView alloc] initWithFrame:CGRectZero];
-    g_text.translatesAutoresizingMaskIntoConstraints = NO;
-    g_text.editable = NO;
-    g_text.selectable = YES;
-    g_text.backgroundColor = [UIColor.blackColor colorWithAlphaComponent:0.75];
-    g_text.textColor = UIColor.greenColor;
-    g_text.font = [UIFont fontWithName:@"Menlo" size:11];
-    g_text.layoutManager.allowsNonContiguousLayout = NO;
-    g_text.hidden = YES;
-    [self.view addSubview:g_text];
-
-    // The buttons of the diagnostics: the engine (M2's closing line), the import/export of
-    // the fallback world (the Files folder may never come — with these two the app needs
-    // nothing from it), the diagnostics-hold toggle, the triangle (auto-runs), the .NET
-    // probe, the log, the keyboard, the audio, the libraries.
-    UIButton *engineBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [engineBtn setTitle:@"引擎" forState:UIControlStateNormal];
-    [engineBtn.titleLabel setFont:[UIFont boldSystemFontOfSize:17]];
-    [engineBtn addTarget:self action:@selector(engineTapped:) forControlEvents:UIControlEventTouchUpInside];
-    UIButton *importBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [importBtn setTitle:@"导入 zip" forState:UIControlStateNormal];
-    [importBtn addTarget:self action:@selector(importTapped:) forControlEvents:UIControlEventTouchUpInside];
-    UIButton *exportBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [exportBtn setTitle:@"导出" forState:UIControlStateNormal];
-    [exportBtn addTarget:self action:@selector(exportTapped:) forControlEvents:UIControlEventTouchUpInside];
-    UIButton *diagBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [diagBtn setTitle:[self.class diagHoldOn] ? @"下次进引擎" : @"下次诊断"
-            forState:UIControlStateNormal];
-    [diagBtn addTarget:self action:@selector(diagTapped:) forControlEvents:UIControlEventTouchUpInside];
-    UIButton *tri = [UIButton buttonWithType:UIButtonTypeSystem];
-    [tri setTitle:@"三角形" forState:UIControlStateNormal];
-    [tri addTarget:self action:@selector(triangleTapped:) forControlEvents:UIControlEventTouchUpInside];
-    UIButton *probe = [UIButton buttonWithType:UIButtonTypeSystem];
-    [probe setTitle:@".NET 探针" forState:UIControlStateNormal];
-    [probe addTarget:self action:@selector(probeTapped:) forControlEvents:UIControlEventTouchUpInside];
-    UIButton *logBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [logBtn setTitle:@"日志" forState:UIControlStateNormal];
-    [logBtn addTarget:self action:@selector(logTapped:) forControlEvents:UIControlEventTouchUpInside];
-    UIButton *kbBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [kbBtn setTitle:@"键盘" forState:UIControlStateNormal];
-    [kbBtn addTarget:self action:@selector(keyboardTapped:) forControlEvents:UIControlEventTouchUpInside];
-    UIButton *audioBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [audioBtn setTitle:@"音频" forState:UIControlStateNormal];
-    [audioBtn addTarget:self action:@selector(audioTapped:) forControlEvents:UIControlEventTouchUpInside];
-    UIButton *libsBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-    [libsBtn setTitle:@"库" forState:UIControlStateNormal];
-    [libsBtn addTarget:self action:@selector(libsTapped:) forControlEvents:UIControlEventTouchUpInside];
-    UIStackView *bar = [[UIStackView alloc] initWithFrame:CGRectZero];
-    bar.translatesAutoresizingMaskIntoConstraints = NO;
-    bar.axis = UILayoutConstraintAxisHorizontal;
-    bar.spacing = 8;
-    for (UIView *v in @[engineBtn, importBtn, exportBtn, diagBtn, tri, probe, logBtn, kbBtn, audioBtn, libsBtn])
-        [bar addArrangedSubview:v];
-
-    [self.view addSubview:bar];
-    UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
-    [NSLayoutConstraint activateConstraints:@[
-        [_gameView.topAnchor constraintEqualToAnchor:self.view.topAnchor],
-        [_gameView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
-        [_gameView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [_gameView.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-        [_keyboard.topAnchor constraintEqualToAnchor:safe.topAnchor],
-        [_keyboard.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
-        [bar.topAnchor constraintEqualToAnchor:safe.topAnchor],
-        [bar.centerXAnchor constraintEqualToAnchor:safe.centerXAnchor],
-        [g_text.topAnchor constraintEqualToAnchor:bar.bottomAnchor constant:4],
-        [g_text.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
-        [g_text.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor],
-        [g_text.heightAnchor constraintEqualToAnchor:safe.heightAnchor multiplier:0.32],
-    ]];
-
-    // The shim is attached before anything asks it for a window (the Android host's attach_glfw rule:
-    // it must see the window and the input before the engine starts). Its logging and the Vulkan
-    // forwarder's — and the audio's and the allocator's — go to the same overlay.
-    glfwIosSetLogSink(append_log);
-    for (NSString *name in @[@"libvulkan.dylib", @"libwaylithaudio.dylib", @"libvma.dylib"])
-    {
-        NSString *entry = [name isEqualToString:@"libwaylithaudio.dylib"] ? @"port17_audio_set_log_sink"
-                            : [name isEqualToString:@"libvma.dylib"] ? @"port17_vma_set_log_sink"
-                            : @"port17_vulkan_set_log_sink";
-        void *lib = dlopen([[[NSBundle mainBundle].bundlePath
-            stringByAppendingPathComponent:name] fileSystemRepresentation], RTLD_NOW | RTLD_LOCAL);
-        if (lib)
-        {
-            void (*sink)(void (*)(const char *)) =
-                (void (*)(void (*)(const char *)))dlsym(lib, entry.UTF8String);
-            if (sink) sink(append_log);
-        }
-    }
-    CAMetalLayer *layer = (CAMetalLayer *)_gameView.layer;
-    layer.device = MTLCreateSystemDefaultDevice();
-    layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    layer.framebufferOnly = YES; // present only, no reads: the fastest path, what a game takes
-    glfwIosAttach((__bridge void *)layer, (__bridge void *)_gameView, (__bridge void *)_keyboard);
-
-    // 启动即回放既有 ui 日志：上一次会话（含抢救出的 stderr 尾部）直接可见（M1 的规矩）。
-    NSString *uiPath = [NSHomeDirectory()
-        stringByAppendingPathComponent:@"Documents/port17-ui.log"];
-    NSString *prev = [NSString stringWithContentsOfFile:uiPath
-                                              encoding:NSUTF8StringEncoding
-                                                 error:nil];
-    if (prev.length > 32000)
-        prev = [prev substringFromIndex:prev.length - 32000]; // 引擎会话的日志很大，覆盖层只留尾部
-    if (prev.length > 0) {
-        g_text.text = prev;
-        NSRange end = { g_text.text.length - 1, 1 };
-        [g_text scrollRangeToVisible:end];
-    }
-
-    // 前后台：垫片把后台当作窗口消失（fbsize 0x0，引擎当作最小化），回前台再宣布回来。
-    NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
-    NSOperationQueue *main = [NSOperationQueue mainQueue];
-    [nc addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:main
-                  usingBlock:^(NSNotification *note) { (void)note; glfwIosApplicationEvent(GLFWIOS_WILL_RESIGN_ACTIVE); }];
-    [nc addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:main
-                  usingBlock:^(NSNotification *note) { (void)note; glfwIosApplicationEvent(GLFWIOS_DID_ENTER_BACKGROUND); }];
-    [nc addObserverForName:UIApplicationWillEnterForegroundNotification object:nil queue:main
-                  usingBlock:^(NSNotification *note) { (void)note; glfwIosApplicationEvent(GLFWIOS_WILL_ENTER_FOREGROUND); }];
-    [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:main
-                  usingBlock:^(NSNotification *note) { (void)note; glfwIosApplicationEvent(GLFWIOS_DID_BECOME_ACTIVE); }];
-}
-
-- (void)viewDidAppear:(BOOL)animated
-{
-    [super viewDidAppear:animated];
-    boot_log(@"viewDidAppear");
-    if (!m_triangleRan) {
-        m_triangleRan = YES;
-        append_log("==== Port17 M2 宿主 ====");
-        append_log("Vulkan 三角形自动启动（触摸拖顶点；「键盘」打字进日志；Esc/日志按钮切换）");
-        run_on_big_thread(triangle_main);
-    }
-}
-
-- (void)viewDidLayoutSubviews
-{
-    [super viewDidLayoutSubviews];
-    // 布局定了窗口尺寸才有效：attach 时（viewDidLoad）视图还是零尺寸，旋转/Stage
-    // 变化也走这里。垫片自己判断尺寸没变就什么都不做。
-    glfwIosViewResized();
-}
-
-- (void)engineTapped:(id)sender
-{
-    if (m_engineRan) {
-        append_log("引擎已跑过一次；CoreCLR 单实例，重启 app 才能再跑");
-        return;
-    }
-    if (g_clrSpentBySetup) {
-        append_log("本进程的运行时已被 setup 用掉（CoreCLR 单实例）——上划彻底关闭 app 再打开，即进引擎");
-        return;
-    }
-    m_engineRan = YES;
-    if (m_probeRan)
-        append_log("注意：探针已用过 CoreCLR——引擎的 coreclr_initialize 大概率 0x80131022，重启 app 直接点「引擎」最稳");
-    append_log("诊断模式试跑引擎：装载链（TPA/CLR/程序集/引擎 Main）全验证；窗口后端例外——");
-    append_log("5014 引擎的 iOS 后端要求主线程并自建 UIApplicationMain，只能由重启后的引擎模式（Documents/game 在即自动）满足");
-    g_text.hidden = NO; // 引导期看得见装载日志；「日志」按钮随时收起
-    // triangle_stop 最多等 2 秒循环收尾，别冻主线程。
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
-        triangle_stop();
-        run_on_big_thread(engine_thread);
-    });
-}
-
-- (void)triangleTapped:(id)sender
-{
-    if (!m_triangleRan) {
-        m_triangleRan = YES;
-        run_on_big_thread(triangle_main);
-    } else {
-        append_log("三角形已在跑（一个实例；重启 app 再来一次）");
-    }
-}
-
-// ---- the fallback world's doors: import/export through system pickers ----
-// The Files folder's fate is the system's; these two make the app self-sufficient: the
-// game zip comes in through UIDocumentPicker (a copy, no security-scope dance), the saves
-// and the log go out through the share sheet. The toggle keeps diagnostics reachable
-// across launches (engine mode would otherwise take every start once a game is installed).
-
-+ (BOOL)diagHoldOn
-{
-    return [NSFileManager.defaultManager
-        fileExistsAtPath:port17_diag_hold_path()];
-}
-
-- (void)diagTapped:(UIButton *)sender
-{
-    NSString *flag = port17_diag_hold_path();
-    NSFileManager *fm = NSFileManager.defaultManager;
-    if ([fm fileExistsAtPath:flag]) {
-        [fm removeItemAtPath:flag error:nil];
-        boot_log(@"诊断保持已关——下次启动照常（有游戏即引擎）");
-        [sender setTitle:@"下次诊断" forState:UIControlStateNormal];
-    } else {
-        [fm createFileAtPath:flag
-                    contents:[@"on" dataUsingEncoding:NSUTF8StringEncoding]
-                  attributes:nil];
-        boot_log(@"诊断保持已开——下次启动还进这个界面（引擎先让路；再点一次恢复）");
-        [sender setTitle:@"下次进引擎" forState:UIControlStateNormal];
-    }
-}
-
-- (void)importTapped:(id)sender
-{
-    // 经典初始化器（iOS 8 起就有，SDK 各代可见；新的 forOpeningContentTypes 家族在
-    // CI 的 SDK 下两代形态都报 no visible @interface）。Import 模式 = 系统把文件拷进
-    // 我们的 tmp 再交 URL——天然的拷贝语义，安全域包装都省。
-    UIDocumentPickerViewController *picker =
-        [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[UTTypeZIP.identifier]
-                                                                inMode:UIDocumentPickerModeImport];
-    picker.delegate = self;
-    picker.allowsMultipleSelection = NO;
-    [self presentViewController:picker animated:YES completion:nil];
-}
-
-- (void)documentPicker:(UIDocumentPickerViewController *)controller
-    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
-{
-    if (urls.count == 0)
-        return;
-    NSURL *src = urls[0];
-    NSString *dest = [NSHomeDirectory()
-        stringByAppendingPathComponent:@"Documents/port17-game.zip"];
-    NSFileManager *fm = NSFileManager.defaultManager;
-    // iCloud/别的 app 沙盒来的 URL 带 security scope：拷贝期间要持着访问权（本地
-    // 文件时这是无害的 no-op）。
-    BOOL scoped = [src startAccessingSecurityScopedResource];
-    [fm removeItemAtPath:dest error:nil]; // 旧的一份先清（.installed 记录保留——Inbox 收件同规矩）
-    NSError *err = nil;
-    BOOL copied = [fm copyItemAtURL:src toURL:[NSURL fileURLWithPath:dest] error:&err];
-    if (scoped)
-        [src stopAccessingSecurityScopedResource];
-    if (!copied) {
-        boot_log([NSString stringWithFormat:@"导入：拷到 port17-game.zip 失败（%@）",
-                  err.localizedDescription]);
-        return;
-    }
-    unsigned long long size = [[fm attributesOfItemAtPath:dest error:nil] fileSize];
-    boot_log([NSString stringWithFormat:@"导入：%@ 已就位（%.2f GB），开始安装…",
-              urls[0].lastPathComponent, size / 1073741824.0]);
-    g_text.hidden = NO; // 看得见安装进度（每 500 项一行）
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
-        int rc = port17_install_game_zip(NSHomeDirectory().UTF8String);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            boot_log(rc == 0
-                ? @"✅ 游戏就位——彻底关闭 app（上划划掉）再打开：第一次会自动跑 setup"
-                   @"（改写游戏文件）并自己退出，再打开即引擎"
-                : [NSString stringWithFormat:@"❌ 安装失败（返回 %d，原因在上面日志里）——换一份 zip 再试", rc]);
-        });
-    });
-}
-
-- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller
-{
-    boot_log(@"导入：取消了（没选文件）");
-}
-
-- (void)exportTapped:(UIButton *)sender
-{
-    NSString *home = NSHomeDirectory();
-    boot_log(@"导出：打包 Documents/AppData（存档+偏好）为 port17-saves-backup.zip …");
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
-        char zipPath[1024], srcDir[1024];
-        snprintf(zipPath, sizeof zipPath, "%s/Documents/port17-saves-backup.zip",
-                 home.UTF8String);
-        snprintf(srcDir, sizeof srcDir, "%s/Documents/AppData", home.UTF8String);
-        int n = port17_zip_tree(srcDir, zipPath);
-        // C 数组进不了 block 的捕获（按值拷数组禁止）——先落到对象再带进去。
-        NSString *zipNS = [NSString stringWithUTF8String:zipPath];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            NSMutableArray<NSURL *> *items = [NSMutableArray array];
-            if (n >= 0) {
-                boot_log([NSString stringWithFormat:@"导出：AppData 打包完成（%d 个文件）——分享面板里可「存储到文件」或隔空投送", n]);
-                [items addObject:[NSURL fileURLWithPath:zipNS]];
-            } else {
-                boot_log(n == -20
-                    ? @"导出：Documents/AppData 不在（还没有存档？）——只分享日志"
-                    : [NSString stringWithFormat:@"导出：AppData 打包失败（%d）——只分享日志", n]);
-            }
-            NSURL *logURL = [NSURL fileURLWithPath:
-                [home stringByAppendingPathComponent:@"Documents/port17-ui.log"]];
-            if ([NSFileManager.defaultManager fileExistsAtPath:logURL.path])
-                [items addObject:logURL];
-            if (items.count == 0) {
-                boot_log(@"导出：日志和 AppData 都不在——没有可导出的");
-                return;
-            }
-            UIActivityViewController *act =
-                [[UIActivityViewController alloc] initWithActivityItems:items
-                                                    applicationActivities:nil];
-            act.popoverPresentationController.sourceView = sender; // iPad 必须：分享面板要锚点
-            act.popoverPresentationController.sourceRect = sender.bounds;
-            [self presentViewController:act animated:YES completion:nil];
-        });
-    });
-}
-
-- (void)probeTapped:(id)sender
-{
-    if (m_probeRan) {
-        // CoreCLR 单实例：进程内二次 coreclr_initialize 会 0x80131022（M1 的已知债）。
-        append_log("探针已跑过一次；CoreCLR 单实例，重启 app 才能再跑");
-        return;
-    }
-    m_probeRan = YES;
-    run_on_big_thread(run_probe_thread);
-}
-
-- (void)logTapped:(id)sender
-{
-    g_text.hidden = !g_text.hidden;
-    if (!g_text.hidden) {
-        NSRange end = { g_text.text.length - 1, 1 };
-        [g_text scrollRangeToVisible:end];
-    }
-}
-
-- (void)keyboardTapped:(id)sender
-{
-    // 直接走垫片的软键盘入口（引擎将来的同一条路）。
-    glfwAndroidShowKeyboard(_keyboard.isFirstResponder ? 0 : 1);
-}
-
-- (void)audioTapped:(id)sender
-{
-    // waylithaudio 的 CoreAudio 自检（引擎的 wa_* API 面；结束后可再跑）。
-    append_log("音频自检启动（waylithaudio / CoreAudio）");
-    run_on_big_thread(audio_test);
-}
-
-- (void)libsTapped:(id)sender
-{
-    // 全部引擎 dylib 的装载自检（install_name/依赖链在设备上是否成立）。
-    run_on_big_thread(libs_check);
-}
-
-@end
-
-// The probe on its big thread: stderr redirected first, as M1 does it.
-static void *probe_thread(void *unused)
-{
-    (void)unused;
-    boot_log(@"probe 线程启动（16MB 栈）");
-    NSString *errPath = [NSHomeDirectory()
-        stringByAppendingPathComponent:@"Documents/coreclr-stderr.log"];
-    FILE *errFile = freopen(errPath.fileSystemRepresentation, "w", stderr);
-    setvbuf(stderr, NULL, _IONBF, 0);
-    boot_log(errFile != NULL
-        ? @"stderr 已重定向到 Documents/coreclr-stderr.log（无缓冲）"
-        : @"stderr 重定向失败（沿用系统日志）");
-    fprintf(stderr, "[probe] === 本会话 stderr 捕获自检 ===\n");
-
-    const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];
-    int rc = run_probe(bundle);
-    if (rc != -4) {
-        NSString *err = [NSString stringWithContentsOfFile:errPath
-            encoding:NSUTF8StringEncoding error:nil];
-        if (err.length > 0) {
-            append_log("---- CoreCLR stderr ----");
-            append_log(err.UTF8String);
-        }
-    }
-    char buf[64];
-    snprintf(buf, sizeof(buf), "run_probe 返回 %d", rc);
-    append_log(buf);
-    return NULL;
-}
-
-// The engine on its big thread: Documents/game 的 RimWorld.dll 上官方 CoreCLR。
-static int engine_thread(void)
-{
-    boot_log(@"engine 线程启动（16MB 栈）");
-    const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];
-    const char *home = [NSHomeDirectory() UTF8String];
-    port17_install_game_zip(home); // 诊断模式里丢进来的 zip 也装上（装完再判定）
-    int rc = run_engine(bundle, home);
-    char buf[64];
-    snprintf(buf, sizeof(buf), "run_engine 返回 %d", rc);
-    append_log(buf);
-    return rc;
-}
-
-// run_probe wants the plain signature the thread spawner takes.
-static int run_probe_thread(void)
-{
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, 16u * 1024 * 1024);
-    pthread_t tid;
-    if (pthread_create(&tid, &attr, probe_thread, NULL) != 0)
-        append_log("probe 线程创建失败");
-    pthread_attr_destroy(&attr);
-    pthread_detach(tid);
-    return 0;
-}
+#import "status.h"
+#import "launcher.h"
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate>
 @property (strong, nonatomic) UIWindow *window;
@@ -779,7 +19,7 @@ static int run_probe_thread(void)
 
 // 场景生命周期：Info.plist 开了 UIApplicationSceneManifest（引擎的 iOS 后端要它——
 // WaylithApplicationDelegate 经 configurationForConnectingSceneSession 给自己的 scene
-// delegate），我们的诊断 UI 也跟着搬到 scene 里，否则清单在而窗口不走 scene = 黑屏。
+// delegate），我们的启动器也跟着搬到 scene 里，否则清单在而窗口不走 scene = 黑屏。
 @interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property (strong, nonatomic) UIWindow *window;
 @end
@@ -833,7 +73,7 @@ static void engine_hold_background_task(void)
     // UIApplicationMain 在等它的 WaylithSceneDelegate 收到 willConnect，UIKit 却调了
     // 我们的——引擎因此永远等不到 StartApplication，黑屏"无事发生"）。这里转交：
     // WaylithSceneDelegate 类在引擎跑起来时才注册（运行时 ClassBuilder），引擎没跑
-    // 时不存在——正好也是"进引擎还是进诊断"的判据。
+    // 时不存在——正好也是"进引擎还是进启动器"的判据。
     Class waylith = NSClassFromString(@"WaylithSceneDelegate");
     if (waylith != NULL)
     {
@@ -858,10 +98,10 @@ static void engine_hold_background_task(void)
             [engineDelegate scene:scene willConnectToSession:session options:options];
         return;
     }
-    append_log("诊断 scene 连接（WaylithSceneDelegate 不在 = 引擎没跑，诊断界面）");
+    append_log("诊断 scene 连接（WaylithSceneDelegate 不在 = 引擎没跑，启动器）");
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
-    self.window.rootViewController = [[HostVC alloc] init];
+    self.window.rootViewController = [[LauncherVC alloc] init];
     [self.window makeKeyAndVisible];
 }
 
@@ -894,6 +134,8 @@ static void engine_hold_background_task(void)
 
 // 崩溃信号：落一行打点 + 把 coreclr-stderr.log 尾部抢救进持久化的 port17-ui.log（M1 的 best-effort），
 // 然后交还系统默认处理写 .ips 报告。没有任何信号行而进程消失 = SIGKILL（jetsam/看门狗）。
+// session_last 也记一笔：启动器「上次引擎会话」卡片直接给出崩溃信号（status 仓与
+// port17-ui.log 同一份磁盘，信号上下文里写文件与既有 boot_log 同一风险面）。
 static void crash_handler(int sig)
 {
     char buf[96];
@@ -901,6 +143,11 @@ static void crash_handler(int sig)
              "收到信号 %d（SIGSEGV=11, SIGBUS=10, SIGABRT=6, SIGTRAP=5, SIGILL=4），转系统写崩溃报告",
              sig);
     boot_log([NSString stringWithUTF8String:buf]);
+    {
+        char s[32];
+        snprintf(s, sizeof(s), "信号 %d", sig);
+        port17_status_set(NSHomeDirectory().UTF8String, "session_last", s);
+    }
     NSString *errPath = [NSHomeDirectory()
         stringByAppendingPathComponent:@"Documents/coreclr-stderr.log"];
     NSString *uiPath = [NSHomeDirectory()
@@ -960,8 +207,8 @@ int main(int argc, char *argv[])
         signal(SIGTRAP, crash_handler);
         signal(SIGILL, crash_handler);
         // 日志 sink 一开始就装：引擎模式下宿主 UIKit 还没起来，host_log 的行经
-        // append_log 落 port17-ui.log（UI 部分排队等 UIApplicationMain 后补上屏）。
-        host_set_log_sink(append_log);
+        // append_log 落 port17-ui.log（启动器的屏幕部分排队等 UIApplicationMain 后补上屏）。
+        port17_ui_install_sinks();
         setenv("HELLO_OUT", [[NSHomeDirectory()
             stringByAppendingPathComponent:@"Documents/hello.log"]
             fileSystemRepresentation], 1);
@@ -1005,11 +252,11 @@ int main(int argc, char *argv[])
         // 引擎模式：Documents/game 有游戏就走（port17_find_game 也认手动解压套了一层/改名
         // 的目录）。游戏目录没有改写戳（Steam 原件直接拷的场景）→ 先跑设备内 setup（安卓
         // SetupService 的体验：app 自己改写游戏文件，玩家无感 PC）；setup 用掉本进程的
-        // CoreCLR（iOS 无 fork），完成或失败都回落诊断界面——重开即引擎。
+        // CoreCLR（iOS 无 fork），完成或失败都回落启动器——重开即引擎。
         // 诊断保持开着则整个让路（导入/导出/JIT 实验的反复回合不用跟游戏抢启动）。
         BOOL diagHold = [fm fileExistsAtPath:port17_diag_hold_path()];
         if (diagHold)
-            boot_log(@"诊断保持开着（port17-diag.on）——引擎与 setup 让路，直接诊断界面");
+            boot_log(@"诊断保持开着（port17-diag.on）——引擎与 setup 让路，直接启动器");
         char gameDir[1024];
         if (!diagHold && port17_find_game(NSHomeDirectory().UTF8String, gameDir, sizeof gameDir) == 0) {
             NSString *gameNS = [NSString stringWithUTF8String:gameDir];
@@ -1026,7 +273,7 @@ int main(int argc, char *argv[])
                     rc == 0 ? @"改写完成，请彻底关闭 app（上划划掉）再打开，即进引擎"
                            : @"改写没完成（原因在上面日志），可重试或换打包好的 zip"]);
                 if (rc == 0) {
-                    g_clrSpentBySetup = YES;
+                    port17_launcher_note_clr_spent();
                     append_log("✅ 游戏文件改写完成——app 几秒后自动关闭，重新打开即进引擎");
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)),
                                    dispatch_get_main_queue(), ^{
@@ -1041,7 +288,10 @@ int main(int argc, char *argv[])
                 const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];
                 const char *home = [NSHomeDirectory() UTF8String];
                 int rc = run_engine(bundle, home);
-                boot_log([NSString stringWithFormat:@"引擎模式结束（run_engine 返回 %d）——落回诊断界面", rc]);
+                char s[64];
+                snprintf(s, sizeof(s), "引擎 rc %d", rc);
+                port17_status_set(home, "session_last", s);
+                boot_log([NSString stringWithFormat:@"引擎模式结束（run_engine 返回 %d）——落回启动器", rc]);
             }
         }
 

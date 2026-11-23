@@ -289,7 +289,7 @@ xcrun -sdk "$SDK" clang \
     -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics -framework Metal -framework CoreFoundation \
     -framework UniformTypeIdentifiers \
     -o "$APP/Port17Host" \
-    "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/engine.c" "$ROOT/host/app/setup.c" "$ROOT/host/app/unzip.c" "$ROOT/host/app/triangle.c" "$ROOT/host/app/audio_test.c" "$ROOT/host/app/libs_check.c" "$ROOT/host/app/jit26.c"
+    "$ROOT/host/app/main.m" "$ROOT/host/app/host.c" "$ROOT/host/app/engine.c" "$ROOT/host/app/setup.c" "$ROOT/host/app/unzip.c" "$ROOT/host/app/triangle.c" "$ROOT/host/app/audio_test.c" "$ROOT/host/app/libs_check.c" "$ROOT/host/app/jit26.c" "$ROOT/host/app/launcher.m" "$ROOT/host/app/status.c"
 cp "$ROOT/host/app/Info.plist" "$APP/"
 # 正规军零件（与能在文件 app 出文件夹的参照包对齐）：PkgInfo + 图标（host/app/icons/
 # 里的正式图标由 rimworld_icon.jpg 经 System.Drawing 转出；scripts/gen-icon.py 只在
