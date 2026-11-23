@@ -299,6 +299,10 @@ cp "$ROOT/prebuilt/PortHooks.dll" "$ROOT/prebuilt/PortMobile.dll" "$APP/"
 cp "$ROOT/prebuilt/0Harmony.dll" "$APP/"
 [ -f "$ROOT/prebuilt/exhelper_macos_arm64.dylib" ] || { echo "::error::prebuilt/exhelper_macos_arm64.dylib 缺（本地跑 scripts/patch-harmony extract-exhelper）"; exit 1; }
 cp "$ROOT/prebuilt/exhelper_macos_arm64.dylib" "$APP/"
+# MonoMod 的内存分配器/别名写入/JIT vtable 交换都住在这个程序集里（patch-harmony 把
+# 0Harmony 的改写点全部 import 自它）；0Harmony.dll 对它有程序集引用，必须与 0Harmony 同在 bundle 根（TPA 平铺）。
+[ -f "$ROOT/prebuilt/Port17MonoModArena.dll" ] || { echo "::error::prebuilt/Port17MonoModArena.dll 缺（先 patch-harmony prepare，再 dotnet build scripts/monomod-arena）"; exit 1; }
+cp "$ROOT/prebuilt/Port17MonoModArena.dll" "$APP/"
 
 # 5) 宿主可执行（M2 骨架 + 三角形 + 音频/原生库自检 + .NET 探针诊断件 + 引擎装载件
 #    + zip 自动安装件 + setup 运行件；解压用系统 libz 的 raw inflate）

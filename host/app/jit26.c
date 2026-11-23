@@ -22,6 +22,11 @@
 #include <unistd.h>
 
 #define RW17_CAP 0x8000000ull // 128 MiB，与 rw17-jit26.js 的 _M 尺寸一致（x1 携带）
+// 顶部 4 MiB 留给 MonoMod（Port17ArenaAllocator，实际用量几十 KB）：分离后进程不能再申请新的可执行内存
+// （mmap(MAP_JIT|RWX) 被内核拒绝，m4-touch-15 裁决 MemoryAllocator.TryAllocate 断言），
+// Harmony 的 detour 桩/蹦床只能从这份祝福过的竞技场里分。运行时拿到的是缩小后的 SIZE，
+// 其分配是 [rxBase, rxBase+capacity) 内的指针算术，不会越进 MonoMod 的切片。
+#define RW17_MM_CAP 0x400000ull
 
 #ifndef P_TRACED
 #define P_TRACED 0x00000800
@@ -181,7 +186,7 @@ static bool jit26_probe_execute(uint8_t *rxView, uint8_t *rwView)
 
 int port17_jit26_acquire(void)
 {
-    char buf[160];
+    char buf[320];
     if (!jit26_wait_debugger(120))
         return 0;
     // 发 brk 前紧贴着再查一次（playport 纪律：会话可在等待与 brk 之间消失）
@@ -236,14 +241,21 @@ int port17_jit26_acquire(void)
     // 0x4a554e4d 正是 "JUNK"+2 拼出来的假指针。一致性本来就已被探针 #1/#2
     // 端到端证明：经 RW 别名写机器码、经竞技场本体执行成功即是。M1 探针
     // 时代 Hello.dll 分配永远到不了 4MiB，所以这颗雷从没被踩响过。）
-    char rx[32], rwb[32], szb[32];
+    char rx[32], rwb[32], szb[32], mmrx[32], mmrw[32], mmsz[32];
     snprintf(rx, sizeof(rx), "%llx", (unsigned long long)(uintptr_t)arena);
     snprintf(rwb, sizeof(rwb), "%llx", (unsigned long long)(uintptr_t)rwAlias);
-    snprintf(szb, sizeof(szb), "%llx", RW17_CAP);
+    snprintf(szb, sizeof(szb), "%llx", RW17_CAP - RW17_MM_CAP);
+    snprintf(mmrx, sizeof(mmrx), "%llx", (unsigned long long)(uintptr_t)arena + RW17_CAP - RW17_MM_CAP);
+    snprintf(mmrw, sizeof(mmrw), "%llx", (unsigned long long)(uintptr_t)rwAlias + RW17_CAP - RW17_MM_CAP);
+    snprintf(mmsz, sizeof(mmsz), "%llx", RW17_MM_CAP);
     setenv("PORT17_JIT_RX", rx, 1);
     setenv("PORT17_JIT_RW", rwb, 1);
     setenv("PORT17_JIT_SIZE", szb, 1);
-    snprintf(buf, sizeof(buf), "[jit26] 竞技场就绪并已交给 runtime（rx=%s rw=%s size=%s）", rx, rwb, szb);
+    setenv("PORT17_MM_RX", mmrx, 1);
+    setenv("PORT17_MM_RW", mmrw, 1);
+    setenv("PORT17_MM_SIZE", mmsz, 1);
+    snprintf(buf, sizeof(buf), "[jit26] 竞技场就绪并已交给 runtime（rx=%s rw=%s size=%s）；MonoMod 切片 rx=%s rw=%s size=%s",
+             rx, rwb, szb, mmrx, mmrw, mmsz);
     host_log(buf);
     return 1;
 }
