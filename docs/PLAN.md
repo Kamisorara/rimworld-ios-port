@@ -208,6 +208,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **当前裁决状态（0.4.10 待测，test_work/m4-touch-14）**：裁决行——日志须出现 `[port17] monomod shim libport17jit.dylib -> <.app 内路径>`（无 `missing`/`load failed`）与 `[port17-jit] shim loaded; libcoreclr!_getJit resolved at`；`[port17] monomod exhelper unavailable …` 允许出现（其后是 dyld 的原因，留作下一步是否把 exhelper 改平台/vtool 的依据）；不得再有 `Could not open clrjit library` / `the phone layer failed to start`；长按右键/双指缩放/TapAssist 有反应 = M4 触控主线通过。若装载已过但死在 `InstallJitHook`：看 `CheckVersionGuid` 断言里的 expected/got、vtable 常数 184/167/183、`MakePageWritable` 的 remap 日志。
 
+**0.4.10 包落位（test_work/m4-touch-14，run 45189226916）**：IPA SHA256 `FC70156A…06C7D6`（63,005,244 字节）；解包核验版本 0.4.10，`libport17jit.dylib` 在位并导出 `T _getJit`（68,592 字节，含 stderr 诊断），`exhelper_macos_arm64.dylib` 在位（204,848 字节），IPA 内 `0Harmony.dll` 与 `prebuilt/0Harmony.dll` 哈希一致（`570F2F3F…7063E`，反编译已确认 `GetClrJitPath`/`CreateNativeExceptionHelper` 均走 `Port17HostFiles.Resolve`）。
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这三条）**：
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
 2. iOS 与安卓的宿主件位置不同（bundle vs 游戏目录），"next to the game"式查找必须加 bundle 回退——**iOS 上 `AppContext.BaseDirectory` 就是游戏目录**（engine.c 设 `APP_CONTEXT_BASE_DIRECTORY`），任何用 BaseDirectory 定位宿主件的补丁（PortHooks/PortMobile/MonoMod 的 shim 与 exhelper 同族）都要改走 `Port17HostFiles.Resolve`；
