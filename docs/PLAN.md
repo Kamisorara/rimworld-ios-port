@@ -170,7 +170,7 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **0.4.x 真机连载（2026-11-23 晚，0.4.0→0.4.14）：游戏本体完整进入；装载链与 MonoMod/Harmony 运行底座逐层钉死，0.4.14 待真机裁决**
 
-**当前进度总览（截至 0.4.14）**：M0–M3 已关闭；M4 进行中。游戏本体在 0.4.x 线稳定进入真机——IOS 后端、JIT 竞技场、Metal 交换链、CoreAudio、世界装载、官方 DLC 与键盘输入都已验证。触控目标仍未关闭：0.4.6 之前是手机层装载问题，0.4.7 起才真正进入 Harmony/MonoMod detour 链。已连修十四关：竞技场时序（0.4.1）、Android 后端劫持（0.4.2）、PortHooks 版本（0.4.3）、PortMobile bundle 回退（0.4.4）、mscorlib 可执行 facade（0.4.5）、宿主自带 0Harmony（0.4.6）、MonoMod 平台钉成 OSX+Arm64（0.4.7）、tuple 原构造保留与签名 exhelper 入包（0.4.8）、静态 JIT 的 `getJit` shim（0.4.9）、MonoMod 宿主件按 bundle 解析 + exhelper 可选化（0.4.10）、exhelper 方法体 IL 的 `leave` 修正（0.4.11）、MonoMod 接入竞技场（0.4.12）、Core110 版本化 native-code 入口（0.4.13）、跨平台线程 ID（0.4.14）。0.4.13 包证明 detour 与触控层初始化全过，但 `OnGUI` 被 Linux 专属 `gettid` 打断；0.4.14 已离线修复，待真机裁决。通过标准不变——日志不再有 `the phone layer failed to start`，游戏内长按右键/双指缩放/TapAssist 有反应。
+**当前进度总览（截至 0.4.14）**：M0–M3 已关闭；M4 进行中。游戏本体在 0.4.x 线稳定进入真机——IOS 后端、JIT 竞技场、Metal 交换链、CoreAudio、世界装载、官方 DLC 与键盘输入都已验证。触控目标仍未关闭：0.4.6 之前是手机层装载问题，0.4.7 起才真正进入 Harmony/MonoMod detour 链。已连修十四关：竞技场时序（0.4.1）、Android 后端劫持（0.4.2）、PortHooks 版本（0.4.3）、PortMobile bundle 回退（0.4.4）、mscorlib 可执行 facade（0.4.5）、宿主自带 0Harmony（0.4.6）、MonoMod 平台钉成 OSX+Arm64（0.4.7）、tuple 原构造保留与签名 exhelper 入包（0.4.8）、静态 JIT 的 `getJit` shim（0.4.9）、MonoMod 宿主件按 bundle 解析 + exhelper 可选化（0.4.10）、exhelper 方法体 IL 的 `leave` 修正（0.4.11）、MonoMod 接入竞技场（0.4.12）、Core110 版本化 native-code 入口（0.4.13）、跨平台线程 ID（0.4.14）。0.4.13 包证明 detour 与触控层初始化全过，但 `OnGUI` 被 Linux 专属 `gettid` 打断；0.4.14 已完成 CI 出包与包内核验，待真机裁决。通过标准不变——日志不再有 `the phone layer failed to start`，游戏内长按右键/双指缩放/TapAssist 有反应。
 
 **0.4.0（回退裁决，commit 3beddb9，run 45100332222）**：v2（AndroidPlatform + 大线程 + 桥）六个环节零真机数据，正式引擎路回 IOS 后端 + 主线程自动进引擎（0.3.6 验证链），启动器降为非引擎状态前门，v10 补丁按"休眠无害"假设保留。首测即连环炸，且每一轮的炸点都不重样——0.4.1/0.4.2/0.4.3/0.4.4/0.4.5 五轮各修一处。
 
@@ -232,6 +232,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **五十二轮（0.4.14）：线程身份跨平台化，切断共享触控代码对 `gettid` 的直接依赖**：新增 `hooks/ThreadId.cs`，Android/Linux 上继续返回真实 `gettid`（保留 `/proc`、affinity 和 Android perf-hint 所需的 OS tid），iOS 上返回 `Environment.CurrentManagedThreadId`。`Watch/Recorder/Perf/Sched/Astc` 五处统一改走 `PortHooks.ThreadId.Current`；Windows 运行时实测 `Watch.Beat()` 连续执行成功，反编译确认 `PortHooks` 只剩 helper 内部一个受平台分支保护的 `gettid`，`PortMobile.dll` 中直接 `gettid` 引用为 0。重建后 `PortHooks.dll` 201,728 字节、`PortMobile.dll` 522,752 字节；版本升 0.4.14，**尚未真机验证**。
 
+**0.4.14 包落位（test_work/m4-touch-18，run 45282786594，push 自 a9e4e88）**：IPA SHA256 `1DEF758EF6288FFF93310FAAF6E874AE5038F62ECEA8078AEF0D709032F7E4A6`（63,014,085 字节）。解包核验版本 0.4.14；`PortHooks.dll` SHA256 `B739B85FEA83B0B893B9B6EAF03A519AA4741DF07919283F9017AF221E4FED41`、`PortMobile.dll` SHA256 `8BA0EFDB5BFEBF81D023F789DC5B1EFC24053ACD490907F18033B21D7D7FFF48`，均与 prebuilt 一致。对包内 `PortMobile.dll` 反编译统计直接 `gettid` 引用为 0；`PortHooks.dll` 只剩 `ThreadId` helper 内部受平台分支保护的一处。包内 `0Harmony.dll` 的 arena/版本化入口 smoke 仍退出码 0。**待真机裁决。**
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这六条）**：
 
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
@@ -264,8 +266,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 | # | 项 | 状态 | 影响 | 收口动作 |
 |---|---|---|---|---|
-| 1 | **Harmony detour 在 iOS 未实测**（M4 五步之第一步「成败手」） | **detour 本体已从装载失败推进到运行底座钉死**：0.4.1–0.4.14 连修十四关（竞技场时序 / Android 后端劫持 / PortHooks 版本 / PortMobile 查找路径 / mscorlib 毒 facade / 宿主缺 0Harmony / MonoMod 平台探测 / tuple 与签名 exhelper / 静态 JIT shim / MonoMod 宿主件按 bundle 解析 / exhelper IL 的 leave 修正 / MonoMod 接入竞技场 / Core110 版本化 native-code 入口 / 跨平台线程 ID）；0.4.13 真机已确认 detour、patch 和 `touch layer on` 全过，剩余是 iOS 平台适配 | 成败手，一切触控裁决的前提 | 0.4.14 包裁决：日志不再出现 `gettid` 异常，OnGUI postfix 持续执行，再测触控六件套 |
-| 2 | **M4 触控六件套真机裁决**（长按右键/双指缩放/TapAssist/惯性滚动/虚拟鼠标键/KeyWheel） | 工程 + 装载链完成；键盘输入已验通（0.4.3 真机），0.4.13 已启动触控层但 OnGUI 被 `gettid` 中断，0.4.14 待逐项裁决 | 触控体验对齐安卓 | 0.4.14 起逐项裁决清单 |
+| 1 | **Harmony detour 在 iOS 未实测**（M4 五步之第一步「成败手」） | **detour 本体已从装载失败推进到运行底座钉死**：0.4.1–0.4.14 连修十四关（竞技场时序 / Android 后端劫持 / PortHooks 版本 / PortMobile 查找路径 / mscorlib 毒 facade / 宿主缺 0Harmony / MonoMod 平台探测 / tuple 与签名 exhelper / 静态 JIT shim / MonoMod 宿主件按 bundle 解析 / exhelper IL 的 leave 修正 / MonoMod 接入竞技场 / Core110 版本化 native-code 入口 / 跨平台线程 ID）；0.4.13 真机已确认 detour、patch 和 `touch layer on` 全过，0.4.14 包已落位 | 成败手，一切触控裁决的前提 | 0.4.14 包裁决：日志不再出现 `gettid` 异常，OnGUI postfix 持续执行，再测触控六件套 |
+| 2 | **M4 触控六件套真机裁决**（长按右键/双指缩放/TapAssist/惯性滚动/虚拟鼠标键/KeyWheel） | 工程 + 装载链完成；键盘输入已验通（0.4.3 真机），0.4.13 已启动触控层但 OnGUI 被 `gettid` 中断，0.4.14 包待逐项裁决 | 触控体验对齐安卓 | 0.4.14 起逐项裁决清单 |
 | 3 | **JIT 常开** | 平台约束：每次启动经 StikDebug + rw17-jit26.js 拉起才全速；普通打开 = 解释器（能玩、慢数倍） | 畅玩第一差距，平台天花板无工程解 | 玩家文档把 StikDebug 流程写清（M5） |
 | 4 | **CoreLib 补丁重移植 + libcoreclr 二进制补丁 iOS 版** | **调研已完成（2026-11-23，docs/NET11-COMPARISON.md）**：10.0.12→v11.0.0 判定平滑——20 开关的全部 CoreLib 锚点在 v11 原样存活（抽查复核过）；affinity 字节补丁上游 #125361 已修（iOS 不需要，划掉）；dualjit patch 对 GA tag 实测干净套用，且 v11 上游反而更贴我们的 hybrid 形状（DCC 闸门/iOS 解释器进 CI）。**12 项改动清单已成文**（托管 6 开关 + 原生 initonly + 私有 API 五件），待实施 | 游戏本体不受阻（0.3.6 实证可玩）；影响集中在 PC mod 的反射/DynamicMethod 边缘用法与两个显示细节（小人昵称哈希漂移、浮点位数） | M4 后半开工即做：源码补丁路线（patches/ 同 dualjit 机制），实施顺序见 NET11-COMPARISON.md §3 |
 | 5 | **ModRules.txt（RimSort 社区加载顺序库）未入包** | ModPrep 机制及其规则（v14）随 hooks 已入库——缺的是另一回事：`communityRules.json` 转换的紧凑文本（after/before/top/bottom/incompatible），给 mod 排序界面用；游戏有网时也能自己下载转换 | 已知冲突对的顺序修正缺失，特定 mod 组合可能排序不当；小列表几乎无感 | 打包件（modrules/build.js 产物入 IPA）或运行期自下载兜底 |
