@@ -43,6 +43,16 @@ xcrun -sdk "$SDK" clang \
     -o "$APP/libglfw.dylib" \
     "$ROOT/host/glfw/glfw_ios.m"
 
+# MonoMod's CoreBaseRuntime opens a clrjit library and calls getJit. Our hybrid
+# runtime links the JIT into libcoreclr.dylib, so this shim resolves the static
+# symbol from libcoreclr's Mach-O symbol table and exposes the same JIT object.
+xcrun -sdk "$SDK" clang \
+    -target "$TARGET" \
+    -dynamiclib -O2 -fvisibility=hidden \
+    -Wl,-install_name,@rpath/libport17jit.dylib \
+    -o "$APP/libport17jit.dylib" \
+    "$ROOT/host/native/port17jit.c"
+
 # 3) Vulkan 前向层（libvulkan.dylib → 同目录 MoltenVK.framework；宿主按路径 dlopen，
 #    install_name 同样钉住只为整洁）。libvulkan.1.dylib 是同一前向的第二副本：引擎的
 #    MacOS 家族路径（OS 探测补丁后 iOS 走它）在 EngineApplication 里 NativeLibrary.

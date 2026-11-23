@@ -155,6 +155,7 @@ internal static class Program
             }
 
             changed += UseBundleExHelper(assembly.MainModule);
+            changed += UseStaticJitShim(assembly.MainModule);
             changed += ForcePlatformTriple(assembly.MainModule);
 
             string temp = output + ".p17tmp";
@@ -195,6 +196,36 @@ internal static class Program
         il.Emit(OpCodes.Ldc_I4_S, (sbyte)5); // ArchitectureKind.Arm64
         il.Append(originalConstructor);
         il.Append(originalReturn);
+        return 1;
+    }
+
+    private static int UseStaticJitShim(ModuleDefinition module)
+    {
+        var runtime = module.GetType("MonoMod.Core.Platforms.Runtimes.CoreBaseRuntime");
+        var method = runtime.Methods.First(candidate => candidate.Name == "GetClrJitPath");
+        var body = method.Body;
+        var instructions = body.Instructions;
+        bool done = instructions.Count == 4
+            && instructions[0].Operand is MethodReference start && start.Name == "get_BaseDirectory"
+            && instructions[2].Operand is MethodReference combine && combine.Name == "Combine"
+            && instructions[3].OpCode == OpCodes.Ret;
+        if (done)
+            return 0;
+
+        var baseDirectory = module.ImportReference(typeof(AppContext)
+            .GetProperty("BaseDirectory", BindingFlags.Static | BindingFlags.Public)!
+            .GetMethod);
+        var pathCombine = module.ImportReference(typeof(System.IO.Path)
+            .GetMethod("Combine", new[] { typeof(string), typeof(string) }));
+
+        body.Instructions.Clear();
+        body.ExceptionHandlers.Clear();
+        body.Variables.Clear();
+        var il = body.GetILProcessor();
+        il.Emit(OpCodes.Call, baseDirectory);
+        il.Emit(OpCodes.Ldstr, "libport17jit.dylib");
+        il.Emit(OpCodes.Call, pathCombine);
+        il.Emit(OpCodes.Ret);
         return 1;
     }
 
