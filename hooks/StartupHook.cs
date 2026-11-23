@@ -105,6 +105,14 @@ namespace PortHooks
 				string path = Path.Combine(AppContext.BaseDirectory, "PortMobile.dll");
 				if (!File.Exists(path))
 				{
+					// iOS：PortMobile.dll 与 PortHooks.dll 同在 .app bundle（setup 的 TPA 连
+					// PortHooks 一起装载，Location 即 bundle 目录）；安卓仍是游戏目录同款。
+					string hooksDir = Path.GetDirectoryName(typeof(StartupHook).Assembly.Location);
+					if (!string.IsNullOrEmpty(hooksDir))
+						path = Path.Combine(hooksDir, "PortMobile.dll");
+				}
+				if (!File.Exists(path))
+				{
 					Console.WriteLine("[port17] no PortMobile.dll next to the game; running without the phone layer");
 					return;
 				}
