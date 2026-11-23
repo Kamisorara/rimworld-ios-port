@@ -14,6 +14,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <QuartzCore/QuartzCore.h>
 #import <Metal/Metal.h>
+#import <objc/message.h>
 #include <dlfcn.h>
 #include <string.h>
 #include <stdio.h>
@@ -490,18 +491,30 @@ static UILabel *launcher_label(CGFloat size, UIFontWeight w, UIColor *c)
 }
 
 // 玻璃卡：iOS 26 走 UIGlassEffect（液态玻璃），旧系统回退系统材质模糊。
-// UIGlassEffectStyle 枚举名以 CI 的 SDK 头文件为准（init(style:) 与 isInteractive
-// 已按 Apple 文档核实；编译报错就调这一处）。
+// CI 的 SDK（macos-15 的 Xcode 16 系）没有 UIGlassEffect 头——类只在 iOS 26+ 设备的
+// UIKit 二进制里，按运行时查找（<26 的 NSClassFromString 返回 nil，天然降级到模糊）。
+// style=0 = UIGlassEffect.Style regular（NS_ENUM 零基；isInteractive 的 setter 同路）。
+// CI 将来若升 Xcode 26+，这里可换回编译期 API 直写。
 static UIVisualEffectView *port17_glass(CGFloat radius)
 {
-    UIVisualEffect *effect;
+    UIVisualEffect *effect = nil;
     if (@available(iOS 26.0, *)) {
-        UIGlassEffect *glass = [[UIGlassEffect alloc] initWithStyle:UIGlassEffectStyleRegular];
-        glass.isInteractive = NO;
-        effect = glass;
-    } else {
-        effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial];
+        Class glassClass = NSClassFromString(@"UIGlassEffect");
+        if (glassClass != NULL &&
+            [glassClass instancesRespondToSelector:@selector(initWithStyle:)])
+        {
+            id glass = ((id (*)(id, SEL, NSInteger))objc_msgSend)(
+                ((id (*)(id, SEL))objc_msgSend)(glassClass, @selector(alloc)),
+                @selector(initWithStyle:), 0);
+            if (glass != nil) {
+                ((void (*)(id, SEL, BOOL))objc_msgSend)(
+                    glass, @selector(setIsInteractive:), NO);
+                effect = glass;
+            }
+        }
     }
+    if (effect == nil)
+        effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial];
     UIVisualEffectView *v = [[UIVisualEffectView alloc] initWithEffect:effect];
     v.layer.cornerRadius = radius;
     v.layer.cornerCurve = kCACornerCurveContinuous;
@@ -735,7 +748,7 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
         [colStack.bottomAnchor constraintEqualToAnchor:col.bottomAnchor constant:-32],
         [colStack.centerXAnchor constraintEqualToAnchor:col.centerXAnchor],
         [colStack.widthAnchor constraintLessThanOrEqualToAnchor:safe.widthAnchor constant:-48],
-        [_colWidthConstraint],
+        _colWidthConstraint, // 裸对象元素（[_x] 在 @[] 里会被解析成残缺消息表达式——CI 738 行的 expected identifier）
         [iconView.centerXAnchor constraintEqualToAnchor:colStack.centerXAnchor],
         [iconView.bottomAnchor constraintEqualToAnchor:title.topAnchor constant:-20],
         [iconView.widthAnchor constraintEqualToConstant:96],
