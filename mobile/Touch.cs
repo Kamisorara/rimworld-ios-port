@@ -174,6 +174,7 @@ namespace PortMobile
 			harmony.Patch(AccessTools.Method(typeof(Selector), "HandleMapClicks"), prefix: new HarmonyMethod(typeof(Touch), nameof(SelectorTakesClicks)));
 			harmony.Patch(AccessTools.Method(typeof(WorldSelector), "HandleWorldClicks"), prefix: new HarmonyMethod(typeof(Touch), nameof(SelectorTakesClicks)));
 			glfwAndroidSetTouchMode(1);
+			IosInput.Start(harmony);
 			Diag.Start(harmony);
 			Interface.Start(harmony);
 			MapTools.Start(harmony);
@@ -282,7 +283,14 @@ namespace PortMobile
 
 		private static void Cursor(Vector2 pixels)
 		{
-			glfwAndroidInjectCursor(pixels.x, pixels.y);
+			if (OperatingSystem.IsIOS())
+			{
+				IosInput.Cursor(pixels.x, pixels.y);
+			}
+			else
+			{
+				glfwAndroidInjectCursor(pixels.x, pixels.y);
+			}
 			if (cursorFrame != Time.frameCount)
 			{
 				cursorBefore = cursorPlaced ? cursorAt : pixels;
@@ -313,7 +321,14 @@ namespace PortMobile
 
 		private static void Button(int button, bool down)
 		{
-			glfwAndroidInjectButton(button, down ? Press : Release, 0);
+			if (OperatingSystem.IsIOS())
+			{
+				IosInput.Button(button, down);
+			}
+			else
+			{
+				glfwAndroidInjectButton(button, down ? Press : Release, 0);
+			}
 			if (button == Left) leftDown = down;
 			else if (button == Right) rightDown = down;
 			else middleDown = down;
@@ -753,7 +768,14 @@ namespace PortMobile
 				}
 				if (Math.Abs(pendingWheel) >= 0.25)
 				{
-					glfwAndroidInjectScroll(0, pendingWheel);
+					if (OperatingSystem.IsIOS())
+					{
+						IosInput.Scroll(0, pendingWheel);
+					}
+					else
+					{
+						glfwAndroidInjectScroll(0, pendingWheel);
+					}
 					pendingWheel = 0;
 				}
 			}
