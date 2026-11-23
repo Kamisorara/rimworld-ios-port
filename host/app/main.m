@@ -12,6 +12,7 @@
 #import "unzip.h"
 #import "status.h"
 #import "launcher.h"
+#import "jit26.h"
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate>
 @property (strong, nonatomic) UIWindow *window;
@@ -270,7 +271,23 @@ int main(int argc, char *argv[])
             // PC 打包流程的旧戳副本：setup 重跑一遍全幂等，顺手补写当前版戳，无害。
             NSString *stamp = [gameNS stringByAppendingPathComponent:@"port17-setup.v10.stamp"];
             BOOL setupDone = [fm fileExistsAtPath:stamp];
-            if (!setupDone) {
+            // 竞技场必须先于任何 coreclr_initialize 到位：混合运行时在 iOS 27 上没有
+            // 竞技场就没有可执行内存——解释器会话同样要执行生成的桩/预代码（.ips 裁决：
+            // CreateAppDomainWithManager 里 blr 进 rw- 页，CODESIGNING Invalid Page；非 JIT
+            // 从 0.3.3 起就没真正通过）。0.4.0 把这一步漏在 setup 之后，JIT 会话也死在
+            // setup 的初始化里（黑屏）。0.4.1：启动路径先拿竞技场，再决定 setup 还是引擎。
+            int csdbg = port17_jit26_cs_debugged();
+            int arena = csdbg == 1 ? port17_jit26_acquire() : 0;
+            port17_status_set([NSHomeDirectory() UTF8String], "jit_arena",
+                              csdbg == 1 ? (arena == 1 ? "granted" : "failed")
+                                         : "skipped（无调试器）");
+            if (arena != 1) {
+                boot_log(@"没有 JIT 竞技场——本版运行时在 iOS 27 上只能走 JIT 会话（解释器会话"
+                         @"同样需要可执行内存，0.3.3 起非 JIT 从未通过）。请经 StikDebug + "
+                         @"rw17-jit26.js 拉起本 app；普通启动停在启动器，不硬闯引擎。");
+                append_log("⚠️ 本版需经 StikDebug + rw17-jit26.js 拉起（普通启动无竞技场，引擎不启动）");
+            }
+            else if (!setupDone) {
                 boot_log(@"游戏文件是原件（没有改写戳）——先跑设备内 setup（安卓同款体验），完成后请重开 app");
                 int rc = port17_run_setup([[NSBundle mainBundle].bundlePath UTF8String], gameDir);
                 boot_log([NSString stringWithFormat:@"setup 返回 %d——%@",

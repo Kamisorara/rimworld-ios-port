@@ -437,7 +437,17 @@ int run_engine(const char *bundle_dir, const char *home)
              csdbg == 1 ? "调试器已接管（StikDebug/Xcode 拉起）"
                         : csdbg == 0 ? "未接管（普通启动，无授权）" : "csops 查询失败");
     host_log(buf);
-    int arena = csdbg == 1 ? port17_jit26_acquire() : 0; // 每步自带日志（0.2.6 教训：死点要留名）
+    int arena;
+    if (getenv("PORT17_JIT_RX") != NULL)
+    {
+        // 0.4.1：启动路径已在 setup 判定前拿好竞技场（PORT17_JIT_* 在位），不重复握手。
+        arena = 1;
+        host_log("引擎：竞技场由启动路径先行授予（PORT17_JIT_* 在位），不重复握手");
+    }
+    else
+    {
+        arena = csdbg == 1 ? port17_jit26_acquire() : 0; // 每步自带日志（0.2.6 教训：死点要留名）
+    }
     // 启动器状态仓：竞技场结果（jit_arena）——granted / failed / skipped（无调试器）。
     port17_status_set(home, "jit_arena",
                       csdbg == 1 ? (arena == 1 ? "granted" : "failed")

@@ -94,7 +94,14 @@ static int run_setup_now(const char *bundle, const char *game)
             close(fds[0]);
     }
 
-    setenv("COMPlus_InterpMode", "2", 1); // the M1 contract, same line as the engine
+    // 执行模式跟引擎的门对齐（0.4.1）：竞技场在位 = JIT 会话（InterpMode=0 + R2R 关，
+    // 引擎真机验证过的配置）；没有竞技场才是解释器。混合运行时下没有竞技场的解释器会话
+    // 在 iOS 27 上过不了 coreclr_initialize（.ips：CODESIGNING Invalid Page），启动路径
+    // 已经把这种情况挡在 setup 之外，这里只是不留暧昧。
+    int jitSession = getenv("PORT17_JIT_RX") != NULL;
+    setenv("COMPlus_InterpMode", jitSession ? "0" : "2", 1);
+    if (jitSession)
+        setenv("DOTNET_ReadyToRun", "0", 1);
     {
         // 混合运行时的解释器 dylib 按需 dlopen：裸名搜索不含 bundle 目录，绝对路径指路。
         char interp[1100];
