@@ -50,7 +50,6 @@ namespace PortHooks
 		[DllImport("portastc")] private static extern int port_astc_encode_parallel(byte[] rgba, int width, int height, int srgb, float quality, byte[] output, UIntPtr outLength, int threads);
 		[DllImport("portastc")] private static extern int port_astc_decode(byte[] blocks, UIntPtr blocksLength, int width, int height, int srgb, byte[] rgba);
 		[DllImport("portastc")] private static extern void port_astc_release();
-		[DllImport("libc")] private static extern int gettid();
 		[DllImport("libc", SetLastError = true)] private static extern int statfs(string path, byte[] buffer);
 		[DllImport("libc")] private static extern int setpriority(int which, int who, int prio);
 
@@ -573,7 +572,7 @@ namespace PortHooks
 			try
 			{
 				// Below the game's threads (nice 10): only what they leave over.
-				setpriority(0, gettid(), 10);
+				setpriority(0, ThreadId.Current, 10);
 			}
 			catch (Exception)
 			{

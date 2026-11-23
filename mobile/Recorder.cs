@@ -39,8 +39,6 @@ namespace PortMobile
 	/// </summary>
 	internal static class Recorder
 	{
-		[DllImport("libc")] private static extern int gettid();
-
 		private const long MaxBytes = 8L << 20;
 		private const int MarksKept = 6;
 		private static readonly object gate = new object();
@@ -254,7 +252,7 @@ namespace PortMobile
 				double now = clock.Elapsed.TotalSeconds;
 				if (mainTid == 0)
 				{
-					mainTid = gettid();
+					mainTid = PortHooks.ThreadId.Current;
 					lastFrameAt = now;
 					BeginWindow(now);
 					return;

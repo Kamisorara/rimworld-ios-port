@@ -32,15 +32,12 @@ namespace PortHooks
 		private static long cpuBefore = -1, cpuAt;
 		private static string trail;
 
-		[System.Runtime.InteropServices.DllImport("libc")]
-		private static extern int gettid();
-
 		/// <summary>From PortMobile, once a frame.</summary>
 		public static void Beat()
 		{
 			if (mainThread == 0)
 			{
-				mainThread = gettid();
+				mainThread = ThreadId.Current;
 			}
 			Interlocked.Exchange(ref lastBeat, Clock.ElapsedMilliseconds);
 		}

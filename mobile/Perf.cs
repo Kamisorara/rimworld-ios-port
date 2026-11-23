@@ -25,8 +25,6 @@ namespace PortMobile
 	/// </summary>
 	internal static class Perf
 	{
-		[DllImport("libc")] private static extern int gettid();
-
 		private static bool active;
 		private static string loadName;
 		private static int speed = -1;
@@ -123,7 +121,7 @@ namespace PortMobile
 			double now = clock.Elapsed.TotalSeconds;
 			if (mainTid == 0)
 			{
-				mainTid = gettid();
+				mainTid = PortHooks.ThreadId.Current;
 				Sched.MainThreadId = mainTid;
 				BeginWindow(now);
 				lastFrameAt = now;

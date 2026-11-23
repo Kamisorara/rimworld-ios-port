@@ -33,7 +33,6 @@ namespace PortMobile
 	{
 		[DllImport("libc", SetLastError = true)] private static extern int sched_setaffinity(int pid, IntPtr size, ref ulong mask);
 		[DllImport("libc", SetLastError = true)] private static extern int sched_getaffinity(int pid, IntPtr size, ref ulong mask);
-		[DllImport("libc")] private static extern int gettid();
 		[DllImport("glfw")] private static extern int glfwAndroidPerfHint(int mainTid, int renderTid, long targetNanos);
 		[DllImport("glfw")] private static extern int glfwAndroidPerfHintConfig(int mainTid, int renderTid, long targetNanos, int flags);
 		[DllImport("glfw")] private static extern void glfwAndroidPerfReport(long actualNanos);
@@ -298,7 +297,7 @@ namespace PortMobile
 				{
 					WaylithJobRuntime.For(0, 256, delegate(int i)
 					{
-						int tid = gettid();
+						int tid = PortHooks.ThreadId.Current;
 						lock (seen)
 						{
 							seen.Add(tid);
