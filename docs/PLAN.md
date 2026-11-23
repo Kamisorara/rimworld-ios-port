@@ -168,9 +168,9 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 - PortMobile 若引用安卓 mod 管线的类型（ModPrep/Workshop）→ 同步时一并复制或桩化，审计步产出清单；
 - mod 管线 + CoreLib 20 开关与触控线并行推进（触控不依赖 mod，但 PortMobile 的 mod 兼容面依赖）——顺序：探针 → 触控主线，mod 管线随后。
 
-**0.4.x 真机连载（2026-11-23 晚，0.4.0→0.4.9）：游戏本体完整进入；装载链与 MonoMod/Harmony 运行底座逐层钉死，0.4.9 待真机裁决**
+**0.4.x 真机连载（2026-11-23 晚，0.4.0→0.4.10）：游戏本体完整进入；装载链与 MonoMod/Harmony 运行底座逐层钉死，0.4.10 待真机裁决**
 
-**当前进度总览（截至 0.4.9）**：M0–M3 已关闭；M4 进行中。游戏本体在 0.4.x 线稳定进入真机——IOS 后端、JIT 竞技场、Metal 交换链、CoreAudio、世界装载、官方 DLC 与键盘输入都已验证。触控目标仍未关闭：0.4.6 之前是手机层装载问题，0.4.7 起才真正进入 Harmony/MonoMod detour 链。已连修九关：竞技场时序（0.4.1）、Android 后端劫持（0.4.2）、PortHooks 版本（0.4.3）、PortMobile bundle 回退（0.4.4）、mscorlib 可执行 facade（0.4.5）、宿主自带 0Harmony（0.4.6）、MonoMod 平台钉成 OSX+Arm64（0.4.7）、tuple 原构造保留与签名 exhelper 入包（0.4.8）、静态 JIT 的 `getJit` shim（0.4.9）。最新裁决包是 `test_work/m4-touch-13`（0.4.9，run 45184113647），尚无真机日志；通过标准不变——日志不再有 `the phone layer failed to start`，游戏内长按右键/双指缩放/TapAssist 有反应。
+**当前进度总览（截至 0.4.10）**：M0–M3 已关闭；M4 进行中。游戏本体在 0.4.x 线稳定进入真机——IOS 后端、JIT 竞技场、Metal 交换链、CoreAudio、世界装载、官方 DLC 与键盘输入都已验证。触控目标仍未关闭：0.4.6 之前是手机层装载问题，0.4.7 起才真正进入 Harmony/MonoMod detour 链。已连修十关：竞技场时序（0.4.1）、Android 后端劫持（0.4.2）、PortHooks 版本（0.4.3）、PortMobile bundle 回退（0.4.4）、mscorlib 可执行 facade（0.4.5）、宿主自带 0Harmony（0.4.6）、MonoMod 平台钉成 OSX+Arm64（0.4.7）、tuple 原构造保留与签名 exhelper 入包（0.4.8）、静态 JIT 的 `getJit` shim（0.4.9）、MonoMod 宿主件按 bundle 解析 + exhelper 可选化（0.4.10）。最新裁决包是 `test_work/m4-touch-14`（0.4.10），尚无真机日志；通过标准不变——日志不再有 `the phone layer failed to start`，游戏内长按右键/双指缩放/TapAssist 有反应。
 
 **0.4.0（回退裁决，commit 3beddb9，run 45100332222）**：v2（AndroidPlatform + 大线程 + 桥）六个环节零真机数据，正式引擎路回 IOS 后端 + 主线程自动进引擎（0.3.6 验证链），启动器降为非引擎状态前门，v10 补丁按"休眠无害"假设保留。首测即连环炸，且每一轮的炸点都不重样——0.4.1/0.4.2/0.4.3/0.4.4/0.4.5 五轮各修一处。
 
@@ -200,13 +200,17 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **四十五轮（0.4.9）：MonoMod 找不到 clrjit——混合运行时的 JIT 是静态链入 libcoreclr 的**：m4-touch-12 已越过平台探测、tuple、exhelper，死在 `CoreBaseRuntime.GetClrJitPath()` 的 `Could not locate clrjit library`。根因不是包里缺 `libclrjit.dylib`，而是 MonoMod 只在已加载模块里找动态 JIT；本项目的混合运行时把 RyuJIT 静态链进 `libcoreclr.dylib`，`_getJit` 只是 Mach-O local symbol（`llvm-nm` 实证：libcoreclr 里 `t _getJit`，独立 libclrjit 里才是 `T _getJit`）。**修法**：新增 `host/native/port17jit.c` 出 `libport17jit.dylib`，在运行期从 `libcoreclr.dylib` 的 LC_SYMTAB 找到 `_getJit` 的实际地址并导出同名 `getJit`，让 MonoMod 拿到运行时真正使用的静态 JIT 实例；`patch-harmony` 把 `CoreBaseRuntime.GetClrJitPath()` 钉到 `<AppContext.BaseDirectory>/libport17jit.dylib`。版本升 0.4.9。
 
-**当前裁决状态（0.4.9 待测）**：平台三件套、exhelper、clrjit 路径均已钉死。下一层若仍失败，重点看 `Core110Runtime` 的 JIT 版本校验、vtable hook、以及 MonoMod 的 mmap/内存分配；长按右键/双指缩放/TapAssist 有反应 = M4 触控主线通过。
+**四十五轮裁决（0.4.9，test_work/m4-touch-13）：shim 在包里，但 MonoMod 去游戏目录找它——`Could not open clrjit library`**：真机日志 `[mobile] starting; Harmony 3.0.0.0, runtime 11.0.0` 后立刻 `inline guard failed to start: PlatformNotSupportedException: Could not open clrjit library`（`CoreBaseRuntime.GetJitObject()`），随后 `the phone layer failed to start`；游戏与存档照常装载。反编译 MonoMod 定案：`GetJitObject()` 用 `DynDll.TryOpenLibrary(GetClrJitPath())`（后端是 `NativeLibrary.TryLoad`，路径不对只返回 false、不带原因）。0.4.9 把 `GetClrJitPath()` 钉成 `Path.Combine(AppContext.BaseDirectory, "libport17jit.dylib")`，而 `engine.c` 把 `APP_CONTEXT_BASE_DIRECTORY`/`APP_PATHS` 设成**游戏目录**——这和 0.4.4 查明 PortMobile.dll"在 bundle 里却找不到"是同一个事实（规则 2），但 0.4.8 的 exhelper 路径补丁与 0.4.9 的 JIT 路径补丁都又用了 BaseDirectory，等于自己违反了自己沉淀的规则。连带两笔：① exhelper 从未真正装载过（前两轮都死在它前面），路径同样错；且 `exhelper_macos_arm64.dylib` 是 `platform macos`（minos 13.0）并带一条 MonoMod 构建机绝对路径依赖 `/home/runner/work/MonoMod/.../macos.dylib`，iOS dyld 大概率拒载。MonoMod 的 `NativeExceptionHelper` 本就可空：缺了它 `InstallNativeJitHook` 返回 false → 走 `InstallManagedJitHook`（vtable 包装 + AllocMem 钩子，MonoMod 在 Linux/无 native hook 运行时上的通用路径）。② 离线核验：MonoMod `Core110Runtime` 钉的 JIT 版本 GUID `0D18A7DF-AF1F-4481-A72F-AA6CF8AA0A65` 的 16 字节在 `libcoreclr.dylib` 里完整存在（0x55f994；`_getJit` 为 `t` 局部符号 @0x129ed4），`CreateForVersion` 对 Major 11 走 `Core110Runtime`——`CheckVersionGuid` 这关应能过。`libport17jit.dylib` 本身核验无误（arm64、platform ios、仅依赖 libSystem、导出 `T _getJit`、68,416 字节）。
 
 **0.4.9 包落位（test_work/m4-touch-13，run 45184113647）**：IPA SHA256 `4AC15A60…C2431`；解包核验版本 0.4.9，`libport17jit.dylib` 在位并导出 `_getJit`（68,416 字节，已签名），`0Harmony.dll` 反编译确认 `GetClrJitPath()` 返回 `<bundle>/libport17jit.dylib`。
 
+**四十六轮（0.4.10）：MonoMod 宿主件按 bundle 解析，exhelper 改为可选**：`patch-harmony` 注入 `MonoMod.Core.Platforms.Port17HostFiles.Resolve(fileName)`——按「0Harmony.dll 所在目录（iOS 即 bundle）→ `AppContext.BaseDirectory`（游戏目录，安卓惯例）→ `Environment.ProcessPath` 目录」顺序解析，打 `[port17] monomod shim <file> -> <path>`（缺文件再打 `missing`），并用 `NativeLibrary.Load` 预检一次，把 dyld 的拒载原因原样写进日志（这正是前几轮"Could not open"一直缺的信息）。`GetClrJitPath()` 改为 `Resolve("libport17jit.dylib")`；`MacOSSystem.CreateNativeExceptionHelper()` 改为 try `CreateHelper(arch, Resolve("exhelper_macos_arm64.dylib"), false)`、catch 后打原因并返回 null，让 MonoMod 走托管 JIT hook 路径。幂等性修正：原方法体本身带 try/catch 和 `ldstr "exhelper_macos_arm64.dylib"`（arch switch），旧的"已完成"判断把它误判为已改而跳过——改为必须同时见到 `Resolve` 与 `CreateHelper` 调用；首遍 18 处改写、二遍 0 处。Windows 反射实测 `Resolve` 两条分支（找到/回退）均可执行，预检失败时带出操作系统原始原因；ilspycmd 反编译两个方法与设计一致，`verify` 仍为 14。`port17jit.c` 加 stderr 诊断（shim 是否被装载、`_getJit` 解析地址），`build-ipa.sh` 加 `_getJit` 导出自检。版本升 0.4.10。
+
+**当前裁决状态（0.4.10 待测，test_work/m4-touch-14）**：裁决行——日志须出现 `[port17] monomod shim libport17jit.dylib -> <.app 内路径>`（无 `missing`/`load failed`）与 `[port17-jit] shim loaded; libcoreclr!_getJit resolved at`；`[port17] monomod exhelper unavailable …` 允许出现（其后是 dyld 的原因，留作下一步是否把 exhelper 改平台/vtool 的依据）；不得再有 `Could not open clrjit library` / `the phone layer failed to start`；长按右键/双指缩放/TapAssist 有反应 = M4 触控主线通过。若装载已过但死在 `InstallJitHook`：看 `CheckVersionGuid` 断言里的 expected/got、vtable 常数 184/167/183、`MakePageWritable` 的 remap 日志。
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这三条）**：
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
-2. iOS 与安卓的宿主件位置不同（bundle vs 游戏目录），"next to the game"式查找必须加 bundle 回退；
+2. iOS 与安卓的宿主件位置不同（bundle vs 游戏目录），"next to the game"式查找必须加 bundle 回退——**iOS 上 `AppContext.BaseDirectory` 就是游戏目录**（engine.c 设 `APP_CONTEXT_BASE_DIRECTORY`），任何用 BaseDirectory 定位宿主件的补丁（PortHooks/PortMobile/MonoMod 的 shim 与 exhelper 同族）都要改走 `Port17HostFiles.Resolve`；
 3. TPA 绑定按名字+版本+公钥精确匹配，且引用程序集不可执行——Framework 风格 mod 依赖的 mscorlib/netstandard facade 必须是可执行件（mscorlib 已换官方 facade；netstandard 实测本就是好件）。
 
 **新账（本轮连载产出）**：
@@ -232,8 +236,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 | # | 项 | 状态 | 影响 | 收口动作 |
 |---|---|---|---|---|
-| 1 | **Harmony detour 在 iOS 未实测**（M4 五步之第一步「成败手」） | **detour 本体已从装载失败推进到运行底座钉死**：0.4.1–0.4.9 连修九关（竞技场时序 / Android 后端劫持 / PortHooks 版本 / PortMobile 查找路径 / mscorlib 毒 facade / 宿主缺 0Harmony / MonoMod 平台探测 / tuple 与签名 exhelper / 静态 JIT shim，详见 M4 的 0.4.x 连载）；0.4.9 待真机裁决 | 成败手，一切触控裁决的前提 | 0.4.9 裁决：长按右键有反应 = detour 通过；仍失败则按 `Core110Runtime` JIT 版本/vtable hook、MonoMod mmap 内存分配分账定位 |
-| 2 | **M4 触控六件套真机裁决**（长按右键/双指缩放/TapAssist/惯性滚动/虚拟鼠标键/KeyWheel） | 工程 + 装载链完成；键盘输入已验通（0.4.3 真机），触控待 0.4.9 起逐项裁决 | 触控体验对齐安卓 | 0.4.9 起逐项裁决清单 |
+| 1 | **Harmony detour 在 iOS 未实测**（M4 五步之第一步「成败手」） | **detour 本体已从装载失败推进到运行底座钉死**：0.4.1–0.4.10 连修十关（竞技场时序 / Android 后端劫持 / PortHooks 版本 / PortMobile 查找路径 / mscorlib 毒 facade / 宿主缺 0Harmony / MonoMod 平台探测 / tuple 与签名 exhelper / 静态 JIT shim / MonoMod 宿主件按 bundle 解析，详见 M4 的 0.4.x 连载）；0.4.10 待真机裁决 | 成败手，一切触控裁决的前提 | 0.4.10 裁决：长按右键有反应 = detour 通过；仍失败则按 `Core110Runtime` JIT 版本/vtable hook、MonoMod mmap 内存分配分账定位 |
+| 2 | **M4 触控六件套真机裁决**（长按右键/双指缩放/TapAssist/惯性滚动/虚拟鼠标键/KeyWheel） | 工程 + 装载链完成；键盘输入已验通（0.4.3 真机），触控待 0.4.10 起逐项裁决 | 触控体验对齐安卓 | 0.4.10 起逐项裁决清单 |
 | 3 | **JIT 常开** | 平台约束：每次启动经 StikDebug + rw17-jit26.js 拉起才全速；普通打开 = 解释器（能玩、慢数倍） | 畅玩第一差距，平台天花板无工程解 | 玩家文档把 StikDebug 流程写清（M5） |
 | 4 | **CoreLib 补丁重移植 + libcoreclr 二进制补丁 iOS 版** | **调研已完成（2026-11-23，docs/NET11-COMPARISON.md）**：10.0.12→v11.0.0 判定平滑——20 开关的全部 CoreLib 锚点在 v11 原样存活（抽查复核过）；affinity 字节补丁上游 #125361 已修（iOS 不需要，划掉）；dualjit patch 对 GA tag 实测干净套用，且 v11 上游反而更贴我们的 hybrid 形状（DCC 闸门/iOS 解释器进 CI）。**12 项改动清单已成文**（托管 6 开关 + 原生 initonly + 私有 API 五件），待实施 | 游戏本体不受阻（0.3.6 实证可玩）；影响集中在 PC mod 的反射/DynamicMethod 边缘用法与两个显示细节（小人昵称哈希漂移、浮点位数） | M4 后半开工即做：源码补丁路线（patches/ 同 dualjit 机制），实施顺序见 NET11-COMPARISON.md §3 |
 | 5 | **ModRules.txt（RimSort 社区加载顺序库）未入包** | ModPrep 机制及其规则（v14）随 hooks 已入库——缺的是另一回事：`communityRules.json` 转换的紧凑文本（after/before/top/bottom/incompatible），给 mod 排序界面用；游戏有网时也能自己下载转换 | 已知冲突对的顺序修正缺失，特定 mod 组合可能排序不当；小列表几乎无感 | 打包件（modrules/build.js 产物入 IPA）或运行期自下载兜底 |

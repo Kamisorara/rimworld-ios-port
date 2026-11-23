@@ -52,6 +52,9 @@ xcrun -sdk "$SDK" clang \
     -Wl,-install_name,@rpath/libport17jit.dylib \
     -o "$APP/libport17jit.dylib" \
     "$ROOT/host/native/port17jit.c"
+if ! nm -gU "$APP/libport17jit.dylib" | grep ' T _getJit$' > /dev/null; then
+    echo "::error::libport17jit.dylib 没有导出 _getJit（MonoMod 会死在 Could not open clrjit library）"; exit 1
+fi
 
 # 3) Vulkan 前向层（libvulkan.dylib → 同目录 MoltenVK.framework；宿主按路径 dlopen，
 #    install_name 同样钉住只为整洁）。libvulkan.1.dylib 是同一前向的第二副本：引擎的

@@ -4,6 +4,7 @@
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -87,7 +88,18 @@ static get_jit_fn resolve_static_get_jit(void)
 __attribute__((visibility("default"))) void *getJit(void)
 {
     static get_jit_fn resolved;
+    static int reported;
     if (resolved == NULL)
         resolved = resolve_static_get_jit();
+    if (!reported)
+    {
+        // stderr lands in coreclr-stderr.log: the next log must show whether the shim
+        // was reached at all and what it resolved, instead of a bare "Could not open".
+        reported = 1;
+        if (resolved != NULL)
+            fprintf(stderr, "[port17-jit] shim loaded; libcoreclr!_getJit resolved at %p\n", (void *)resolved);
+        else
+            fprintf(stderr, "[port17-jit] shim loaded but _getJit was not found in libcoreclr.dylib\n");
+    }
     return resolved != NULL ? resolved() : NULL;
 }

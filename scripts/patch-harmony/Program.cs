@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 
@@ -205,28 +206,25 @@ internal static class Program
         var method = runtime.Methods.First(candidate => candidate.Name == "GetClrJitPath");
         var body = method.Body;
         var instructions = body.Instructions;
-        bool done = instructions.Count == 4
-            && instructions[0].Operand is MethodReference start && start.Name == "get_BaseDirectory"
-            && instructions[2].Operand is MethodReference combine && combine.Name == "Combine"
-            && instructions[3].OpCode == OpCodes.Ret;
+        bool done = instructions.Count == 3
+            && instructions[0].OpCode == OpCodes.Ldstr && (string)instructions[0].Operand == "libport17jit.dylib"
+            && instructions[1].Operand is MethodReference resolve && resolve.Name == "Resolve"
+            && instructions[2].OpCode == OpCodes.Ret;
         if (done)
             return 0;
 
-        var baseDirectory = module.ImportReference(typeof(AppContext)
-            .GetProperty("BaseDirectory", BindingFlags.Static | BindingFlags.Public)!
-            .GetMethod);
-        var pathCombine = module.ImportReference(typeof(System.IO.Path)
-            .GetMethod("Combine", new[] { typeof(string), typeof(string) }));
+        int injected = InjectHostFiles(module);
+        var resolveShim = module.GetType("MonoMod.Core.Platforms.Port17HostFiles").Methods
+            .First(candidate => candidate.Name == "Resolve");
 
         body.Instructions.Clear();
         body.ExceptionHandlers.Clear();
         body.Variables.Clear();
         var il = body.GetILProcessor();
-        il.Emit(OpCodes.Call, baseDirectory);
         il.Emit(OpCodes.Ldstr, "libport17jit.dylib");
-        il.Emit(OpCodes.Call, pathCombine);
+        il.Emit(OpCodes.Call, resolveShim);
         il.Emit(OpCodes.Ret);
-        return 1;
+        return 1 + injected;
     }
 
     private static int UseBundleExHelper(ModuleDefinition module)
@@ -235,33 +233,240 @@ internal static class Program
         var method = system.Methods.First(candidate => candidate.Name == "CreateNativeExceptionHelper");
         var body = method.Body;
         var instructions = body.Instructions;
-        bool done = instructions.Count == 8
-            && instructions[1].Operand is FieldReference field && field.Name == "arch"
-            && instructions[6].Operand is MethodReference call && call.Name == "CreateHelper";
+        // The stock body also carries a ldstr "exhelper_macos_arm64.dylib" (arch switch) inside a
+        // try/catch, so only a call into our resolver counts as done.
+        bool done = instructions.Any(instruction => instruction.Operand is MethodReference call
+                && call.Name == "Resolve")
+            && instructions.Any(instruction => instruction.Operand is MethodReference call
+                && call.Name == "CreateHelper");
         if (done)
             return 0;
 
         var arch = system.Fields.First(candidate => candidate.Name == "arch");
         var helper = system.NestedTypes.First(candidate => candidate.Name == "JitMemcpyHelper");
         var createHelper = helper.Methods.First(candidate => candidate.Name == "CreateHelper" && candidate.Parameters.Count == 3);
-        var baseDirectory = module.ImportReference(typeof(AppContext)
-            .GetProperty("BaseDirectory", BindingFlags.Static | BindingFlags.Public)!
-            .GetMethod);
-        var combine = module.ImportReference(typeof(System.IO.Path)
-            .GetMethod("Combine", new[] { typeof(string), typeof(string) }));
+        int injected = InjectHostFiles(module);
+        var resolveShim = module.GetType("MonoMod.Core.Platforms.Port17HostFiles").Methods
+            .First(candidate => candidate.Name == "Resolve");
+        var getMessage = module.ImportReference(typeof(Exception).GetProperty("Message")!.GetMethod);
+        var concat = module.ImportReference(typeof(string)
+            .GetMethod("Concat", new[] { typeof(string), typeof(string) }));
+        var writeLine = module.ImportReference(typeof(Console)
+            .GetMethod("WriteLine", new[] { typeof(string) }));
 
         body.Instructions.Clear();
         body.ExceptionHandlers.Clear();
         body.Variables.Clear();
+        body.Variables.Add(new VariableDefinition(module.ImportReference(typeof(Exception))));
         var il = body.GetILProcessor();
+        // try { return JitMemcpyHelper.CreateHelper(arch, Resolve("exhelper_macos_arm64.dylib"), false); }
         il.Emit(OpCodes.Ldarg_0);
         il.Emit(OpCodes.Ldfld, arch);
-        il.Emit(OpCodes.Call, baseDirectory);
         il.Emit(OpCodes.Ldstr, "exhelper_macos_arm64.dylib");
-        il.Emit(OpCodes.Call, combine);
+        il.Emit(OpCodes.Call, resolveShim);
         il.Emit(OpCodes.Ldc_I4_0); // createHelper(..., deleteAfterLoad: false)
         il.Emit(OpCodes.Call, createHelper);
         il.Emit(OpCodes.Ret);
+        var tryStart = instructions[0];
+        var handlerStart = il.Create(OpCodes.Stloc_0);
+        il.Append(handlerStart);
+        // catch (Exception e) { Console.WriteLine("[port17] monomod exhelper unavailable: " + e.Message); return null; }
+        il.Emit(OpCodes.Ldstr, "[port17] monomod exhelper unavailable, continuing without native exception helper: ");
+        il.Emit(OpCodes.Ldloc_0);
+        il.Emit(OpCodes.Callvirt, getMessage);
+        il.Emit(OpCodes.Call, concat);
+        il.Emit(OpCodes.Call, writeLine);
+        il.Emit(OpCodes.Ldnull);
+        il.Emit(OpCodes.Ret);
+        body.ExceptionHandlers.Add(new ExceptionHandler(ExceptionHandlerType.Catch)
+        {
+            CatchType = module.ImportReference(typeof(Exception)),
+            TryStart = tryStart,
+            TryEnd = handlerStart,
+            HandlerStart = handlerStart,
+            HandlerEnd = instructions[instructions.Count - 1].Next ?? instructions[instructions.Count - 1],
+        });
+        return 1 + injected;
+    }
+
+    // iOS: AppContext.BaseDirectory is the game folder (engine.c sets APP_CONTEXT_BASE_DIRECTORY),
+    // while the host ships MonoMod's native files in the .app bundle next to 0Harmony.dll. Resolve
+    // against the executing assembly first, then the game folder and the process folder; probe-load
+    // the result so dyld's refusal ends up in the log instead of MonoMod's generic "Could not open".
+    private static int InjectHostFiles(ModuleDefinition module)
+    {
+        const string typeName = "Port17HostFiles";
+        var existing = module.GetType("MonoMod.Core.Platforms." + typeName);
+        if (existing != null)
+            return 0;
+
+        var type = new TypeDefinition("MonoMod.Core.Platforms", typeName,
+            Mono.Cecil.TypeAttributes.NotPublic | Mono.Cecil.TypeAttributes.Abstract
+            | Mono.Cecil.TypeAttributes.Sealed | Mono.Cecil.TypeAttributes.BeforeFieldInit,
+            module.TypeSystem.Object);
+        module.Types.Add(type);
+        var method = new MethodDefinition("Resolve",
+            Mono.Cecil.MethodAttributes.Assembly | Mono.Cecil.MethodAttributes.Static | Mono.Cecil.MethodAttributes.HideBySig,
+            module.TypeSystem.String);
+        method.Parameters.Add(new ParameterDefinition("fileName", Mono.Cecil.ParameterAttributes.None, module.TypeSystem.String));
+        type.Methods.Add(method);
+
+        var body = method.Body;
+        body.InitLocals = true;
+        for (int i = 0; i < 4; i++)
+            body.Variables.Add(new VariableDefinition(module.TypeSystem.String)); // dir, path, game, exe
+        body.Variables.Add(new VariableDefinition(module.ImportReference(typeof(Exception))));
+
+        MethodReference M(MethodInfo info) => module.ImportReference(info);
+        var getExecuting = M(typeof(Assembly).GetMethod(nameof(Assembly.GetExecutingAssembly), Type.EmptyTypes)!);
+        var getLocation = M(typeof(Assembly).GetProperty(nameof(Assembly.Location))!.GetMethod!);
+        var getDirName = M(typeof(Path).GetMethod(nameof(Path.GetDirectoryName), new[] { typeof(string) })!);
+        var combine = M(typeof(Path).GetMethod(nameof(Path.Combine), new[] { typeof(string), typeof(string) })!);
+        var fileExists = M(typeof(File).GetMethod(nameof(File.Exists), new[] { typeof(string) })!);
+        var isNullOrEmpty = M(typeof(string).GetMethod(nameof(string.IsNullOrEmpty), new[] { typeof(string) })!);
+        var getBaseDirectory = M(typeof(AppContext).GetProperty(nameof(AppContext.BaseDirectory))!.GetMethod!);
+        var getProcessPath = M(typeof(Environment).GetProperty(nameof(Environment.ProcessPath))!.GetMethod!);
+        var writeLine = M(typeof(Console).GetMethod(nameof(Console.WriteLine), new[] { typeof(string) })!);
+        var concat2 = M(typeof(string).GetMethod(nameof(string.Concat), new[] { typeof(string), typeof(string) })!);
+        var concat3 = M(typeof(string).GetMethod(nameof(string.Concat), new[] { typeof(string), typeof(string), typeof(string) })!);
+        var getMessage = M(typeof(Exception).GetProperty(nameof(Exception.Message))!.GetMethod!);
+        var nativeLoad = M(typeof(NativeLibrary).GetMethod(nameof(NativeLibrary.Load), new[] { typeof(string) })!);
+        var nativeFree = M(typeof(NativeLibrary).GetMethod(nameof(NativeLibrary.Free), new[] { typeof(IntPtr) })!);
+
+        var il = body.GetILProcessor();
+        // Branch targets are wired after the full body is laid out (Cecil rejects null targets).
+        var placeholder = il.Create(OpCodes.Nop);
+        Instruction Branch(OpCode op) => il.Create(op, placeholder);
+        // dir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)
+        il.Emit(OpCodes.Call, getExecuting);
+        il.Emit(OpCodes.Callvirt, getLocation);
+        il.Emit(OpCodes.Call, getDirName);
+        il.Emit(OpCodes.Stloc_0);
+        // path = IsNullOrEmpty(dir) ? null : Path.Combine(dir, fileName)
+        il.Emit(OpCodes.Ldloc_0);
+        il.Emit(OpCodes.Call, isNullOrEmpty);
+        var toGame = Branch(OpCodes.Brtrue);
+        il.Append(toGame);
+        il.Emit(OpCodes.Ldloc_0);
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Call, combine);
+        il.Emit(OpCodes.Stloc_1);
+        var toCheck = Branch(OpCodes.Br);
+        il.Append(toCheck);
+        var game = il.Create(OpCodes.Ldnull);
+        il.Append(game);
+        toGame.Operand = game;
+        il.Emit(OpCodes.Stloc_1);
+        // if (IsNullOrEmpty(path) || !File.Exists(path)) { game = Combine(BaseDirectory, fileName); if (File.Exists(game)) path = game; }
+        var check = il.Create(OpCodes.Ldloc_1);
+        il.Append(check);
+        toCheck.Operand = check;
+        il.Emit(OpCodes.Call, isNullOrEmpty);
+        var toGameFallback = Branch(OpCodes.Brtrue);
+        il.Append(toGameFallback);
+        il.Emit(OpCodes.Ldloc_1);
+        il.Emit(OpCodes.Call, fileExists);
+        var toHave = Branch(OpCodes.Brtrue);
+        il.Append(toHave);
+        var gameFallback = il.Create(OpCodes.Call, getBaseDirectory);
+        il.Append(gameFallback);
+        toGameFallback.Operand = gameFallback;
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Call, combine);
+        il.Emit(OpCodes.Stloc_2);
+        il.Emit(OpCodes.Ldloc_2);
+        il.Emit(OpCodes.Call, fileExists);
+        var toExe = Branch(OpCodes.Brfalse);
+        il.Append(toExe);
+        il.Emit(OpCodes.Ldloc_2);
+        il.Emit(OpCodes.Stloc_1);
+        var toHaveFromGame = Branch(OpCodes.Br);
+        il.Append(toHaveFromGame);
+        // exe = Environment.ProcessPath; dir = Path.GetDirectoryName(exe); if (!IsNullOrEmpty(dir)) path = Combine(dir, fileName)
+        var exeFallback = il.Create(OpCodes.Call, getProcessPath);
+        il.Append(exeFallback);
+        toExe.Operand = exeFallback;
+        il.Emit(OpCodes.Stloc_3);
+        il.Emit(OpCodes.Ldloc_3);
+        il.Emit(OpCodes.Call, isNullOrEmpty);
+        var toFinal = Branch(OpCodes.Brtrue);
+        il.Append(toFinal);
+        il.Emit(OpCodes.Ldloc_3);
+        il.Emit(OpCodes.Call, getDirName);
+        il.Emit(OpCodes.Stloc_0);
+        il.Emit(OpCodes.Ldloc_0);
+        il.Emit(OpCodes.Call, isNullOrEmpty);
+        var toFinalFromDir = Branch(OpCodes.Brtrue);
+        il.Append(toFinalFromDir);
+        il.Emit(OpCodes.Ldloc_0);
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Call, combine);
+        il.Emit(OpCodes.Stloc_1);
+        var toHaveFromExe = Branch(OpCodes.Br);
+        il.Append(toHaveFromExe);
+        // if (IsNullOrEmpty(path)) path = Combine(BaseDirectory, fileName)
+        var final = il.Create(OpCodes.Ldloc_1);
+        il.Append(final);
+        toFinal.Operand = final;
+        toFinalFromDir.Operand = final;
+        il.Emit(OpCodes.Call, isNullOrEmpty);
+        var toHaveDefault = Branch(OpCodes.Brfalse);
+        il.Append(toHaveDefault);
+        il.Emit(OpCodes.Call, getBaseDirectory);
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Call, combine);
+        il.Emit(OpCodes.Stloc_1);
+        // Console.WriteLine("[port17] monomod shim " + fileName + " -> " + path);
+        var have = il.Create(OpCodes.Ldstr, "[port17] monomod shim ");
+        il.Append(have);
+        toHave.Operand = have;
+        toHaveFromGame.Operand = have;
+        toHaveFromExe.Operand = have;
+        toHaveDefault.Operand = have;
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Call, concat2);
+        il.Emit(OpCodes.Ldstr, " -> ");
+        il.Emit(OpCodes.Ldloc_1);
+        il.Emit(OpCodes.Call, concat3);
+        il.Emit(OpCodes.Call, writeLine);
+        il.Emit(OpCodes.Ldloc_1);
+        il.Emit(OpCodes.Call, fileExists);
+        var skipMissing = Branch(OpCodes.Brtrue);
+        il.Append(skipMissing);
+        il.Emit(OpCodes.Ldstr, "[port17] monomod shim missing: ");
+        il.Emit(OpCodes.Ldloc_1);
+        il.Emit(OpCodes.Call, concat2);
+        il.Emit(OpCodes.Call, writeLine);
+        // try { NativeLibrary.Free(NativeLibrary.Load(path)); } catch (Exception e) { Console.WriteLine("[port17] monomod shim load failed: " + e.Message); }
+        var tryStart = il.Create(OpCodes.Ldloc_1);
+        il.Append(tryStart);
+        skipMissing.Operand = tryStart;
+        il.Emit(OpCodes.Call, nativeLoad);
+        il.Emit(OpCodes.Call, nativeFree);
+        var leaveTry = Branch(OpCodes.Leave);
+        il.Append(leaveTry);
+        var handlerStart = il.Create(OpCodes.Stloc_S, body.Variables[4]);
+        il.Append(handlerStart);
+        il.Emit(OpCodes.Ldstr, "[port17] monomod shim load failed: ");
+        il.Emit(OpCodes.Ldloc_S, body.Variables[4]);
+        il.Emit(OpCodes.Callvirt, getMessage);
+        il.Emit(OpCodes.Call, concat2);
+        il.Emit(OpCodes.Call, writeLine);
+        var leaveHandler = Branch(OpCodes.Leave);
+        il.Append(leaveHandler);
+        var ret = il.Create(OpCodes.Ldloc_1);
+        il.Append(ret);
+        leaveTry.Operand = ret;
+        leaveHandler.Operand = ret;
+        il.Emit(OpCodes.Ret);
+        body.ExceptionHandlers.Add(new ExceptionHandler(ExceptionHandlerType.Catch)
+        {
+            CatchType = module.ImportReference(typeof(Exception)),
+            TryStart = tryStart,
+            TryEnd = handlerStart,
+            HandlerStart = handlerStart,
+            HandlerEnd = ret,
+        });
         return 1;
     }
 
