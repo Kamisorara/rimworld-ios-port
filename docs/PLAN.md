@@ -194,6 +194,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **当前裁决状态（0.4.8 待测）**：MonoMod 平台钉死已能过构造器，原生 exhelper 改为 bundle 已签名件。裁决链：日志不得再出现 `MissingMethodException` / `MacOSSystem..ctor` / `NotImplementedException` / `the phone layer failed to start`；若 MemoryAllocator 或 dlopen 再失败，即是 MonoMod 在 iOS 上的下一层原生内存/签名账；长按右键/双指缩放/TapAssist 有反应 = M4 触控主线通过。
 
+**0.4.8 包落位（test_work/m4-touch-12，run 45182008089）**：IPA SHA256 `F52824D4…048CC`；解包核验版本 0.4.8，`0Harmony.dll` 反编译为 `(OSX, Arm64)` 且 `CreateNativeExceptionHelper` 直接加载 `<bundle>/exhelper_macos_arm64.dylib`；`exhelper_macos_arm64.dylib` 已随 IPA 签名后在位（签名后 204,848 字节）。
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这三条）**：
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
 2. iOS 与安卓的宿主件位置不同（bundle vs 游戏目录），"next to the game"式查找必须加 bundle 回退；
