@@ -306,6 +306,15 @@ dotnet build "$ROOT/probe/hello/hello.csproj" -c Release -o "$ROOT/build-m2/hell
 cp "$RT_DIR"/*.dylib "$APP/"
 cp "$RT_DIR"/*.dll "$APP/"
 [ -e "$APP/libclrinterpreter.dylib" ] || echo "::warning::混合套里没有 libclrinterpreter.dylib——解释器会话起不来（fetch 到旧资产？）"
+# 6.05) mscorlib facade 换官方件：collect 从构建产物抓到的 mscorlib.dll 是
+#     ReferenceAssembly（引用程序集不可执行，0x80131058）——自建 CoreCLR 没有
+#     mscorlib 实现，只产 ref。而 Framework 风格的 mod 程序集（创意工坊
+#     HarmonyMod/0Harmony 3.0 即是）引用 mscorlib 4.0.0.0，TPA 精确命中这个毒文件
+#     → HarmonyLib.HarmonySharedState cctor BadImageFormatException → Harmony.Patch
+#     → PortMobile 手机层启动即死 → 触控全部退化为单击（m4-touch-8 真机裁决）。
+#     官方 ios runtime pack 的 mscorlib facade（同 4.0.0.0 身份，可执行；ReadyToRun
+#     关闭时走 JIT）入仓 prebuilt/mscorlib.dll，这里原位覆盖。
+[ -f "$ROOT/prebuilt/mscorlib.dll" ] && cp "$ROOT/prebuilt/mscorlib.dll" "$APP/mscorlib.dll"
 cp "$ROOT/build-m2/hello/Hello.dll" "$APP/"
 
 # 6.5) 出包自检：install_name 必须是 @rpath（默认值是构建机绝对路径，设备上 dyld 拒载而 CI 全绿）；
