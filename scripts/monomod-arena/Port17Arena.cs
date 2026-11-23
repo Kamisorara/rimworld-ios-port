@@ -33,6 +33,12 @@ namespace Port17
         public static bool ExhelperDisabled { get; private set; }
 
         private static readonly List<IDisposable> KeepAlive = new List<IDisposable>();
+        private static readonly MethodInfo RuntimeMethodHandleGetMethodInfo =
+            typeof(RuntimeMethodHandle).GetMethod("GetMethodInfo", BindingFlags.NonPublic | BindingFlags.Instance);
+        private static readonly MethodInfo RuntimeMethodHandleGetNativeCode =
+            typeof(RuntimeMethodHandle).GetMethod("GetNativeCodeInternal", BindingFlags.NonPublic | BindingFlags.Static);
+        private static int entryPointLogged;
+        private static int entryPointFallbackLogged;
 
         [DllImport("libSystem", EntryPoint = "sys_icache_invalidate")]
         private static extern void sys_icache_invalidate(void* address, nuint size);
@@ -163,6 +169,59 @@ namespace Port17
             Console.WriteLine($"[port17] monomod jit vtable swapped: copy 0x{copy.BaseAddress:x} now slot0 0x{(*(nint**)jit)[0]:x}");
         }
 
+        // MonoMod's Core110Runtime reads MethodDesc::GetNativeCode() directly. That returns only
+        // the default native-code slot, while a tiered/versionable method can have its active
+        // code version in CodeVersionManager. The BCL QCall behind GetNativeCodeInternal uses
+        // GetNativeCodeAnyVersion(), so it is the authoritative way to find the body Harmony is
+        // about to detour. RuntimeMethodHandleInternal is internal, hence the cached reflection.
+        public static nint GetCore110MethodEntryPoint(MethodBase method, RuntimeMethodHandle handle)
+        {
+            // This is the same forcing step as Core110Runtime.GetMethodEntryPoint: it crosses the
+            // prestub and ensures a native code version exists before asking the BCL for it.
+            nint callableEntry = handle.GetFunctionPointer();
+            if (callableEntry == 0)
+                throw new InvalidOperationException("RuntimeMethodHandle.GetFunctionPointer returned zero for " + method);
+            nint entry = 0;
+            string source = null;
+            Exception lookupError = null;
+            if (RuntimeMethodHandleGetMethodInfo != null && RuntimeMethodHandleGetNativeCode != null)
+            {
+                try
+                {
+                    object methodInfo = RuntimeMethodHandleGetMethodInfo.Invoke(handle, null);
+                    entry = (nint)(IntPtr)RuntimeMethodHandleGetNativeCode.Invoke(null, new[] { methodInfo });
+                    source = "RuntimeMethodHandle.GetNativeCodeInternal";
+                }
+                catch (Exception e)
+                {
+                    lookupError = e.GetBaseException();
+                    if (Interlocked.Exchange(ref entryPointFallbackLogged, 1) == 0)
+                        Console.WriteLine("[port17] core110 native-code lookup failed after GetFunctionPointer: " + lookupError.Message);
+                }
+            }
+            else
+            {
+                if (OperatingSystem.IsIOS())
+                    throw new MissingMethodException(
+                        "The iOS CoreLib does not expose RuntimeMethodHandle.GetNativeCodeInternal; "
+                        + "refusing to detour the multicallable entry point");
+                // Hosted desktop .NET 10 does not expose this internal API, so its smoke test
+                // can only prove the callable entry point. The iOS GA CoreLib does expose it,
+                // where returning zero remains a hard failure instead of detouring a stub.
+                entry = callableEntry;
+                source = "RuntimeMethodHandle.GetFunctionPointer (GetNativeCodeInternal unavailable)";
+            }
+
+            if (entry == 0)
+                throw new InvalidOperationException(
+                    $"RuntimeMethodHandle.GetNativeCodeInternal returned zero for {method} "
+                    + $"(GetFunctionPointer() = 0x{callableEntry:x})",
+                    lookupError);
+            if (Interlocked.Exchange(ref entryPointLogged, 1) == 0)
+                Console.WriteLine($"[port17] core110 method entry: {method} -> 0x{entry:x} via {source}");
+            return entry;
+        }
+
         // Exercised by patch-harmony's smoke mode with PORT17_MM_* pointing at a plain (RW)
         // buffer: ref-struct parameters cannot be driven through reflection from the outside.
         public static string SelfTest()
@@ -208,6 +267,11 @@ namespace Port17
             if (TryPatchViaAlias(0x1000, bytes, backup))
                 throw new InvalidOperationException("alias patch accepted a foreign address");
 
+            var probe = typeof(Port17Arena).GetMethod(nameof(SelfTestProbe), BindingFlags.NonPublic | BindingFlags.Static);
+            nint probeEntry = GetCore110MethodEntryPoint(probe, probe.MethodHandle);
+            if (probeEntry == 0)
+                throw new InvalidOperationException("RuntimeMethodHandle entry-point probe returned zero");
+
             nint fakeVtable = Marshal.AllocHGlobal(IntPtr.Size * 8);
             nint fakeObject = Marshal.AllocHGlobal(IntPtr.Size);
             for (int i = 0; i < 8; i++)
@@ -217,7 +281,11 @@ namespace Port17
             nint copied = *(nint*)fakeObject;
             if (copied < MmRx || copied >= MmRx + MmSize || *(nint*)copied != 0xDEAD || *(nint*)(copied + IntPtr.Size) != 0x1001)
                 throw new InvalidOperationException("vtable swap did not produce a patched copy");
-            return $"ok: first=0x{first.BaseAddress:x} second=0x{second.BaseAddress:x} (gap {gap}) whole=0x{wholeAddress:x} copy=0x{copied:x}";
+            return $"ok: first=0x{first.BaseAddress:x} second=0x{second.BaseAddress:x} (gap {gap}) whole=0x{wholeAddress:x} copy=0x{copied:x} entry=0x{probeEntry:x}";
+        }
+
+        private static void SelfTestProbe()
+        {
         }
     }
 

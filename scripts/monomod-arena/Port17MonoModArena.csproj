@@ -11,13 +11,15 @@
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <LangVersion>latest</LangVersion>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <HarmonyPath Condition="'$(HarmonyPath)' == ''">..\..\prebuilt\0Harmony.dll</HarmonyPath>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Port17Arena.cs" />
     <!-- The MonoMod memory types are internal upstream; patch-harmony's `prepare` pass publicizes
-         them in prebuilt/0Harmony.dll, which is the copy this project compiles against. -->
+         them in the Harmony copy this project compiles against. Override HarmonyPath to build
+         against a freshly prepared assembly instead of the last checked-in prebuilt. -->
     <Reference Include="0Harmony">
-      <HintPath>..\..\prebuilt\0Harmony.dll</HintPath>
+      <HintPath>$(HarmonyPath)</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>

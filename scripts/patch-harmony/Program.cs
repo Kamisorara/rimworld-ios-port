@@ -246,6 +246,7 @@ internal static class Program
             changed += UseArenaAllocator(assembly.MainModule, arenaModule);
             changed += MakePatchDataAliasAware(assembly.MainModule, arenaModule);
             changed += SwapJitVtableInsteadOfPatching(assembly.MainModule, arenaModule);
+            changed += UseRuntimeMethodHandleEntryPoint(assembly.MainModule, arenaModule);
             changed += DropRuntimeRwAlias(assembly.MainModule);
             changed += PatchCore110VtableCount(assembly.MainModule);
             changed += ForcePlatformTriple(assembly.MainModule);
@@ -482,6 +483,50 @@ internal static class Program
         il.Emit(OpCodes.Ldloc, vtableEntry);
         il.Emit(OpCodes.Ldloc, value);
         il.Emit(OpCodes.Call, arena.Method(Port17ArenaType, "SwapCompilerVtable", 3));
+        il.Emit(OpCodes.Ret);
+        return 1;
+    }
+
+    // MonoMod's Core110Runtime walks MethodDesc to obtain the body. MethodDesc::GetNativeCode()
+    // returns only the default native-code slot; .NET 11's tiered/versionable methods can keep
+    // the active body in CodeVersionManager instead. Keep the runtime's identifiable-method and
+    // compile prologue, then ask the BCL's GetNativeCodeInternal (GetNativeCodeAnyVersion) path.
+    private static int UseRuntimeMethodHandleEntryPoint(ModuleDefinition module, ArenaModule arena)
+    {
+        var runtime = module.GetType("MonoMod.Core.Platforms.Runtimes.Core110Runtime");
+        var method = runtime.Methods.First(candidate => candidate.Name == "GetMethodEntryPoint" && candidate.Parameters.Count == 2);
+        var instructions = method.Body.Instructions;
+        var helper = arena.Method(Port17ArenaType, "GetCore110MethodEntryPoint", 2);
+        if (instructions.Any(instruction => instruction.Operand is MethodReference call
+                && call.DeclaringType.FullName == Port17ArenaType && call.Name == "GetCore110MethodEntryPoint"))
+            return 0;
+
+        int compile = instructions.ToList().FindIndex(instruction =>
+            instruction.Operand is MethodReference call && call.Name == "TryInvokeBclCompileMethod");
+        if (compile < 0)
+            throw new InvalidOperationException("TryInvokeBclCompileMethod not found in Core110Runtime.GetMethodEntryPoint");
+        int assert = -1;
+        for (int i = compile + 1; i < instructions.Count; i++)
+        {
+            if (instructions[i].Operand is MethodReference call &&
+                call.Name == "Assert" && call.DeclaringType.FullName == "MonoMod.Utils.Helpers")
+            {
+                assert = i;
+                break;
+            }
+        }
+        if (assert < 0)
+            throw new InvalidOperationException("Helpers.Assert after TryInvokeBclCompileMethod not found");
+
+        var kept = instructions.Take(assert + 1).ToList();
+        instructions.Clear();
+        method.Body.ExceptionHandlers.Clear();
+        var il = method.Body.GetILProcessor();
+        foreach (var instruction in kept)
+            il.Append(instruction);
+        il.Emit(OpCodes.Ldarg_1);
+        il.Emit(OpCodes.Ldarg_2);
+        il.Emit(OpCodes.Call, helper);
         il.Emit(OpCodes.Ret);
         return 1;
     }
