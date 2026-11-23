@@ -190,6 +190,10 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **当前裁决状态（0.4.7 待测，test_work/m4-touch-11，run 45179179709）**：IPA SHA256 `97A904AA…473E`；解包核验版本 0.4.7，`0Harmony.dll` 尺寸 2,026,496，反编译确认 `DetectPlatformInfo()` 已直接返回 `(OSX, Arm64)`。MonoMod 平台三件套（OSX + Arm64 + CoreCLR）钉死后，detour 才能真正完成。裁决行不变：日志必须不再有 `MacOSSystem..ctor` / `NotImplementedException` / `the phone layer failed to start`，且长按右键/双指缩放/TapAssist 有反应 = M4 触控主线裁决通过。
 
+**四十四轮（0.4.8）：对照安卓后修平台钉死的 tuple 引用与 exhelper 签名**：0.4.7 日志越过 `MacOSSystem..ctor`，但钉平台的方法在运行期抛 `MissingMethodException: ValueTuple<OSKind,ArchitectureKind>..ctor`。根因：Cecil 新建的泛型构造器引用缺运行期需要的完整上下文；更稳的姿势是保留原 0Harmony 里 ValueTuple 构造指令本体，只重排成 `OSX/Arm64 -> 原构造 -> ret`。同时按安卓 `patch/Patch.cs` 对照：安卓不让 MonoMod 把 exhelper 解到临时目录，而是随包 `libmm_exhelper.so` 并把 `CreateNativeExceptionHelper` 改成直接加载；iOS 对运行期写出的 dylib 同样有签名问题，因此提取 Harmony 内嵌 `exhelper_macos_arm64.dylib` 入 `prebuilt/`，IPA 原位拷入并随 bundle ad-hoc 签名，`MacOSSystem.CreateNativeExceptionHelper` 改加载 `<bundle>/exhelper_macos_arm64.dylib` 且 `deleteAfterLoad=false`。平台对照结论：安卓是把误判 Android 改走 LinuxSystem；MonoMod 没有 IOSSystem，iOS 只能走 macOS ARM64 路线。版本升 0.4.8。
+
+**当前裁决状态（0.4.8 待测）**：MonoMod 平台钉死已能过构造器，原生 exhelper 改为 bundle 已签名件。裁决链：日志不得再出现 `MissingMethodException` / `MacOSSystem..ctor` / `NotImplementedException` / `the phone layer failed to start`；若 MemoryAllocator 或 dlopen 再失败，即是 MonoMod 在 iOS 上的下一层原生内存/签名账；长按右键/双指缩放/TapAssist 有反应 = M4 触控主线通过。
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这三条）**：
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
 2. iOS 与安卓的宿主件位置不同（bundle vs 游戏目录），"next to the game"式查找必须加 bundle 回退；

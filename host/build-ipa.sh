@@ -284,6 +284,8 @@ cp "$ROOT/prebuilt/PortHooks.dll" "$ROOT/prebuilt/PortMobile.dll" "$APP/"
 #      mod 也会被 StartupHook 统一改用它。
 [ -f "$ROOT/prebuilt/0Harmony.dll" ] || { echo "::error::prebuilt/0Harmony.dll 缺（本地跑 scripts/patch-harmony）"; exit 1; }
 cp "$ROOT/prebuilt/0Harmony.dll" "$APP/"
+[ -f "$ROOT/prebuilt/exhelper_macos_arm64.dylib" ] || { echo "::error::prebuilt/exhelper_macos_arm64.dylib 缺（本地跑 scripts/patch-harmony extract-exhelper）"; exit 1; }
+cp "$ROOT/prebuilt/exhelper_macos_arm64.dylib" "$APP/"
 
 # 5) 宿主可执行（M2 骨架 + 三角形 + 音频/原生库自检 + .NET 探针诊断件 + 引擎装载件
 #    + zip 自动安装件 + setup 运行件；解压用系统 libz 的 raw inflate）

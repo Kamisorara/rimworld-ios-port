@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 
@@ -25,6 +26,18 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "dump")
+        {
+            var dumped = AssemblyDefinition.ReadAssembly(args[1]);
+            var dumpedDetection = dumped.MainModule.GetType("MonoMod.Utils.PlatformDetection");
+            var dumpedMethod = dumpedDetection.Methods.First(candidate => candidate.Name == "DetectPlatformInfo");
+            Console.WriteLine("return: " + dumpedMethod.ReturnType.FullName);
+            foreach (var instruction in dumpedMethod.Body.Instructions)
+                if (instruction.OpCode == OpCodes.Newobj || instruction.OpCode == OpCodes.Ret)
+                    Console.WriteLine($"{instruction.Offset:X4} {instruction.OpCode} {instruction.Operand}");
+            return 0;
+        }
+
         if (args.Length == 2 && args[0] == "verify")
         {
             int count = 0;
@@ -37,6 +50,19 @@ internal static class Program
                                 target.DeclaringType.FullName == "PortHooks.PortPlatform")
                                 count++;
             Console.WriteLine(count);
+            return 0;
+        }
+
+        if (args.Length == 3 && args[0] == "extract-exhelper")
+        {
+            var harmony = AssemblyDefinition.ReadAssembly(args[1]);
+            var resource = harmony.MainModule.Resources
+                .OfType<EmbeddedResource>()
+                .First(candidate => candidate.Name == "exhelper_macos_arm64.dylib");
+            using (var stream = resource.GetResourceStream())
+            using (var helperOutput = File.Create(args[2]))
+                stream.CopyTo(helperOutput);
+            Console.WriteLine(args[2]);
             return 0;
         }
 
@@ -128,6 +154,7 @@ internal static class Program
                 }
             }
 
+            changed += UseBundleExHelper(assembly.MainModule);
             changed += ForcePlatformTriple(assembly.MainModule);
 
             string temp = output + ".p17tmp";
@@ -150,17 +177,15 @@ internal static class Program
             && instructions[0].OpCode == OpCodes.Ldc_I4_S && (sbyte)instructions[0].Operand == 5
             && instructions[1].OpCode == OpCodes.Ldc_I4_S && (sbyte)instructions[1].Operand == 5
             && instructions[2].OpCode == OpCodes.Newobj
+            && ((MethodReference)instructions[2].Operand).Name == ".ctor"
             && instructions[3].OpCode == OpCodes.Ret;
         if (done)
             return 0;
 
-        var tuple = (GenericInstanceType)method.ReturnType;
-        var constructor = new MethodReference(".ctor", module.TypeSystem.Void, tuple)
-        {
-            HasThis = true,
-        };
-        constructor.Parameters.Add(new ParameterDefinition("item1", ParameterAttributes.None, tuple.GenericArguments[0]));
-        constructor.Parameters.Add(new ParameterDefinition("item2", ParameterAttributes.None, tuple.GenericArguments[1]));
+        var originalConstructor = instructions.First(instruction => instruction.OpCode == OpCodes.Newobj
+            && instruction.Operand is MethodReference constructor
+            && constructor.DeclaringType.FullName == method.ReturnType.FullName);
+        var originalReturn = instructions.Last(instruction => instruction.OpCode == OpCodes.Ret);
 
         body.Instructions.Clear();
         body.ExceptionHandlers.Clear();
@@ -168,7 +193,43 @@ internal static class Program
         var il = body.GetILProcessor();
         il.Emit(OpCodes.Ldc_I4_S, (sbyte)5); // OSKind.OSX: the only macOS-family backend MonoMod implements
         il.Emit(OpCodes.Ldc_I4_S, (sbyte)5); // ArchitectureKind.Arm64
-        il.Emit(OpCodes.Newobj, module.ImportReference(constructor));
+        il.Append(originalConstructor);
+        il.Append(originalReturn);
+        return 1;
+    }
+
+    private static int UseBundleExHelper(ModuleDefinition module)
+    {
+        var system = module.GetType("MonoMod.Core.Platforms.Systems.MacOSSystem");
+        var method = system.Methods.First(candidate => candidate.Name == "CreateNativeExceptionHelper");
+        var body = method.Body;
+        var instructions = body.Instructions;
+        bool done = instructions.Count == 8
+            && instructions[1].Operand is FieldReference field && field.Name == "arch"
+            && instructions[6].Operand is MethodReference call && call.Name == "CreateHelper";
+        if (done)
+            return 0;
+
+        var arch = system.Fields.First(candidate => candidate.Name == "arch");
+        var helper = system.NestedTypes.First(candidate => candidate.Name == "JitMemcpyHelper");
+        var createHelper = helper.Methods.First(candidate => candidate.Name == "CreateHelper" && candidate.Parameters.Count == 3);
+        var baseDirectory = module.ImportReference(typeof(AppContext)
+            .GetProperty("BaseDirectory", BindingFlags.Static | BindingFlags.Public)!
+            .GetMethod);
+        var combine = module.ImportReference(typeof(System.IO.Path)
+            .GetMethod("Combine", new[] { typeof(string), typeof(string) }));
+
+        body.Instructions.Clear();
+        body.ExceptionHandlers.Clear();
+        body.Variables.Clear();
+        var il = body.GetILProcessor();
+        il.Emit(OpCodes.Ldarg_0);
+        il.Emit(OpCodes.Ldfld, arch);
+        il.Emit(OpCodes.Call, baseDirectory);
+        il.Emit(OpCodes.Ldstr, "exhelper_macos_arm64.dylib");
+        il.Emit(OpCodes.Call, combine);
+        il.Emit(OpCodes.Ldc_I4_0); // createHelper(..., deleteAfterLoad: false)
+        il.Emit(OpCodes.Call, createHelper);
         il.Emit(OpCodes.Ret);
         return 1;
     }
