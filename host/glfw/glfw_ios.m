@@ -20,6 +20,7 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #include <dlfcn.h>
+#define API __attribute__((visibility("default"))) // 导出面宏（文件头：事件 sink 块在前面就用）
 #include <errno.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -152,8 +153,6 @@ typedef void (*GLFWmonitorfun)(GLFWmonitor*, int);
 typedef void (*GLFWjoystickfun)(int, int);
 typedef void (*GLFWglproc)(void);
 typedef void (*GLFWvkproc)(void);
-
-#define API __attribute__((visibility("default")))
 
 // ---- the event queue, filled by the main thread, drained by the engine thread ----
 enum { EV_WINDOW_INIT = 1, EV_WINDOW_TERM, EV_RESIZE, EV_FOCUS, EV_CURSOR, EV_BUTTON, EV_SCROLL, EV_KEY, EV_CHAR, EV_CLOSE };
