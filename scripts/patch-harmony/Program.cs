@@ -128,6 +128,8 @@ internal static class Program
                 }
             }
 
+            changed += ForcePlatformTriple(assembly.MainModule);
+
             string temp = output + ".p17tmp";
             assembly.Write(temp);
             File.Move(temp, output, true);
@@ -136,6 +138,39 @@ internal static class Program
         if (inPlace)
             File.Delete(reading);
         return 0;
+    }
+
+    private static int ForcePlatformTriple(ModuleDefinition module)
+    {
+        var detection = module.GetType("MonoMod.Utils.PlatformDetection");
+        var method = detection.Methods.First(candidate => candidate.Name == "DetectPlatformInfo");
+        var body = method.Body;
+        var instructions = body.Instructions;
+        bool done = instructions.Count >= 4
+            && instructions[0].OpCode == OpCodes.Ldc_I4_S && (sbyte)instructions[0].Operand == 5
+            && instructions[1].OpCode == OpCodes.Ldc_I4_S && (sbyte)instructions[1].Operand == 5
+            && instructions[2].OpCode == OpCodes.Newobj
+            && instructions[3].OpCode == OpCodes.Ret;
+        if (done)
+            return 0;
+
+        var tuple = (GenericInstanceType)method.ReturnType;
+        var constructor = new MethodReference(".ctor", module.TypeSystem.Void, tuple)
+        {
+            HasThis = true,
+        };
+        constructor.Parameters.Add(new ParameterDefinition("item1", ParameterAttributes.None, tuple.GenericArguments[0]));
+        constructor.Parameters.Add(new ParameterDefinition("item2", ParameterAttributes.None, tuple.GenericArguments[1]));
+
+        body.Instructions.Clear();
+        body.ExceptionHandlers.Clear();
+        body.Variables.Clear();
+        var il = body.GetILProcessor();
+        il.Emit(OpCodes.Ldc_I4_S, (sbyte)5); // OSKind.OSX: the only macOS-family backend MonoMod implements
+        il.Emit(OpCodes.Ldc_I4_S, (sbyte)5); // ArchitectureKind.Arm64
+        il.Emit(OpCodes.Newobj, module.ImportReference(constructor));
+        il.Emit(OpCodes.Ret);
+        return 1;
     }
 
     private static MethodReference ImportPortPlatform(ModuleDefinition module, DefaultAssemblyResolver resolver,

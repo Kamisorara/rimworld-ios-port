@@ -485,6 +485,13 @@ int run_engine(const char *bundle_dir, const char *home)
     // 内置之后应用）；v2 重开闸 = 这里改置 Android + launcher 喂宿主层。
     setenv("WAYLITH_BACKEND", "IOS", 1);
     host_log("引擎：窗口后端 = IOS（WAYLITH_BACKEND=IOS，绕开被 v10 补丁改写的 AutoCandidates）");
+    // MonoMod's macOS arm64 helper drops its dylib by mkstemp. The default "/tmp/..." is
+    // outside the iOS container, so point it at an app-owned folder inside the game copy.
+    {
+        char mmHelpers[1100];
+        snprintf(mmHelpers, sizeof mmHelpers, "%s/mm-helpers", game);
+        setenv("MONOMOD_HelperDropPath", mmHelpers, 1);
+    }
 
     // <game>/runtime.env: NAME=value per line (a bare NAME= unsets), after the built-ins.
     {
