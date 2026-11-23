@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
@@ -64,6 +65,29 @@ internal static class Program
             using (var helperOutput = File.Create(args[2]))
                 stream.CopyTo(helperOutput);
             Console.WriteLine(args[2]);
+            return 0;
+        }
+
+        // Executes the rewritten methods on this machine's runtime. Hand-written IL can pass
+        // Cecil and decompile cleanly yet still be rejected by the JIT (0.4.10 shipped a `ret`
+        // inside a try/catch and died on device with InvalidProgramException).
+        if (args.Length == 2 && args[0] == "smoke")
+        {
+            var asm = Assembly.LoadFrom(Path.GetFullPath(args[1]));
+            var resolve = asm.GetType("MonoMod.Core.Platforms.Port17HostFiles", true)!
+                .GetMethod("Resolve", BindingFlags.Static | BindingFlags.NonPublic)!;
+            var jitPath = (string)resolve.Invoke(null, new object[] { "libport17jit.dylib" })!;
+            Console.WriteLine("smoke: Resolve(libport17jit.dylib) -> " + jitPath);
+
+            var system = asm.GetType("MonoMod.Core.Platforms.Systems.MacOSSystem", true)!;
+            var instance = RuntimeHelpers.GetUninitializedObject(system);
+            var archType = asm.GetTypes().First(candidate => candidate.Name == "Arm64Arch"
+                && candidate.GetInterfaces().Any(face => face.Name == "IArchitecture"));
+            system.GetField("arch", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(
+                instance, RuntimeHelpers.GetUninitializedObject(archType));
+            var helper = system.GetMethod("CreateNativeExceptionHelper", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .Invoke(instance, null);
+            Console.WriteLine("smoke: CreateNativeExceptionHelper() -> " + (helper == null ? "null (expected off-device)" : helper.GetType().Name));
             return 0;
         }
 
@@ -257,34 +281,45 @@ internal static class Program
         body.Instructions.Clear();
         body.ExceptionHandlers.Clear();
         body.Variables.Clear();
-        body.Variables.Add(new VariableDefinition(module.ImportReference(typeof(Exception))));
+        body.Variables.Add(new VariableDefinition(method.ReturnType)); // result
+        body.Variables.Add(new VariableDefinition(module.ImportReference(typeof(Exception)))); // e
         var il = body.GetILProcessor();
-        // try { return JitMemcpyHelper.CreateHelper(arch, Resolve("exhelper_macos_arm64.dylib"), false); }
-        il.Emit(OpCodes.Ldarg_0);
+        // try { result = CreateHelper(arch, Resolve(...), false); leave } catch (Exception e) { log; result = null; leave }
+        // result; ret — the CLR rejects `ret` inside a try/catch region (InvalidProgramException).
+        var tryStart = il.Create(OpCodes.Ldarg_0);
+        il.Append(tryStart);
         il.Emit(OpCodes.Ldfld, arch);
         il.Emit(OpCodes.Ldstr, "exhelper_macos_arm64.dylib");
         il.Emit(OpCodes.Call, resolveShim);
         il.Emit(OpCodes.Ldc_I4_0); // createHelper(..., deleteAfterLoad: false)
         il.Emit(OpCodes.Call, createHelper);
-        il.Emit(OpCodes.Ret);
-        var tryStart = instructions[0];
-        var handlerStart = il.Create(OpCodes.Stloc_0);
+        il.Emit(OpCodes.Stloc_0);
+        il.Emit(OpCodes.Leave, tryStart); // target fixed below
+        var leaveTry = instructions[instructions.Count - 1];
+        var handlerStart = il.Create(OpCodes.Stloc_1);
         il.Append(handlerStart);
-        // catch (Exception e) { Console.WriteLine("[port17] monomod exhelper unavailable: " + e.Message); return null; }
+        // catch (Exception e) { Console.WriteLine("[port17] monomod exhelper unavailable: " + e.Message); result = null; leave }
         il.Emit(OpCodes.Ldstr, "[port17] monomod exhelper unavailable, continuing without native exception helper: ");
-        il.Emit(OpCodes.Ldloc_0);
+        il.Emit(OpCodes.Ldloc_1);
         il.Emit(OpCodes.Callvirt, getMessage);
         il.Emit(OpCodes.Call, concat);
         il.Emit(OpCodes.Call, writeLine);
         il.Emit(OpCodes.Ldnull);
+        il.Emit(OpCodes.Stloc_0);
+        il.Emit(OpCodes.Leave, tryStart);
+        var leaveHandler = instructions[instructions.Count - 1];
+        var loadResult = il.Create(OpCodes.Ldloc_0);
+        il.Append(loadResult);
         il.Emit(OpCodes.Ret);
+        leaveTry.Operand = loadResult;
+        leaveHandler.Operand = loadResult;
         body.ExceptionHandlers.Add(new ExceptionHandler(ExceptionHandlerType.Catch)
         {
             CatchType = module.ImportReference(typeof(Exception)),
             TryStart = tryStart,
             TryEnd = handlerStart,
             HandlerStart = handlerStart,
-            HandlerEnd = instructions[instructions.Count - 1].Next ?? instructions[instructions.Count - 1],
+            HandlerEnd = loadResult,
         });
         return 1 + injected;
     }
