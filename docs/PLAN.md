@@ -222,7 +222,10 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **0.4.11 包落位（test_work/m4-touch-15，run 45192150060）**：IPA SHA256 `6D543B01…7076A`（63,005,259 字节）；解包核验版本 0.4.11，`libport17jit.dylib` 导出 `T _getJit`，IPA 内 `0Harmony.dll` 与 `prebuilt/0Harmony.dll` 哈希一致（`6A04FD10…`）；对包内 `0Harmony.dll` 直接跑 `patch-harmony smoke`：`Resolve` 解析到 .app 内路径、`CreateNativeExceptionHelper()` 走 catch 返回 null，退出码 0。
 
+**0.4.12 包落位（test_work/m4-touch-16，run 45202580575，workflow_dispatch 自 824e137；前一次 push 触发的 45201879088 是不含 Volatile.Write 的 921e6cf 版本，已作废）**：IPA SHA256 `B0D4F1B6…B4705`（63,013,056 字节）；解包核验版本 0.4.12；`0Harmony.dll`（`6C720C0C…`）与 `Port17MonoModArena.dll`（`AE45370D…`，含 Volatile.Write）均与 prebuilt 哈希一致；`libport17jit.dylib` 导出 `T _getJit`；IPA 内 0Harmony 引用 `Port17MonoModArena 1.0.0.0`，`ICorJitInfoFullVtableCount` 为 191；对包内 `0Harmony.dll` + `Port17MonoModArena.dll` 直接跑 smoke（分配器自测 / GetClrJitPath / exhelper null）退出码 0。
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这五条）**：
+
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
 2. iOS 与安卓的宿主件位置不同（bundle vs 游戏目录），"next to the game"式查找必须加 bundle 回退——**iOS 上 `AppContext.BaseDirectory` 就是游戏目录**（engine.c 设 `APP_CONTEXT_BASE_DIRECTORY`），任何用 BaseDirectory 定位宿主件的补丁（PortHooks/PortMobile/MonoMod 的 shim 与 exhelper 同族）都要改走 `Port17HostFiles.Resolve`；
 3. TPA 绑定按名字+版本+公钥精确匹配，且引用程序集不可执行——Framework 风格 mod 依赖的 mscorlib/netstandard facade 必须是可执行件（mscorlib 已换官方 facade；netstandard 实测本就是好件）。
