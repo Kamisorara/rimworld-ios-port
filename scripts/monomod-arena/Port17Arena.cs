@@ -4,7 +4,9 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using MonoMod.Core.Platforms;
 
 namespace Port17
@@ -153,7 +155,9 @@ namespace Port17
             for (int i = 0; i < Count; i++)
                 MemoryMarshal.Write(span.Slice(i * IntPtr.Size), ((nint*)oldVtable)[i]);
             MemoryMarshal.Write(span, newCompileMethod);
-            *obj = copy.BaseAddress;
+            // Other threads JIT concurrently: publish the copy contents before the pointer (ARM64
+            // has no implicit store-store order; Volatile.Write is stlr).
+            Volatile.Write(ref Unsafe.AsRef<nint>((void*)obj), copy.BaseAddress);
             lock (KeepAlive)
                 KeepAlive.Add(copy);
             Console.WriteLine($"[port17] monomod jit vtable swapped: copy 0x{copy.BaseAddress:x} now slot0 0x{(*(nint**)jit)[0]:x}");
