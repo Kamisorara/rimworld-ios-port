@@ -960,7 +960,7 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
         char size[64];
         snprintf(size, sizeof size, "%dx%d", w, h);
         setenv("PORT17_SCREEN_SIZE", size, 1);
-        append_log([NSString stringWithFormat:@"桥实况：layer=0x%s，%dx%d @%.2fx",
+        boot_log([NSString stringWithFormat:@"桥实况：layer=0x%s，%dx%d @%.2fx",
             hex, w, h, (double)screen.nativeScale]);
     }
     // triangle_stop 最多等 2 秒循环收尾，别冻主线程。
