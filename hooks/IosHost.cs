@@ -163,6 +163,16 @@ namespace PortHooks
 
 		public static void Start()
 		{
+			// v2 开关（回退裁决 2026-11-23）：只在 Android 模式点亮。当前正式路是 IOS 后端 +
+			// 主线程自动进引擎（0.3.6 验证链）；桥不启动 => AndroidHost.IsInitialized 门过不去
+			// => Android 后端在原生候选评估里选不中（v10 补丁开的 IsAndroid 门白开）。
+			// 重开闸：engine.c 置 WAYLITH_BACKEND=Android + launcher 点「启动游戏」喂宿主层。
+			string backend = Environment.GetEnvironmentVariable("WAYLITH_BACKEND");
+			if (backend != "Android")
+			{
+				try { Console.WriteLine("[ioshost] 桥未启用（WAYLITH_BACKEND=" + (backend ?? "unset") + "，IOS 后端模式）"); } catch { }
+				return;
+			}
 			try
 			{
 				Assembly asm = Assembly.Load("Waylith.Windowing");

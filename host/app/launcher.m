@@ -40,6 +40,9 @@ static __weak LauncherVC *g_live = nil;
 @property (strong, nonatomic) NSArray<UILabel *> *cardValues;
 @property (strong, nonatomic) NSArray<UIView *> *cardDots;
 @property (strong, nonatomic) UIButton *diagBtn;
+@property (strong, nonatomic) NSArray<UIView *> *chrome;  // 启动器覆盖层（「画面」揭幕时整体隐藏，露出底层 _gameView）
+@property (strong, nonatomic) UIButton *revealBtn;        // 「画面/启动器」浮标：引擎启动后出现，切游戏画面与启动器
+@property (nonatomic) BOOL gameScreenOn;
 @property (strong, nonatomic) NSLayoutConstraint *colWidthConstraint;
 @property (nonatomic) BOOL triangleRan;
 @property (nonatomic) BOOL probeRan;
@@ -154,6 +157,9 @@ void port17_launcher_note_clr_spent(void) { g_clrSpentBySetup = YES; }
 // 引擎渲染进宿主 CAMetalLayer，熄屏/切走的 GPU 窗口保护与旧引擎模式同需求）。
 static volatile BOOL g_engineRunning = NO;
 BOOL port17_launcher_engine_running(void) { return g_engineRunning; }
+// main.m 的后台断言持有入口（engineTapped 用——DidBecomeActive 的补持只发生在冷启动，
+// 那时引擎还没跑、门控跳过；「点启动游戏后再熄屏」这条路径必须点击时就持上）。
+void port17_launcher_hold_bg_task(void);
 
 // ---- 宿主自己的线程 spawner（16 MB，M1 的教训：GCD 队列的 ~512 KB 栈会死在 CoreCLR）----
 
@@ -220,7 +226,7 @@ static int engine_thread(void)
     append_log(buf);
     // 上次会话留档（启动器「上次引擎会话」卡片的数据源；崩溃另有信号打点）
     char s[64];
-    snprintf(s, sizeof(s), "诊断会话 rc %d", rc);
+    snprintf(s, sizeof(s), "引擎会话 rc %d", rc);
     status_store_set("session_last", s);
     return rc;
 }
@@ -636,7 +642,7 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
         [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?"];
 
     // ---- 状态卡片（五张：值由 refreshCards 填）----
-    NSArray *cardNames = @[@"执行模式（上次会话）", @"Setup v9 改写", @"Mod（上次会话）",
+    NSArray *cardNames = @[@"执行模式（上次会话）", @"Setup v10 改写", @"Mod（上次会话）",
                            @"上次引擎会话", @"本次实况"];
     NSMutableArray *cards = [NSMutableArray array];
     NSMutableArray *values = [NSMutableArray array];
@@ -701,7 +707,8 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
     }
 
     UILabel *foot = launcher_label(12, UIFontWeightRegular, UIColor.tertiaryLabelColor);
-    foot.text = @"游戏就绪时打开 app 自动进引擎；本界面是诊断与数据入口。\n"
+    foot.text = @"游戏就绪时打开 app 自动进引擎；本界面只在无游戏 / 未改写 / 诊断保持时"
+                @"出现——导入导出与诊断入口。\n"
                 @"卡片展示上次会话与本次实况；「日志」随时看全文（port17-ui.log）。\n"
                 @"JIT 需经 StikDebug 拉起（rw17-jit26.js）；解释器路线装完直接开。";
     foot.textAlignment = NSTextAlignmentCenter;
@@ -770,6 +777,22 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
         [g_text.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
         [g_text.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor],
         [g_text.heightAnchor constraintEqualToAnchor:safe.heightAnchor multiplier:0.4],
+    ]];
+
+    // ---- 画面交接：启动器覆盖层清单 + 「画面」浮标 ----
+    // 引擎画面渲染进 _gameView（viewDidLoad 里最底层的 subview），启动器的氛围底/模糊/
+    // 滚动列/图标角标全压在它上面——没有这一步，主菜单就算渲染成功也看不见、摸不着
+    // （触点永远先命中 scroll/按钮，到不了 MetalView）。「画面」浮标把覆盖层整体翻走：
+    // 游戏装载完成后点一下，露出 Metal 层、触点直达游戏；再点切回启动器（诊断/数据入口）。
+    _chrome = @[backdrop, backdropBlur, scroll, iconView, _badgeDot];
+    _revealBtn = launcher_button(@"画面", YES, ^(UIButton *b) { [self revealTapped]; });
+    _revealBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    _revealBtn.layer.zPosition = 600; // 日志覆盖层（500）之上，游戏画面之上永远可点
+    _revealBtn.hidden = YES;          // 引擎启动才出现（诊断模式不需要画面交接）
+    [self.view addSubview:_revealBtn];
+    [NSLayoutConstraint activateConstraints:@[
+        [_revealBtn.topAnchor constraintEqualToAnchor:safe.topAnchor constant:8],
+        [_revealBtn.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-8],
     ]];
 
     // ---- 垫片接线（原 viewDidLoad 原样：日志钩子已由 main() 先装）----
@@ -940,7 +963,9 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
     _engineRan = YES;
     if (_probeRan)
         append_log("注意：探针已用过 CoreCLR——引擎的 coreclr_initialize 大概率 0x80131022，重启 app 直接点「启动游戏」最稳");
-    append_log("启动引擎（AndroidPlatform 线）：引擎跑 16MB 大线程，渲染进宿主 CAMetalLayer，输入经 IosHost 桥喂数");
+    append_log("启动引擎（诊断尝试）：当前正式路是 IOS 后端 + 主线程自动进引擎——本大线程"
+               "尝试预期报 \"must run on the process main thread\"（IOSPlatform 的硬检查）；"
+               "正式路径 = 游戏就绪冷启动自动进。v2（AndroidPlatform 大线程 + 桥）待开闸。");
     g_text.hidden = NO; // 引导期看得见装载日志；「日志」按钮随时收起
     // 桥的初始实况（IosHost.Start 读）：层指针 + 屏幕比例 + 窗口物理尺寸。StartupHook 在
     // 引擎线程上跑，此刻必然已过 viewDidLoad（层已 attach、布局已定）。
@@ -960,7 +985,7 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
         char size[64];
         snprintf(size, sizeof size, "%dx%d", w, h);
         setenv("PORT17_SCREEN_SIZE", size, 1);
-        boot_log([NSString stringWithFormat:@"桥实况：layer=0x%s，%dx%d @%.2fx",
+        boot_log([NSString stringWithFormat:@"宿主层实况（v2 关闸中，诊断用）：layer=0x%s，%dx%d @%.2fx",
             hex, w, h, (double)screen.nativeScale]);
     }
     // triangle_stop 最多等 2 秒循环收尾，别冻主线程。
@@ -968,6 +993,35 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
         triangle_stop();
         run_on_big_thread(engine_thread);
     });
+    // 诊断引擎尝试也从点击起持熄屏断言（正式引擎路由 main.m 的 scene 转交分支持有；
+    // 这里的尝试跑在大线程、没有转交分支，点击即持上，DEVICE_LOST 保护同等适用）。
+    // 主线程调（UIApplication API 要求）；g_engineRunning 置位让状态查询口径一致。
+    g_engineRunning = YES;
+    port17_launcher_hold_bg_task();
+    _revealBtn.hidden = NO; // 从现在起可以切画面/切回启动器（v2 开闸时的画面交接，平时无害）
+}
+
+// 画面交接：on=YES 揭幕（覆盖层整体翻走、触点直达游戏），on=NO 切回启动器。
+- (void)setGameScreen:(BOOL)on
+{
+    _gameScreenOn = on;
+    for (UIView *v in _chrome)
+        v.hidden = on;
+    // 软键盘桥的隐形输入条（120×30，alpha 0.01 恰好在 hit-test 边界内）平时无感，
+    // 游戏画面时正好压住左上角——彻底摘掉（alpha 0 不参与 hit-test；becomeFirstResponder
+    // 不受可见性影响，glfwAndroidShowKeyboard 照常工作），回启动器再放回。
+    _keyboard.alpha = on ? 0.0 : 0.01;
+    g_text.hidden = YES; // 揭幕收日志；切回启动器后「日志」按钮随时再看
+    UIButtonConfiguration *c = _revealBtn.configuration;
+    c.title = on ? @"启动器" : @"画面";
+    _revealBtn.configuration = c;
+    boot_log(on ? @"画面交接：启动器覆盖层已翻走（触点直达游戏）"
+                : @"切回启动器（引擎继续在后台跑）");
+}
+
+- (void)revealTapped
+{
+    [self setGameScreen:!_gameScreenOn];
 }
 
 - (void)triangleTapped:(id)sender

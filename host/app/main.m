@@ -54,8 +54,6 @@ static void engine_main_heartbeat(void)
 }
 static void engine_hold_background_task(void)
 {
-    if (!port17_launcher_engine_running())
-        return; // 启动器自身不需要后台 GPU 窗口；引擎跑着才有在途命令缓冲要保护
     if (g_engineBgTask != UIBackgroundTaskInvalid)
         return;
     g_engineBgTask = [[UIApplication sharedApplication]
@@ -69,10 +67,18 @@ static void engine_hold_background_task(void)
     append_log("🛡️ 引擎后台断言已持有（熄屏/切走时在途 GPU 工作有约 30 秒完成窗口）");
 }
 
+// 启动器「启动游戏」按钮（诊断模式的大线程引擎尝试）的熄屏保护入口：正式引擎路（自动
+// 进引擎）由上面的 scene 转交分支持有断言；这条入口保证诊断尝试从点击起也有同样的
+// DEVICE_LOST 保护（engineTapped 在主线程上调，UIApplication API 要求主线程）。
+void port17_launcher_hold_bg_task(void) { engine_hold_background_task(); }
+
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options
 {
-    // 引擎的 UIKit 会话转交兜底（v2 翻转后引擎不再自建 UIApplicationMain，IOS 后端不被
-    // 选中、WaylithSceneDelegate 不会注册——此分支理论死代码，留着防版本回退）。
+    // 引擎的 UIKit 会话把 scene 交到了我们手里（七跑铁证：execute 活着、引擎的
+    // UIApplicationMain 在等它的 WaylithSceneDelegate 收到 willConnect，UIKit 却调了
+    // 我们的——引擎因此永远等不到 StartApplication，黑屏"无事发生"）。这里转交：
+    // WaylithSceneDelegate 类在引擎跑起来时才注册（运行时 ClassBuilder），引擎没跑
+    // 时不存在——正好也是"进引擎还是进启动器"的判据。
     Class waylith = NSClassFromString(@"WaylithSceneDelegate");
     if (waylith != NULL)
     {
@@ -97,21 +103,7 @@ static void engine_hold_background_task(void)
             [engineDelegate scene:scene willConnectToSession:session options:options];
         return;
     }
-    append_log("启动器 scene 连接（WaylithSceneDelegate 不在 = 引擎没在跑）");
-    // 引擎跑在大线程（启动器点「启动游戏」发起）时：音频心跳的活跃通报照常（
-    // waylithaudio 的停摆看门狗要区分前后台）；后台断言由 engine_hold_background_task
-    // 自查引擎运行标记决定持有与否（m2-engine-14 的熄屏 GPU 窗口保护照旧适用）。
-    g_bgTaskObserver = [[NSNotificationCenter defaultCenter]
-        addObserverForName:UIApplicationDidBecomeActiveNotification
-                    object:nil queue:[NSOperationQueue mainQueue]
-                usingBlock:^(NSNotification *_) {
-                    wa_port17_set_active(1);
-                    engine_hold_background_task();
-                }];
-    g_inactiveObserver = [[NSNotificationCenter defaultCenter]
-        addObserverForName:UIApplicationDidEnterBackgroundNotification
-                    object:nil queue:[NSOperationQueue mainQueue]
-                usingBlock:^(NSNotification *_) { wa_port17_set_active(0); }];
+    append_log("诊断 scene 连接（WaylithSceneDelegate 不在 = 引擎没跑，启动器）");
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
     self.window.rootViewController = [[LauncherVC alloc] init];
@@ -297,12 +289,21 @@ int main(int argc, char *argv[])
                 else
                     append_log("⚠️ setup 没有完成——按日志里的原因处理（重开 app 会再试一次）");
             } else {
-                // 窗口后端反转 v2：不再主线程跑引擎（IOSPlatform 要主线程 UIApplicationMain，
-                // 那条路已被 WAYLITH_BACKEND=Android 废弃）。游戏就绪也先落启动器——玩家在
-                // 启动器点「启动游戏」，引擎上 16MB 大线程（AndroidPlatform 渲染进宿主
-                // CAMetalLayer，输入经 IosHost 桥）。冷启动检测的事实照旧在状态卡上；
-                // session_last 不动（保住上次会话的记录）。
-                boot_log(@"游戏就绪且已改写——启动器先行，点「启动游戏」进引擎（v2：引擎在大线程 + AndroidPlatform）");
+                // 自动进引擎（回退裁决 2026-11-23）：IOS 后端 + 主线程是唯一有真机工时的
+                // 引擎路（0.3.6 出图/可玩/JIT 全在这条链上，M4 触控六件套本就为它设计）。
+                // v2（AndroidPlatform + 大线程 + 桥）六个环节零设备验证——回退成开关：
+                // engine.c 不再置 WAYLITH_BACKEND、IosHost 桥不点亮（AndroidBackend.Open
+                // 的 IsInitialized 门过不去，IOS 后端自然赢），v10 补丁在这条路上休眠无害。
+                // v2 待 IOS 路还清出图/触控/JIT 欠账后再单独开闸（engine.c 置 env + launcher
+                // 点「启动游戏」喂层，代码全在）。
+                boot_log(@"引擎模式：游戏目录在且已改写，主线程直接跑引擎（宿主 UIKit 退位）");
+                const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];
+                const char *home = [NSHomeDirectory() UTF8String];
+                int rc = run_engine(bundle, home);
+                char s[64];
+                snprintf(s, sizeof(s), "引擎 rc %d", rc);
+                port17_status_set(home, "session_last", s);
+                boot_log([NSString stringWithFormat:@"引擎模式结束（run_engine 返回 %d）——落回启动器", rc]);
             }
         }
 
