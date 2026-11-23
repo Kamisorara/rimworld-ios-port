@@ -168,10 +168,64 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 - PortMobile 若引用安卓 mod 管线的类型（ModPrep/Workshop）→ 同步时一并复制或桩化，审计步产出清单；
 - mod 管线 + CoreLib 20 开关与触控线并行推进（触控不依赖 mod，但 PortMobile 的 mod 兼容面依赖）——顺序：探针 → 触控主线，mod 管线随后。
 
+**0.4.x 真机连载（2026-11-23 晚，0.4.0→0.4.5 五轮装载工程）：游戏本体完整进入，手机层装载链五连修，触控六件套进入可裁决状态**
+
+**0.4.0（回退裁决，commit 3beddb9，run 45100332222）**：v2（AndroidPlatform + 大线程 + 桥）六个环节零真机数据，正式引擎路回 IOS 后端 + 主线程自动进引擎（0.3.6 验证链），启动器降为非引擎状态前门，v10 补丁按"休眠无害"假设保留。首测即连环炸，且每一轮的炸点都不重样——0.4.1/0.4.2/0.4.3/0.4.4/0.4.5 五轮各修一处。
+
+**三十七轮（0.4.1）：JIT/普通启动双黑屏——setup 跑在竞技场之前，.ips 裁决 CODESIGNING Invalid Page**：真机双症状：普通启动闪退、StikDebug 会话黑屏。port17-ui 四段会话全部停在「setup：初始化 CoreCLR」，.ips 裁决：`CorHost2::CreateAppDomainWithManager` 里 `blr` 跳进 `rw-/rwx SM=COW` 页（max rwx 当前 rw-，不属于任何已加载镜像），termination = `CODESIGNING / Invalid Page`，ktriage「Failed to fault in a page with execute permissions」——**执行了没有执行权限的页，内核代码签名直接判死**。0.4.0 重构把 `jit26_acquire` 留在 `run_engine` 里，setup 的 coreclr_initialize 无竞技场硬闯：0.3.6 的 PORT17_JIT_RX 门让 W^X=false 走 legacy 单映射，iOS 27 上无签名页不可执行（JIT 会话里 debugserver 吞 fault → 黑屏不闪退，0.2.7 教训的第三次重演）。**修法**：main.m 启动路径先拿竞技场再决定 setup/引擎，拿不到不硬闯（普通启动停启动器并写明"本版只能走 JIT 会话"）；setup 执行模式与引擎门对齐（PORT17_JIT_RX 在位 = InterpMode=0 + R2R 关）；engine.c 见 PORT17_JIT_* 在位不重复握手。**教训（规则化）：混合运行时下任何 coreclr_initialize 位点（setup/engine/探针）都必须先有竞技场，无竞技场一律干净降级。**
+
+**三十八轮（0.4.2）：引擎只试 Android 后端——setup v10 的 IsAndroid 补丁劫持 AutoCandidates**：setup 成功（竞技场就绪后改写通过、改写戳落盘），进引擎即 `PlatformNotSupportedException: No windowing backend could start (tried Android)`，内层 `AndroidHost.Initialize has not been called (it should be called from Application.onCreate)`。根因：v10 的 PatchAndroidGate 把 Waylith.Windowing 全程序集 `OperatingSystem::IsAndroid()` 调用点改成 ldc.i4.1（v2 路线的地基），0.4.0 回退裁决只撤了 WAYLITH_BACKEND env、没撤补丁——反编译核对 `AutoCandidates`：IsAndroid 分支排在 IsIOS 之前，候选表只剩 Android；宿主桥在非 Android 模式不启动 → AndroidBackend.Open 必死，IOS 后端从未进候选。**修法（零 IL 手术）**：反编译确认 `ResolveCandidates` 先读 `WAYLITH_BACKEND` env（Enum.TryParse ignoreCase），engine.c 显式 `setenv WAYLITH_BACKEND=IOS` 绕开被劫持的候选表；补丁留在游戏文件里不再有话语权，runtime.env 仍可覆盖，v2 重开闸保留。附带：探针 run_probe 补同款竞技场闸门（它也是 coreclr_initialize 位点）；engine.c 的改写戳查询 v9→v10 对齐（一直误报 v7）。
+
+**三十九轮（0.4.3）：IOS 后端全链首次活到首帧——Bootstrap.Initialize 死于 PortHooks 版本不匹配**：真机里程碑：**游戏完整装载进入**——Metal 交换链建立（2360×1640 双图像）、CoreAudio 音频（含 3D 定位音效）、VMA、引擎帧心跳 ~30fps、mods=7 装载、主菜单可操作、世界可进、键盘可转视角。死点：`Waylith.Injection.Injection` cctor → `FileNotFoundException: PortHooks, Version=1.0.0.0` → PrepatcherCompat.Install → Environment.FailFast（信号 6；COMPlus_EnableCrashReport 首次完整抓到托管栈，抢救管线按设计工作）。根因：**CoreCLR 的 TPA 绑定要求版本精确匹配**——setup 写进游戏程序集的 PortHooks 引用钉 1.0.0.0（RetargetWaylithClr/ImportPortPlatform），而 prebuilt 全量构建的 PortHooks.dll 是裸 csc 默认的 **0.0.0.0**（0.3.3 时代是 CI 占位件、csproj 钉 1.0.0.0 所以没炸；M4 换本地全量构建后身份变了）。安卓没炸是因为安卓的 PortHooks 在游戏目录走 LoadFromAssemblyPath 路径装载、不查版本。**修法**：build-portlayers.py 生成 AssemblyVersion 特性文件钉 1.0.0.0 重出两个 dll。**插曲（方法论级）**：第一版补丁用了 csc 的 `-version:` 开关——那是"打印编译器版本并退出"，rc=0 静默无产物，靠文件时间戳没变才识破；程序集版本只能走特性。
+
+**四十轮（0.4.4）：手机层静默不装载——OnEntryUIInit 只在游戏目录找 PortMobile.dll**：0.4.3 的包游戏可玩但触控六件套全部静默缺席（只能单击，与未适配完全一致）。日志一行定案：`[port17] no PortMobile.dll next to the game; running without the phone layer`——setup 注入 UIRoot_Entry.Init 的 OnEntryUIInit 用 AppContext.BaseDirectory（游戏目录）找 PortMobile.dll，iOS 包里它在 .app bundle（与 PortHooks 同目录）。**修法**：查不到时回退 PortHooks 程序集所在目录（TPA 装载的 Location 即 bundle）；安卓路径保持原样。**共性教训立项：安卓"游戏目录 next to the game"式查找在 iOS 都要加 bundle 回退（PortHooks/PortMobile/Mono.Cecil 同族）。**
+
+**四十一轮（0.4.5）：手机层启动即死于 Harmony 第一针——mscorlib 引用程序集毒文件**：0.4.4 包真机：`[mobile] starting; Harmony 3.0.0.0, runtime 11.0.0` 后 `HarmonyLib.HarmonySharedState` cctor → `BadImageFormatException 0x80131058: Cannot load a reference assembly for execution 'mscorlib, 4.0.0.0'` → Harmony.Patch → 手机层死（触控仍是单击）。解包实测：bundle 的 mscorlib.dll 带 ReferenceAssembly 标记——自建 CoreCLR 无 mscorlib 实现（真 CoreLib 是 System.Private.CoreLib），collect 从构建产物抓到的是 ref 件；而创意工坊 HarmonyMod/0Harmony 3.0 是 Framework 风格编译，引用 mscorlib 4.0.0.0，TPA 精确命中毒文件。mod 那条 `Lib.Harmony could not be initialized: Patching exception in VersionControl::DrawInfoInCorner` 同根（ModAssemblyHandler 反射 HarmonyMod.RuntimeIL 已先 TypeLoad，见下方新账）。**修法**：官方 ios runtime pack 的 mscorlib facade（同 4.0.0.0 身份、可执行、ReadyToRun 关闭走 JIT）入仓 prebuilt/mscorlib.dll，build-ipa.sh 运行时拷贝后原位覆盖；新包解包验证已是官方形态。附带发现：混合包的 netstandard.dll 是好件（可执行 facade），未中毒。
+
+**当前裁决状态（0.4.5 待测，test_work/m4-touch-9，run 45174007942）**：游戏本体全链已通（IOS 后端 + JIT 竞技场 + 音频 + 世界装载 + 7 个 mod + 键盘输入），手机层装载链五连修后已能启动到 Harmony.Patch。**Harmony detour 本体仍未裁决**——此前所有失败全是外围装载问题，0.4.5 是第一针能真正落到 detour 机制的包。裁决行不变：长按右键/双指缩放/TapAssist 有反应 = M4 触控主线裁决通过；手机层若再死，日志会给出 detour 机制本身的新异常。
+
+**装载连载沉淀的通用规则（后续任何"装了不生效"先查这三条）**：
+1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
+2. iOS 与安卓的宿主件位置不同（bundle vs 游戏目录），"next to the game"式查找必须加 bundle 回退；
+3. TPA 绑定按名字+版本+公钥精确匹配，且引用程序集不可执行——Framework 风格 mod 依赖的 mscorlib/netstandard facade 必须是可执行件（mscorlib 已换官方 facade；netstandard 实测本就是好件）。
+
+**新账（本轮连载产出）**：
+- mod 程序集的 WaylithClr.* 引用改道未覆盖 Mods 目录：创意工坊 HarmonyMod 的 RuntimeIL 程序集引用 WaylithClr.MethodBodyClause/MethodBodyTransformer（指 System.Private.CoreLib）→ TypeLoadException → 该 mod 的 Harmony 初始化失败。属差距 #4 的实施范围，M4 后半做 CoreLib 开关时把 Mods 目录纳入改道（ModPrep 管线）；
+- collect-runtime.sh 的 ref 件长期修：mscorlib 已在包层兜底（官方 facade 覆盖），正解是 collect 时排除 ref 件或改取官方 pack；其余 305 个 dll 游戏本体已在用 = 实现件无恙。
+
 ### M5 玩家可用 beta
 - 导入流程进程内化（iOS 无 fork，PortSetup 不能独立进程）；
 - 内存整理策略对齐 jetsam（8GB 设备前台约 6–7GB 上限，无 swap、超限即杀）；
 - 玩家文档（SideStore 安装、StikDebug 开 JIT 步骤）。
+
+## 与安卓畅玩版的差距清点（2026-11-23，0.4.0 时点）
+
+参照物 = 安卓畅玩版：samilry 真机 130+ mods 游玩、57 FPS / 359 TPS、创意工坊下载器（2.5GB 合集约 17 分钟）、ModPrep 规则 v14、34 个热门界面 mod 冒烟测试零移植层报错。
+
+### 已对齐（不再入账）
+
+- **托管层全量同源**：hooks 25 个共享文件全在（WaylithClr 替身 / HarmonyCompat / InlineWatch / Textures+Astc 的 BC 兜底 / AndroidFonts / ModPrep 机制…）+ IosHost；`mobile/` 65 个文件与安卓逐一同名（触控六件套在内）。
+- **原生库逐项对齐**：Slang 2026.19（着色器缓存键与 PC 绑定）、KTX 4.4.0、astcenc 5.7 NEON、VMA、stb、gli、waylithaudio、GLFW 垫片、Vulkan 前向层（MoltenVK）。
+- **触控契约**：`glfwAndroid*` 扩展与安卓完全同名，PortMobile 的 P/Invoke 原样工作（ENGINE-NATIVE-CONTRACT 既定）。
+
+### 差距（按畅玩影响排序）
+
+| # | 项 | 状态 | 影响 | 收口动作 |
+|---|---|---|---|---|
+| 1 | **Harmony detour 在 iOS 未实测**（M4 五步之第一步「成败手」） | **装载链已通（0.4.5）**：0.4.1–0.4.4 连修五关（竞技场时序 / Android 后端劫持 / PortHooks 版本 / PortMobile 查找路径 / mscorlib 毒 facade，详见 M4 的 0.4.x 连载），PortMobile 已能启动到 Harmony.Patch；detour 本体待 0.4.5 真机裁决 | 成败手，一切触控裁决的前提 | 0.4.5 裁决：长按右键有反应 = detour 通过；仍失败则日志给 detour 本体的异常，做探针件定位 |
+| 2 | **M4 触控六件套真机裁决**（长按右键/双指缩放/TapAssist/惯性滚动/虚拟鼠标键/KeyWheel） | 工程 + 装载链完成；键盘输入已验通（0.4.3 真机），触控待 0.4.5 起逐项裁决 | 触控体验对齐安卓 | 0.4.5 起逐项裁决清单 |
+| 3 | **JIT 常开** | 平台约束：每次启动经 StikDebug + rw17-jit26.js 拉起才全速；普通打开 = 解释器（能玩、慢数倍） | 畅玩第一差距，平台天花板无工程解 | 玩家文档把 StikDebug 流程写清（M5） |
+| 4 | **CoreLib 补丁重移植 + libcoreclr 二进制补丁 iOS 版** | **调研已完成（2026-11-23，docs/NET11-COMPARISON.md）**：10.0.12→v11.0.0 判定平滑——20 开关的全部 CoreLib 锚点在 v11 原样存活（抽查复核过）；affinity 字节补丁上游 #125361 已修（iOS 不需要，划掉）；dualjit patch 对 GA tag 实测干净套用，且 v11 上游反而更贴我们的 hybrid 形状（DCC 闸门/iOS 解释器进 CI）。**12 项改动清单已成文**（托管 6 开关 + 原生 initonly + 私有 API 五件），待实施 | 游戏本体不受阻（0.3.6 实证可玩）；影响集中在 PC mod 的反射/DynamicMethod 边缘用法与两个显示细节（小人昵称哈希漂移、浮点位数） | M4 后半开工即做：源码补丁路线（patches/ 同 dualjit 机制），实施顺序见 NET11-COMPARISON.md §3 |
+| 5 | **ModRules.txt（RimSort 社区加载顺序库）未入包** | ModPrep 机制及其规则（v14）随 hooks 已入库——缺的是另一回事：`communityRules.json` 转换的紧凑文本（after/before/top/bottom/incompatible），给 mod 排序界面用；游戏有网时也能自己下载转换 | 已知冲突对的顺序修正缺失，特定 mod 组合可能排序不当；小列表几乎无感 | 打包件（modrules/build.js 产物入 IPA）或运行期自下载兜底 |
+| 6 | **PortWorkshop 创意工坊下载器未移植** | 安卓有（workshop/：Downloads/Session/Updates/WorkshopWindow）；iOS 无 | 便利大件；zip 导入链兜底 | M5 候选 |
+| 7 | **NotoEmoji 兜底字体未入包** | 已知未清项 | 游戏文本 emoji/特殊字形缺字 | 打包件 |
+| 8 | **内存/jetsam 对齐** | MemTrim shared 已编译；jetsam 策略（8GB 设备 6–7GB 上限、无 swap 超限即杀）未做 | 大 mod 列表长会话可能被杀 | M5 |
+
+平台性差异（不算缺口）：后台执行仅 ~30 秒窗口（安卓前台服务可挂后台下载，iOS 做不到）；崩溃报告为 signal + .ips + stderr 抢救（安卓为 Java 报告体系）。
+
+### 建议顺序
+
+0.4.0 真机裁决（#1/#2 同场）→ #1 挂则 Harmony 探针件 → #5/#7 打包件顺手一次 CI → #4 CoreLib/libcoreclr 对齐 → #6 工坊移植 → #8 内存策略。
 
 ## 开放风险
 
