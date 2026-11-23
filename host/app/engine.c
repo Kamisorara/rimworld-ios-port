@@ -394,9 +394,9 @@ int run_engine(const char *bundle_dir, const char *home)
     // 文件后来被替换过。（只认当前版戳；老的 os-detect+platform 组合不再放行。）
     {
         char stamp[1100];
-        snprintf(stamp, sizeof stamp, "%s/port17-setup.v9.stamp", game);
+        snprintf(stamp, sizeof stamp, "%s/port17-setup.v10.stamp", game);
         if (!file_exists(stamp))
-            host_log("引擎：没有当前版改写戳（port17-setup.v7.stamp）——这份游戏文件没被最新 setup 改写过；"
+            host_log("引擎：没有当前版改写戳（port17-setup.v10.stamp）——这份游戏文件没被最新 setup 改写过；"
                      "重开 app 会让宿主自动跑设备内 setup");
     }
 
@@ -475,12 +475,16 @@ int run_engine(const char *bundle_dir, const char *home)
     }
     setenv("COMPlus_EnableCrashReport", "1", 1);
     setenv("COMPlus_EnableDiagnostics", "1", 1);
-    // 窗口后端（回退裁决 2026-11-23）：不置 WAYLITH_BACKEND，走原生候选评估——IOS 后端
-    // 在 iOS 上自然赢（AndroidBackend.Open 的 IsInitialized 门只有 v2 桥能点亮，桥在非
-    // Android 模式不启动；v10 补丁的 IsAndroid 门开着也选不中 Android）。v2 重开闸：
-    // 这里 setenv("WAYLITH_BACKEND","Android",1) + launcher 点「启动游戏」喂宿主层，
-    // 桥/补丁/画面交接代码全部在库待命。
-    host_log("引擎：窗口后端原生选路（IOS 后端 + 主线程；v2 开关未启用）");
+    // 窗口后端（0.4.2 修正）：显式 WAYLITH_BACKEND=IOS。0.4.0 的"原生候选评估"不成立——
+    // setup v10 把 Waylith.Windowing 全程序集的 OperatingSystem::IsAndroid() 改成了
+    // ldc.i4.1，而 AutoCandidates 里 IsAndroid 分支排在 IsIOS 前面，候选表只剩 Android；
+    // 宿主桥在非 Android 模式不启动，AndroidBackend.Open 抛 "AndroidHost.Initialize has
+    // not been called"，引擎随即 PlatformNotSupportedException: No windowing backend could
+    // start (tried Android)（m4-touch-5 真机日志）。ResolveCandidates 先读 env，Enum.TryParse
+    // (ignoreCase) 认 "IOS"，补丁留在游戏文件里不再有话语权。runtime.env 仍可覆盖（它在
+    // 内置之后应用）；v2 重开闸 = 这里改置 Android + launcher 喂宿主层。
+    setenv("WAYLITH_BACKEND", "IOS", 1);
+    host_log("引擎：窗口后端 = IOS（WAYLITH_BACKEND=IOS，绕开被 v10 补丁改写的 AutoCandidates）");
 
     // <game>/runtime.env: NAME=value per line (a bare NAME= unsets), after the built-ins.
     {

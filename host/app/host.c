@@ -1,4 +1,5 @@
 #include "host.h"
+#include "jit26.h"
 
 #include <TargetConditionals.h>
 #include <dlfcn.h>
@@ -616,6 +617,20 @@ int run_probe(const char *bundle_dir)
     setenv("COMPlus_EnableCrashReport", "1", 1);
     setenv("COMPlus_EnableDiagnostics", "1", 1);
     stderr_tailer_start();
+    // 0.4.2：探针也是 coreclr_initialize 位点——混合运行时没有竞技场就没有可执行内存
+    //（m4-touch-5 的 .ips：run_probe → coreclr_initialize → CODESIGNING Invalid Page，
+    // 与 setup/引擎同一个死法）。启动路径可能已拿好（PORT17_JIT_* 在位），没有就自己
+    // 拿一次；拿不到就干净退出，不硬闯。
+    if (getenv("PORT17_JIT_RX") == NULL) {
+        int csdbg = port17_jit26_cs_debugged();
+        int arena = csdbg == 1 ? port17_jit26_acquire() : 0;
+        if (arena != 1) {
+            host_log("探针：没有 JIT 竞技场——混合运行时在 iOS 27 上没有可执行内存，"
+                     "探针需要经 StikDebug + rw17-jit26.js 拉起的会话");
+            stderr_tailer_stop();
+            return -6;
+        }
+    }
     host_log("初始化 CoreCLR…（JIT26 握手在初始化内进行：等脚本 ≤120 秒 + 逐页扫写 1–2 分钟；期间 [rw17-arena] 进度实时滚动）");
     void *host = NULL;
     unsigned int domain = 0;
