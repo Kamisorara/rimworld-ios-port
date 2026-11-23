@@ -184,7 +184,7 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **四十二轮（0.4.6）：宿主没带 Harmony 本体，触控层找 3.0.0.0 找不到**：0.4.5 包真机两次 `PortMobile.Entry.Start()` 直接 `FileNotFoundException: 0Harmony, Version=3.0.0.0`（20:31:38 / 20:31:58），同一会话游戏与存档本身继续正常装载——所以用户看到的仍是"无触控优化，只能单击"。根因是打包依赖缺口，不是触控逻辑失效，也不是玩家手动安装 Harmony mod 的问题：PortMobile 静态引用 `0Harmony 3.0.0.0`；安卓 staging 会把改写过的 0Harmony 放进游戏目录，iOS build-ipa 只拷了 PortHooks/PortMobile 没拷 Harmony；m4-touch-9 的激活列表只有官方 6 个 DLC，`0 mod assemblies asked for`，玩家后来手动放进来的 Harmony 也没机会被加载。**修法**：新增 `scripts/patch-harmony`，从创意工坊 1.7 Harmony 生成 iOS 兼容副本并执行设备 setup 同款 14 处改写（GetFieldLax、LaxCallOpcode、NormalizeHarmonyStack），产物入仓 prebuilt/0Harmony.dll；build-ipa.sh 校验并拷进 .app 根。StartupHook 已有的逻辑会把任何 mod 自带的 0Harmony 统一改道到宿主这份。版本升 0.4.6。
 
-**当前裁决状态（0.4.6 待测）**：游戏本体全链已通（IOS 后端 + JIT 竞技场 + 音频 + 世界装载 + 官方 DLC + 键盘输入）；手机层此前仍没走到 Harmony.Patch，0.4.5 的死点是宿主没带 0Harmony。**Harmony detour 本体仍未裁决**。裁决行不变：0.4.6 日志必须不再有 `the phone layer failed to start`，且长按右键/双指缩放/TapAssist 有反应 = M4 触控主线裁决通过；手机层若再死，日志会给出 detour 机制本身的新异常。
+**当前裁决状态（0.4.6 待测，test_work/m4-touch-10，run 45176863568）**：游戏本体全链已通（IOS 后端 + JIT 竞技场 + 音频 + 世界装载 + 官方 DLC + 键盘输入）；手机层此前仍没走到 Harmony.Patch，0.4.5 的死点是宿主没带 0Harmony。IPA 已解包核验 `Payload/Port17Host.app/0Harmony.dll` 在位且版本显示 0.4.6（SHA256 `B6BE14EE…DF09`）。**Harmony detour 本体仍未裁决**。裁决行不变：0.4.6 日志必须不再有 `the phone layer failed to start`，且长按右键/双指缩放/TapAssist 有反应 = M4 触控主线裁决通过；手机层若再死，日志会给出 detour 机制本身的新异常。
 
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这三条）**：
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
