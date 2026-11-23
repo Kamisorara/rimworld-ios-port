@@ -182,7 +182,9 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **四十一轮（0.4.5）：手机层启动即死于 Harmony 第一针——mscorlib 引用程序集毒文件**：0.4.4 包真机：`[mobile] starting; Harmony 3.0.0.0, runtime 11.0.0` 后 `HarmonyLib.HarmonySharedState` cctor → `BadImageFormatException 0x80131058: Cannot load a reference assembly for execution 'mscorlib, 4.0.0.0'` → Harmony.Patch → 手机层死（触控仍是单击）。解包实测：bundle 的 mscorlib.dll 带 ReferenceAssembly 标记——自建 CoreCLR 无 mscorlib 实现（真 CoreLib 是 System.Private.CoreLib），collect 从构建产物抓到的是 ref 件；而创意工坊 HarmonyMod/0Harmony 3.0 是 Framework 风格编译，引用 mscorlib 4.0.0.0，TPA 精确命中毒文件。mod 那条 `Lib.Harmony could not be initialized: Patching exception in VersionControl::DrawInfoInCorner` 同根（ModAssemblyHandler 反射 HarmonyMod.RuntimeIL 已先 TypeLoad，见下方新账）。**修法**：官方 ios runtime pack 的 mscorlib facade（同 4.0.0.0 身份、可执行、ReadyToRun 关闭走 JIT）入仓 prebuilt/mscorlib.dll，build-ipa.sh 运行时拷贝后原位覆盖；新包解包验证已是官方形态。附带发现：混合包的 netstandard.dll 是好件（可执行 facade），未中毒。
 
-**当前裁决状态（0.4.5 待测，test_work/m4-touch-9，run 45174007942）**：游戏本体全链已通（IOS 后端 + JIT 竞技场 + 音频 + 世界装载 + 7 个 mod + 键盘输入），手机层装载链五连修后已能启动到 Harmony.Patch。**Harmony detour 本体仍未裁决**——此前所有失败全是外围装载问题，0.4.5 是第一针能真正落到 detour 机制的包。裁决行不变：长按右键/双指缩放/TapAssist 有反应 = M4 触控主线裁决通过；手机层若再死，日志会给出 detour 机制本身的新异常。
+**四十二轮（0.4.6）：宿主没带 Harmony 本体，触控层找 3.0.0.0 找不到**：0.4.5 包真机两次 `PortMobile.Entry.Start()` 直接 `FileNotFoundException: 0Harmony, Version=3.0.0.0`（20:31:38 / 20:31:58），同一会话游戏与存档本身继续正常装载——所以用户看到的仍是"无触控优化，只能单击"。根因是打包依赖缺口，不是触控逻辑失效，也不是玩家手动安装 Harmony mod 的问题：PortMobile 静态引用 `0Harmony 3.0.0.0`；安卓 staging 会把改写过的 0Harmony 放进游戏目录，iOS build-ipa 只拷了 PortHooks/PortMobile 没拷 Harmony；m4-touch-9 的激活列表只有官方 6 个 DLC，`0 mod assemblies asked for`，玩家后来手动放进来的 Harmony 也没机会被加载。**修法**：新增 `scripts/patch-harmony`，从创意工坊 1.7 Harmony 生成 iOS 兼容副本并执行设备 setup 同款 14 处改写（GetFieldLax、LaxCallOpcode、NormalizeHarmonyStack），产物入仓 prebuilt/0Harmony.dll；build-ipa.sh 校验并拷进 .app 根。StartupHook 已有的逻辑会把任何 mod 自带的 0Harmony 统一改道到宿主这份。版本升 0.4.6。
+
+**当前裁决状态（0.4.6 待测）**：游戏本体全链已通（IOS 后端 + JIT 竞技场 + 音频 + 世界装载 + 官方 DLC + 键盘输入）；手机层此前仍没走到 Harmony.Patch，0.4.5 的死点是宿主没带 0Harmony。**Harmony detour 本体仍未裁决**。裁决行不变：0.4.6 日志必须不再有 `the phone layer failed to start`，且长按右键/双指缩放/TapAssist 有反应 = M4 触控主线裁决通过；手机层若再死，日志会给出 detour 机制本身的新异常。
 
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这三条）**：
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
@@ -212,8 +214,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 | # | 项 | 状态 | 影响 | 收口动作 |
 |---|---|---|---|---|
-| 1 | **Harmony detour 在 iOS 未实测**（M4 五步之第一步「成败手」） | **装载链已通（0.4.5）**：0.4.1–0.4.4 连修五关（竞技场时序 / Android 后端劫持 / PortHooks 版本 / PortMobile 查找路径 / mscorlib 毒 facade，详见 M4 的 0.4.x 连载），PortMobile 已能启动到 Harmony.Patch；detour 本体待 0.4.5 真机裁决 | 成败手，一切触控裁决的前提 | 0.4.5 裁决：长按右键有反应 = detour 通过；仍失败则日志给 detour 本体的异常，做探针件定位 |
-| 2 | **M4 触控六件套真机裁决**（长按右键/双指缩放/TapAssist/惯性滚动/虚拟鼠标键/KeyWheel） | 工程 + 装载链完成；键盘输入已验通（0.4.3 真机），触控待 0.4.5 起逐项裁决 | 触控体验对齐安卓 | 0.4.5 起逐项裁决清单 |
+| 1 | **Harmony detour 在 iOS 未实测**（M4 五步之第一步「成败手」） | **装载链仍在收尾**：0.4.1–0.4.6 连修六关（竞技场时序 / Android 后端劫持 / PortHooks 版本 / PortMobile 查找路径 / mscorlib 毒 facade / 宿主缺 0Harmony，详见 M4 的 0.4.x 连载）；0.4.6 才是 Harmony 库与 detour 能真正执行的包 | 成败手，一切触控裁决的前提 | 0.4.6 裁决：长按右键有反应 = detour 通过；仍失败则日志给 detour 本体的异常，做探针件定位 |
+| 2 | **M4 触控六件套真机裁决**（长按右键/双指缩放/TapAssist/惯性滚动/虚拟鼠标键/KeyWheel） | 工程 + 装载链完成；键盘输入已验通（0.4.3 真机），触控待 0.4.6 起逐项裁决 | 触控体验对齐安卓 | 0.4.6 起逐项裁决清单 |
 | 3 | **JIT 常开** | 平台约束：每次启动经 StikDebug + rw17-jit26.js 拉起才全速；普通打开 = 解释器（能玩、慢数倍） | 畅玩第一差距，平台天花板无工程解 | 玩家文档把 StikDebug 流程写清（M5） |
 | 4 | **CoreLib 补丁重移植 + libcoreclr 二进制补丁 iOS 版** | **调研已完成（2026-11-23，docs/NET11-COMPARISON.md）**：10.0.12→v11.0.0 判定平滑——20 开关的全部 CoreLib 锚点在 v11 原样存活（抽查复核过）；affinity 字节补丁上游 #125361 已修（iOS 不需要，划掉）；dualjit patch 对 GA tag 实测干净套用，且 v11 上游反而更贴我们的 hybrid 形状（DCC 闸门/iOS 解释器进 CI）。**12 项改动清单已成文**（托管 6 开关 + 原生 initonly + 私有 API 五件），待实施 | 游戏本体不受阻（0.3.6 实证可玩）；影响集中在 PC mod 的反射/DynamicMethod 边缘用法与两个显示细节（小人昵称哈希漂移、浮点位数） | M4 后半开工即做：源码补丁路线（patches/ 同 dualjit 机制），实施顺序见 NET11-COMPARISON.md §3 |
 | 5 | **ModRules.txt（RimSort 社区加载顺序库）未入包** | ModPrep 机制及其规则（v14）随 hooks 已入库——缺的是另一回事：`communityRules.json` 转换的紧凑文本（after/before/top/bottom/incompatible），给 mod 排序界面用；游戏有网时也能自己下载转换 | 已知冲突对的顺序修正缺失，特定 mod 组合可能排序不当；小列表几乎无感 | 打包件（modrules/build.js 产物入 IPA）或运行期自下载兜底 |
