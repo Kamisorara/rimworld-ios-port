@@ -200,6 +200,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **当前裁决状态（0.4.9 待测）**：平台三件套、exhelper、clrjit 路径均已钉死。下一层若仍失败，重点看 `Core110Runtime` 的 JIT 版本校验、vtable hook、以及 MonoMod 的 mmap/内存分配；长按右键/双指缩放/TapAssist 有反应 = M4 触控主线通过。
 
+**0.4.9 包落位（test_work/m4-touch-13，run 45184113647）**：IPA SHA256 `4AC15A60…C2431`；解包核验版本 0.4.9，`libport17jit.dylib` 在位并导出 `_getJit`（68,416 字节，已签名），`0Harmony.dll` 反编译确认 `GetClrJitPath()` 返回 `<bundle>/libport17jit.dylib`。
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这三条）**：
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
 2. iOS 与安卓的宿主件位置不同（bundle vs 游戏目录），"next to the game"式查找必须加 bundle 回退；
