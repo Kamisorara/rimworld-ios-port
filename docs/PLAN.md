@@ -188,7 +188,7 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **四十三轮（0.4.7）：MonoMod 平台探测把 iPad 当 Unknown ARM——detour 第一跳就死**：0.4.6 日志已到 `[mobile] starting; Harmony 3.0.0.0`，第一个 patch（InlineGuard 守卫 `PatchFunctions.UpdateWrapper`）在 `HarmonyLib.PatchTools.DetourMethodDefault` 进入 MonoMod；`CreateCurrentSystem()` 判到 OSX，但 `MacOSSystem..ctor` 抛 `NotImplementedException`。反编译定案：MacOSSystem 只支持 x86_64/Arm64，iOS 的 uname 机器名是 `iPad16,8` 而不是 `arm64`，MonoMod 的通用探测留给 Unknown；启动期按 `RuntimeInformation.ProcessArchitecture` 兜底也错过（嫌疑：iOS host 报 Arm，不是 Arm64）。**修法**：patch-harmony 在离线出包时把 `PlatformDetection.DetectPlatformInfo()` 整体钉成 `(OSKind.OSX, ArchitectureKind.Arm64)`——IOS 分支本身也是 MonoMod 的 NotImplementedException，只能走 macOS ARM64 路线；幂等抽检 14 处 PortPlatform 兼容改写不变。另设 `MONOMOD_HelperDropPath=<game>/mm-helpers`，把 MonoMod macOS exhelper 的 mkstemp 默认 `/tmp/...` 拉回 iOS 容器内。版本升 0.4.7。
 
-**当前裁决状态（0.4.7 待测）**：MonoMod 平台三件套（OSX + Arm64 + CoreCLR）钉死后，detour 才能真正完成。裁决行不变：日志必须不再有 `MacOSSystem..ctor` / `NotImplementedException` / `the phone layer failed to start`，且长按右键/双指缩放/TapAssist 有反应 = M4 触控主线裁决通过。
+**当前裁决状态（0.4.7 待测，test_work/m4-touch-11，run 45179179709）**：IPA SHA256 `97A904AA…473E`；解包核验版本 0.4.7，`0Harmony.dll` 尺寸 2,026,496，反编译确认 `DetectPlatformInfo()` 已直接返回 `(OSX, Arm64)`。MonoMod 平台三件套（OSX + Arm64 + CoreCLR）钉死后，detour 才能真正完成。裁决行不变：日志必须不再有 `MacOSSystem..ctor` / `NotImplementedException` / `the phone layer failed to start`，且长按右键/双指缩放/TapAssist 有反应 = M4 触控主线裁决通过。
 
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这三条）**：
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
