@@ -88,6 +88,15 @@ def csc(rsp_path):
 out = os.path.join(IOS, "prebuilt")
 os.makedirs(out, exist_ok=True)
 
+# 程序集版本钉 1.0.0.0：setup/Setup.cs 写进游戏程序集的 PortHooks 引用就是这个版本，
+# CoreCLR 的 TPA 绑定要求版本精确匹配（m4-touch-6：0.0.0.0 的 dll 一装载即
+# FileNotFoundException → Injection cctor → Environment.FailFast）。Roslyn csc 没有
+# 程序集版本的命令行开关（-version 是"打印编译器版本并退出"），只能走特性。
+attrs = os.path.join(out, "Version.cs")
+with open(attrs, "w", newline="\n") as f:
+    f.write('[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]\n')
+    f.write('[assembly: System.Reflection.AssemblyFileVersion("1.0.0.0")]\n')
+
 # ---- PortHooks.dll：24 个同步文件 + iOS 验证版 WaylithClr.cs + hooks/ModPrep.cs ----
 hook_srcs = [f for f in sources("hooks") if os.path.basename(f) != "BuiltFor.cs"]
 rsp = os.path.join(out, "hooks.rsp")
@@ -103,6 +112,7 @@ with open(rsp, "w", newline="\n") as f:
         w(f'-r:"{os.path.join(GAME, name + ".dll")}"\n')
     for s in hook_srcs:
         w(f'"{s}"\n')
+    w(f'"{attrs}"\n')
 print(f"PortHooks: {len(hook_srcs)} 个源文件")
 csc(rsp)
 
@@ -128,7 +138,7 @@ with open(rsp, "w", newline="\n") as f:
         # 同一件事，game-stage-relaxed/ 由 scripts/relax-initonly 产出）。
         w(f'-r:"{HARMONY if name == "0Harmony" else os.path.join(GAME_STAGE, name + ".dll")}"\n')
     w(f'-r:"{os.path.join(out, "PortHooks.dll")}"\n')
-    for s in mobile_srcs + [builtfor]:
+    for s in mobile_srcs + [builtfor, attrs]:
         w(f'"{s}"\n')
 print(f"PortMobile: {len(mobile_srcs) + 1} 个源文件（含 BuiltFor {version}）")
 csc(rsp)
