@@ -24,6 +24,12 @@ void glfwIosAttach(void* metalLayer, void* view, void* keyboardField);
 // The shim's own logging into the host's log system (installed before anything else).
 void glfwIosSetLogSink(void (*sink)(const char*));
 
+// The managed bridge's event sink (hooks/IosHost.cs, at StartupHook time): every host event gets a
+// side-channel copy for the engine's AndroidPlatform (WAYLITH_BACKEND=Android feeds off that queue,
+// beside the GLFW queue PortMobile reads). Field order matches the C# PortIosEvent (natural alignment).
+typedef struct Port17IosEvent { int32_t kind; int64_t i0, i1, i2; float f0, f1; int64_t timeMs; } Port17IosEvent;
+void glfwIosSetEventSink(void (*sink)(const Port17IosEvent*));
+
 // The view's bounds changed (rotation, stage changes): the window's pixel size is taken again.
 void glfwIosViewResized(void);
 

@@ -32,4 +32,8 @@ void port17_launcher_status_line(const char *line);
 // 重开 app，不去撞 CoreCLR 单实例的 0x80131022。
 void port17_launcher_note_clr_spent(void);
 
+// 引擎会话进行中（启动器的大线程跑 run_engine 期间为真）。SceneDelegate 的后台
+// 断言按它决定要不要持有（引擎渲染进宿主 CAMetalLayer，GPU 后台窗口保护照旧）。
+BOOL port17_launcher_engine_running(void);
+
 #endif

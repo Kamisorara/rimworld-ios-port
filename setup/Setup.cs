@@ -27,7 +27,17 @@
 //        实际 mip 数——资产包命中后的上传永远只读已存层（纯 memcpy、BC7 原样上 GPU），
 //        "BC7 解码 → Kaiser 补链 → 重编码"的昂贵路径从上传不可达（m2-engine-19 栈转储
 //        定案；与 slang/探针/缓存历史全脱钩）。代价：mip 层数少于元数据要求，远景画质略降。
-//   成功写 port17-setup.stamp（宿主认它决定进引擎还是先跑 setup）。
+//   v10（窗口后端反转 v2：WAYLITH_BACKEND=Android 走引擎自带 AndroidPlatform，宿主喂数——
+//     启动器先行的地基；AndroidHost 的 IsInitialized/IsApplicationThread 两道门由
+//     hooks/IosHost.cs 反射直写字段点亮，不在此处）：
+//    9.  OperatingSystem::IsAndroid 调用点（Waylith.Windowing 全程序集，AutoCandidates 与
+//        AndroidBackend.Open 两处）→ ldc.i4.1（后端选择与门 1；IsIOS 不用动——env 强制候选表）。
+//   10.  AndroidPlatform 的静态字段 s_extensions 字面量 "VK_KHR_android_surface" →
+//        "VK_EXT_metal_surface"（MoltenVK 的 surface 扩展；VK_KHR_surface 保持）。
+//   11.  new AndroidSurfaceHandle(...) 两处（AndroidWindow.InitialSurface getter 与
+//        AndroidPlatform.OnSurfaceChanged）→ new IOSSurfaceHandle(...)（同为单 nint 参数，
+//        VulkanSurface.Create 的 IOS 分支 → vkCreateMetalSurfaceEXT，layer=宿主 CAMetalLayer）。
+//   成功写 port17-setup.v10.stamp（宿主认它决定进引擎还是先跑 setup）。
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -77,6 +87,9 @@ namespace Port17Setup
                 ForceConservativeTier(game, ref changed, ref kept);
                 CheapTextureChain(game, ref changed, ref kept);
                 PersistentDataUnderDocuments(game, ref changed, ref kept);
+                PatchAndroidGate(game, ref changed, ref kept);
+                SwapAndroidSurfaceExtension(game, ref changed, ref kept);
+                RetargetAndroidSurfaceHandle(game, ref changed, ref kept);
                 PortMobileSupport(game, bundle, ref changed, ref kept);
                 HarmonyCompatRewrites(game, bundle, ref changed, ref kept);
                 MarkArm64(game);
@@ -86,8 +99,8 @@ namespace Port17Setup
                 Say("[setup] failed: " + e);
                 return 3;
             }
-            File.WriteAllLines(Path.Combine(game, "port17-setup.v9.stamp"),
-                new[] { "Port17Setup v9", "changed=" + changed, "kept=" + kept });
+            File.WriteAllLines(Path.Combine(game, "port17-setup.v10.stamp"),
+                new[] { "Port17Setup v10", "changed=" + changed, "kept=" + kept });
             Say($"[setup] done: {changed} rewritten, {kept} already");
             return 0;
         }
@@ -101,8 +114,17 @@ namespace Port17Setup
                 return null;
             var resolver = new DefaultAssemblyResolver();
             resolver.AddSearchDirectory(game);
-            return AssemblyDefinition.ReadAssembly(path,
-                new ReaderParameters { AssemblyResolver = resolver, ReadingMode = ReadingMode.Immediate });
+            try
+            {
+                return AssemblyDefinition.ReadAssembly(path,
+                    new ReaderParameters { AssemblyResolver = resolver, ReadingMode = ReadingMode.Immediate });
+            }
+            catch (BadImageFormatException)
+            {
+                // 原生 dll（waylithaudio / slang / steam_api 等非托管件）不是 .NET 程序集——
+                // Steam 原件目录直接跑 setup 时会撞上（打包 zip 的设备路径不含它们），跳过
+                return null;
+            }
         }
 
         private static void Save(string game, string dll, AssemblyDefinition asm)
@@ -111,7 +133,26 @@ namespace Port17Setup
             string tmp = path + ".p17tmp";
             asm.Write(tmp);
             asm.Dispose();
-            File.Move(tmp, path, true);
+            // 写完立刻 Move 会撞杀毒扫描的锁（本地 Windows 实测，目标被占着 Delete 权）——
+            // 短暂重试后退化 Copy+Delete（Copy 只要写权，扫到一半的目标也能盖）
+            for (int attempt = 0; attempt < 10; attempt++)
+            {
+                try
+                {
+                    File.Move(tmp, path, true);
+                    return;
+                }
+                catch (IOException)
+                {
+                    System.Threading.Thread.Sleep(500);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    System.Threading.Thread.Sleep(500);
+                }
+            }
+            File.Copy(tmp, path, true);
+            File.Delete(tmp);
         }
 
         private static TypeDefinition FindType(AssemblyDefinition asm, string fullName) =>
@@ -445,7 +486,16 @@ namespace Port17Setup
                     continue;
                 if (!ContainsBytes(path, needle))
                     continue;
-                var asm = Open(game, name);
+                AssemblyDefinition asm;
+                try
+                {
+                    asm = Open(game, name);
+                }
+                catch (Exception e)
+                {
+                    Say("[setup] " + name + ": 打不开（" + e.GetType().Name + ": " + e.Message + "）——跳过");
+                    continue;
+                }
                 if (asm == null)
                     continue;
                 using (asm)
@@ -643,6 +693,150 @@ namespace Port17Setup
             }
         }
 
+        // ---- v10-9. OperatingSystem::IsAndroid 调用点 → true（窗口后端反转 v2） ----
+
+        // Waylith.Windowing 全程序集的 IsAndroid 调用点（ilspy 核实两处：AutoCandidates 的
+        // 候选表分支、AndroidBackend.Open 的门 1）全改 ldc.i4.1——WAYLITH_BACKEND=Android
+        // 时 env 候选表不走 AutoCandidates，Open 的门必须真开。多命中允许（语义一致：
+        // 本进程就是"跑安卓后端的宿主"）。
+        private static void PatchAndroidGate(string game, ref int changed, ref int kept)
+        {
+            const string dll = "Waylith.Windowing.dll";
+            var asm = Open(game, dll);
+            if (asm == null)
+            {
+                Say($"[setup] {dll}: not present, skipped");
+                return;
+            }
+            using (asm)
+            {
+                int did = 0;
+                foreach (var m in AllMethods(asm))
+                {
+                    var il = m.Body.GetILProcessor();
+                    var hits = m.Body.Instructions.Where(i =>
+                        (i.OpCode == OpCodes.Call || i.OpCode == OpCodes.Callvirt) &&
+                        i.Operand is MethodReference mr &&
+                        mr.DeclaringType?.FullName == "System.OperatingSystem" &&
+                        mr.Name == "IsAndroid").ToList();
+                    foreach (var call in hits)
+                    {
+                        il.InsertAfter(call, Instruction.Create(OpCodes.Ldc_I4_1));
+                        var anchor = call.Next;
+                        for (int n = 0; n < 3; n++)
+                        {
+                            il.InsertAfter(anchor, Instruction.Create(OpCodes.Nop));
+                            anchor = anchor.Next;
+                        }
+                        il.Remove(call);
+                        did++;
+                    }
+                }
+                if (did > 0)
+                {
+                    Save(game, dll, asm);
+                    Say($"[setup] {dll}: OperatingSystem::IsAndroid() → true ×{did}（AndroidBackend 门 1 开）");
+                    changed += did;
+                }
+                else
+                {
+                    Say($"[setup] {dll}: IsAndroid 已改或不在（跳过）");
+                    kept++;
+                }
+            }
+        }
+
+        // ---- v10-10. Vulkan 实例扩展换 Metal 面（AndroidPlatform 的静态扩展表） ----
+
+        // s_extensions = { "VK_KHR_surface", "VK_KHR_android_surface" } 在 AndroidPlatform 的
+        // .cctor 里；MoltenVK 没有 android surface 扩展，IOS 面走 VK_EXT_metal_surface——
+        // ldstr 字面量原位换（patch 8 的 AppData 同款姿势）。
+        private static void SwapAndroidSurfaceExtension(string game, ref int changed, ref int kept)
+        {
+            const string dll = "Waylith.Windowing.dll";
+            const string type = "Waylith.Windowing.Backends.Android.AndroidPlatform";
+            var asm = Open(game, dll);
+            if (asm == null)
+                return; // PatchAndroidGate 已报缺席
+            using (asm)
+            {
+                var t = FindType(asm, type) ?? throw new InvalidOperationException($"{dll}: {type} 不在");
+                var cctor = t.Methods.FirstOrDefault(x => x.Name == ".cctor" && x.HasBody)
+                    ?? throw new InvalidOperationException($"{dll}: {type}::.cctor 不在——版本变了？");
+                var hits = cctor.Body.Instructions
+                    .Where(i => i.OpCode == OpCodes.Ldstr && (string)i.Operand == "VK_KHR_android_surface").ToList();
+                if (hits.Count == 0)
+                {
+                    bool already = cctor.Body.Instructions
+                        .Any(i => i.OpCode == OpCodes.Ldstr && (string)i.Operand == "VK_EXT_metal_surface");
+                    if (already)
+                    {
+                        Say($"[setup] {dll}: s_extensions 已是 metal_surface（跳过）");
+                        kept++;
+                        return;
+                    }
+                    throw new InvalidOperationException($"{dll}: {type}::.cctor 里没有 android_surface 字面量——版本变了");
+                }
+                if (hits.Count != 1)
+                    throw new InvalidOperationException($"{dll}: android_surface 字面量 {hits.Count} 处（期望 1）——版本变了");
+                hits[0].Operand = "VK_EXT_metal_surface";
+                Save(game, dll, asm);
+                Say($"[setup] {dll}: RequiredVulkanInstanceExtensions → surface + metal_surface（MoltenVK 面）");
+                changed++;
+            }
+        }
+
+        // ---- v10-11. AndroidSurfaceHandle → IOSSurfaceHandle（两处 newobj 原位换） ----
+
+        // AndroidWindow.InitialSurface getter 与 AndroidPlatform.OnSurfaceChanged 各构造一次
+        // AndroidSurfaceHandle(nint)；IOSSurfaceHandle(nint MetalLayer) 同为单 nint 参数——
+        // newobj 操作数原位换，栈形不变。VulkanSurface.Create 的 IOS 分支拿 Layer 走
+        // vkCreateMetalSurfaceEXT（decomp 5790 的 MaOSSurfaceHandle/IOSSurfaceHandle 合并分支）。
+        private static void RetargetAndroidSurfaceHandle(string game, ref int changed, ref int kept)
+        {
+            const string dll = "Waylith.Windowing.dll";
+            const string from = "Waylith.Windowing.AndroidSurfaceHandle";
+            const string to = "Waylith.Windowing.IOSSurfaceHandle";
+            var asm = Open(game, dll);
+            if (asm == null)
+                return;
+            using (asm)
+            {
+                var toType = FindType(asm, to) ?? throw new InvalidOperationException($"{dll}: {to} 不在");
+                var toCtor = toType.Methods.FirstOrDefault(x => x.IsConstructor && x.Parameters.Count == 1)
+                    ?? throw new InvalidOperationException($"{dll}: {to} 缺单参 .ctor");
+                int did = 0;
+                foreach (var t in asm.MainModule.Types)
+                {
+                    foreach (var m in t.Methods)
+                    {
+                        if (!m.HasBody)
+                            continue;
+                        foreach (var i in m.Body.Instructions)
+                        {
+                            if (i.OpCode == OpCodes.Newobj && i.Operand is MethodReference mr &&
+                                mr.DeclaringType?.FullName == from)
+                            {
+                                i.Operand = asm.MainModule.ImportReference(toCtor);
+                                did++;
+                            }
+                        }
+                    }
+                }
+                if (did > 0)
+                {
+                    Save(game, dll, asm);
+                    Say($"[setup] {dll}: new AndroidSurfaceHandle → IOSSurfaceHandle ×{did}（vkCreateMetalSurfaceEXT 面）");
+                    changed += did;
+                }
+                else
+                {
+                    Say($"[setup] {dll}: AndroidSurfaceHandle 构造已改或不在（跳过）");
+                    kept++;
+                }
+            }
+        }
+
         // ---- 9. 机器类型 AMD64 → ARM64（原地 2 字节，幂等） ----
 
         private static void MarkArm64(string game)
@@ -780,7 +974,16 @@ namespace Port17Setup
                 if (name.StartsWith("System", StringComparison.Ordinal) ||   // 运行时件不碰（v8 同规）
                     name == "PortHooks.dll" || name == "PortMobile.dll")
                     continue;
-                var asm = Open(game, name);
+                AssemblyDefinition asm;
+                try
+                {
+                    asm = Open(game, name);
+                }
+                catch (Exception e)
+                {
+                    Say("[setup] " + name + ": 打不开（" + e.GetType().Name + ": " + e.Message + "）——跳过");
+                    continue;
+                }
                 if (asm == null)
                     continue;
                 using (asm)
@@ -839,7 +1042,15 @@ namespace Port17Setup
 
                     if (n > 0)
                     {
-                        Save(game, name, asm);
+                        try
+                        {
+                            Save(game, name, asm);
+                        }
+                        catch (Exception e)
+                        {
+                            Say("[setup] " + name + ": 写回失败（" + e.GetType().Name + ": " + e.Message + "）——跳过该程序集");
+                            continue;
+                        }
                         Say("[setup] " + name + ": PortMobile 支撑 " + n + " 处（钩/改道/initonly/豁免）");
                         did += n;
                     }
@@ -991,6 +1202,8 @@ namespace Port17Setup
             {
                 foreach (TypeReference reference in module.GetTypeReferences())
                 {
+                    if (reference.Scope == module)
+                        continue; // 本模块引用不过 resolver——Resolve 会把自己读进缓存并锁住稍后的写回
                     TypeDefinition type = TryResolve(reference.Resolve);
                     Check(type, type);
                 }
@@ -998,6 +1211,8 @@ namespace Port17Setup
                 {
                     if (reference.DeclaringType is ArrayType)
                         continue;
+                    if (reference.DeclaringType is TypeReference dt && dt.Scope == module)
+                        continue; // 同上
                     IMemberDefinition member = reference is MethodReference method ? TryResolve(method.Resolve)
                         : reference is FieldReference field ? TryResolve(field.Resolve) : null;
                     Check(member, member?.DeclaringType);

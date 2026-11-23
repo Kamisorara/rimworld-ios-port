@@ -54,6 +54,8 @@ static void engine_main_heartbeat(void)
 }
 static void engine_hold_background_task(void)
 {
+    if (!port17_launcher_engine_running())
+        return; // 启动器自身不需要后台 GPU 窗口；引擎跑着才有在途命令缓冲要保护
     if (g_engineBgTask != UIBackgroundTaskInvalid)
         return;
     g_engineBgTask = [[UIApplication sharedApplication]
@@ -69,11 +71,8 @@ static void engine_hold_background_task(void)
 
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options
 {
-    // 引擎的 UIKit 会话把 scene 交到了我们手里（七跑铁证：execute 活着、引擎的
-    // UIApplicationMain 在等它的 WaylithSceneDelegate 收到 willConnect，UIKit 却调了
-    // 我们的——引擎因此永远等不到 StartApplication，黑屏"无事发生"）。这里转交：
-    // WaylithSceneDelegate 类在引擎跑起来时才注册（运行时 ClassBuilder），引擎没跑
-    // 时不存在——正好也是"进引擎还是进启动器"的判据。
+    // 引擎的 UIKit 会话转交兜底（v2 翻转后引擎不再自建 UIApplicationMain，IOS 后端不被
+    // 选中、WaylithSceneDelegate 不会注册——此分支理论死代码，留着防版本回退）。
     Class waylith = NSClassFromString(@"WaylithSceneDelegate");
     if (waylith != NULL)
     {
@@ -98,7 +97,21 @@ static void engine_hold_background_task(void)
             [engineDelegate scene:scene willConnectToSession:session options:options];
         return;
     }
-    append_log("诊断 scene 连接（WaylithSceneDelegate 不在 = 引擎没跑，启动器）");
+    append_log("启动器 scene 连接（WaylithSceneDelegate 不在 = 引擎没在跑）");
+    // 引擎跑在大线程（启动器点「启动游戏」发起）时：音频心跳的活跃通报照常（
+    // waylithaudio 的停摆看门狗要区分前后台）；后台断言由 engine_hold_background_task
+    // 自查引擎运行标记决定持有与否（m2-engine-14 的熄屏 GPU 窗口保护照旧适用）。
+    g_bgTaskObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:UIApplicationDidBecomeActiveNotification
+                    object:nil queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *_) {
+                    wa_port17_set_active(1);
+                    engine_hold_background_task();
+                }];
+    g_inactiveObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:UIApplicationDidEnterBackgroundNotification
+                    object:nil queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *_) { wa_port17_set_active(0); }];
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
     self.window.rootViewController = [[LauncherVC alloc] init];
@@ -263,7 +276,7 @@ int main(int argc, char *argv[])
             // 只认当前版本的 setup 戳——旧的 os-detect+platform 组合旁路曾把版本轮换架空
             // （v6 补丁在设备上从未执行：用户游戏目录里有这对老戳，setupDone 恒真）。
             // PC 打包流程的旧戳副本：setup 重跑一遍全幂等，顺手补写当前版戳，无害。
-            NSString *stamp = [gameNS stringByAppendingPathComponent:@"port17-setup.v9.stamp"];
+            NSString *stamp = [gameNS stringByAppendingPathComponent:@"port17-setup.v10.stamp"];
             BOOL setupDone = [fm fileExistsAtPath:stamp];
             if (!setupDone) {
                 boot_log(@"游戏文件是原件（没有改写戳）——先跑设备内 setup（安卓同款体验），完成后请重开 app");
@@ -284,14 +297,12 @@ int main(int argc, char *argv[])
                 else
                     append_log("⚠️ setup 没有完成——按日志里的原因处理（重开 app 会再试一次）");
             } else {
-                boot_log(@"引擎模式：游戏目录在且已改写，主线程直接跑引擎（宿主 UIKit 退位）");
-                const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];
-                const char *home = [NSHomeDirectory() UTF8String];
-                int rc = run_engine(bundle, home);
-                char s[64];
-                snprintf(s, sizeof(s), "引擎 rc %d", rc);
-                port17_status_set(home, "session_last", s);
-                boot_log([NSString stringWithFormat:@"引擎模式结束（run_engine 返回 %d）——落回启动器", rc]);
+                // 窗口后端反转 v2：不再主线程跑引擎（IOSPlatform 要主线程 UIApplicationMain，
+                // 那条路已被 WAYLITH_BACKEND=Android 废弃）。游戏就绪也先落启动器——玩家在
+                // 启动器点「启动游戏」，引擎上 16MB 大线程（AndroidPlatform 渲染进宿主
+                // CAMetalLayer，输入经 IosHost 桥）。冷启动检测的事实照旧在状态卡上；
+                // session_last 不动（保住上次会话的记录）。
+                boot_log(@"游戏就绪且已改写——启动器先行，点「启动游戏」进引擎（v2：引擎在大线程 + AndroidPlatform）");
             }
         }
 

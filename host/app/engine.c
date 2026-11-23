@@ -465,6 +465,12 @@ int run_engine(const char *bundle_dir, const char *home)
     }
     setenv("COMPlus_EnableCrashReport", "1", 1);
     setenv("COMPlus_EnableDiagnostics", "1", 1);
+    // 窗口后端反转 v2：强制引擎走自带 AndroidPlatform（宿主驱动的安卓形态，启动器先行的
+    // 地基）。Setup v10 已开 AndroidBackend 的 IsAndroid 门、换 Metal 面扩展与 surface 类型；
+    // hooks/IosHost（StartupHook）点亮 AndroidHost 的另两道门并喂数。引擎不再要求主线程
+    // UIApplicationMain——IOSPlatform（需主线程）永不被选中。
+    setenv("WAYLITH_BACKEND", "Android", 1);
+    host_log("引擎：WAYLITH_BACKEND=Android（AndroidPlatform + IosHost 桥；surface=宿主 CAMetalLayer）");
 
     // <game>/runtime.env: NAME=value per line (a bare NAME= unsets), after the built-ins.
     {

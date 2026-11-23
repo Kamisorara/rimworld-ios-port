@@ -49,6 +49,32 @@ static void log_line(const char* fmt, ...)
     fprintf(stderr, "[glfw] %s\n", text);
 }
 
+// ---- the managed bridge's event sink (窗口后端反转 v2) ----
+// hooks/IosHost.cs 在 StartupHook 时注册：每个宿主事件（触点/按键/字符/前后台/尺寸）旁路
+// 一份给它——引擎的 AndroidPlatform（WAYLITH_BACKEND=Android）靠这个队列喂数，与 GLFW 队列
+// （PortMobile 的触控层读）并行不互斥。Port17IosEvent（glfw_ios.h）的字段顺序与 C# 的
+// PortIosEvent 逐字段对齐（自然对齐）。
+static void (*g_event_sink)(const Port17IosEvent*) = NULL;
+
+API void glfwIosSetEventSink(void (*sink)(const Port17IosEvent*))
+{
+    g_event_sink = sink;
+}
+
+static int64_t boot_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static void emit_event(int kind, int64_t i0, int64_t i1, int64_t i2, float f0, float f1)
+{
+    if (!g_event_sink) return;
+    Port17IosEvent e = { kind, i0, i1, i2, f0, f1, boot_ms() };
+    g_event_sink(&e);
+}
+
 // ---- GLFW constants (glfw3.h, 3.4) ----
 #define GLFW_TRUE 1
 #define GLFW_FALSE 0
@@ -338,12 +364,23 @@ API void glfwIosViewResized(void)
 {
     window_pixels_from_view();
     apply_drawable_size();
+    // 引擎的 surface/窗口尺寸跟着 drawable 走（渲染尺寸即换出 swapchain 尺寸）
+    emit_event(5, 0, engine_width_locked(), engine_height_locked(), 0, 0);
 }
 
 // Application lifecycle (main thread): the background takes the window away (no drawable comes from a
 // background CAMetalLayer), the foreground brings it back — the Android TERM/INIT window semantics.
 API void glfwIosApplicationEvent(int event)
 {
+    // 归一给桥：1=active(resume) 2=resign(pause) 3=background(stop) 4=foreground(start)
+    switch (event)
+    {
+    case GLFWIOS_DID_BECOME_ACTIVE: emit_event(4, 1, 0, 0, 0, 0); break;
+    case GLFWIOS_WILL_RESIGN_ACTIVE: emit_event(4, 2, 0, 0, 0, 0); break;
+    case GLFWIOS_DID_ENTER_BACKGROUND: emit_event(4, 3, 0, 0, 0, 0); break;
+    case GLFWIOS_WILL_ENTER_FOREGROUND: emit_event(4, 4, 0, 0, 0, 0); break;
+    default: break;
+    }
     switch (event)
     {
     case GLFWIOS_WILL_RESIGN_ACTIVE:
@@ -385,6 +422,7 @@ API void glfwIosTouch(int type, int id, float x, float y)
     double py = y * g_scalePt * sy;
     pthread_mutex_unlock(&g_lock);
     record_touch(type, id, (float)px, (float)py);
+    emit_event(1, type, id, 0, (float)px, (float)py); // 引擎的 AndroidPlatform 也要原始触点（窗口像素）
     if (g_touchManaged) return;
 
     // Mouse emulation (the PC input the engine is written for): first finger = cursor + left button,
@@ -436,6 +474,7 @@ API void glfwIosKey(int glfwKey, int action, int mods)
 {
     if (glfwKey < 0) return;
     push(EV_KEY, glfwKey, 0, action, mods, 0, 0);
+    emit_event(2, glfwKey, action, mods, 0, 0);
 }
 
 // Text from the hardware keyboard (UIKey.characters) or the managed layer.
@@ -443,6 +482,7 @@ API void glfwIosChar(unsigned int codepoint, int mods)
 {
     if (codepoint == 0) return;
     push(EV_CHAR, (int)codepoint, mods, 0, 0, 0, 0);
+    emit_event(3, codepoint, mods, 0, 0, 0);
 }
 
 // The soft keyboard's commit (main thread): every finger of the text as its own char event, the code

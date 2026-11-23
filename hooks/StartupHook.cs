@@ -661,6 +661,10 @@ internal static class StartupHook
 		bool invariant = AppContext.TryGetSwitch("System.Globalization.Invariant", out bool on) && on;
 		Console.WriteLine("[port17] globalization: " + (invariant ? "invariant (no ICU)" : "ICU, as on the PC (zh-CN October: " + System.Globalization.CultureInfo.GetCultureInfo("zh-CN").DateTimeFormat.GetMonthName(10) + ")"));
 		Console.WriteLine("[port17] startup hook installed (Unity assembly names resolve to UnityStubs)");
+		// 窗口后端反转 v2 的宿主桥（AndroidPlatform 喂数——WAYLITH_BACKEND=Android 时引擎的
+		// AndroidBackend.Open 在这条线程上构造平台，两道门由桥点亮）。失败只记日志：
+		// 桥不可用时引擎自报 "No windowing backend could start"，不至于哑崩。
+		PortHooks.IosHost.Start();
 		PortDiag.StartIfRequested();
 	}
 

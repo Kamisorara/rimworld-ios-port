@@ -150,6 +150,11 @@ NSString *port17_diag_hold_path(void)
 static BOOL g_clrSpentBySetup = NO;
 void port17_launcher_note_clr_spent(void) { g_clrSpentBySetup = YES; }
 
+// 引擎会话进行中（引擎线程生命周期；SceneDelegate 的后台断言按它决定要不要持有——
+// 引擎渲染进宿主 CAMetalLayer，熄屏/切走的 GPU 窗口保护与旧引擎模式同需求）。
+static volatile BOOL g_engineRunning = NO;
+BOOL port17_launcher_engine_running(void) { return g_engineRunning; }
+
 // ---- 宿主自己的线程 spawner（16 MB，M1 的教训：GCD 队列的 ~512 KB 栈会死在 CoreCLR）----
 
 static void *thread_run(void *arg)
@@ -204,10 +209,12 @@ static void *probe_thread(void *unused)
 static int engine_thread(void)
 {
     boot_log(@"engine 线程启动（16MB 栈）");
+    g_engineRunning = YES;
     const char *bundle = [[NSBundle mainBundle].bundlePath UTF8String];
     const char *home = [NSHomeDirectory() UTF8String];
     port17_install_game_zip(home); // 诊断模式里丢进来的 zip 也装上（装完再判定）
     int rc = run_engine(bundle, home);
+    g_engineRunning = NO;
     char buf[64];
     snprintf(buf, sizeof(buf), "run_engine 返回 %d", rc);
     append_log(buf);
@@ -672,7 +679,7 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
     _cardDots = dots;
 
     // ---- 操作按钮：主=启动引擎，次级两行胶囊 ----
-    UIButton *engineBtn = launcher_button(@"启动引擎", YES, ^(UIButton *b) { [self engineTapped:b]; });
+    UIButton *engineBtn = launcher_button(@"启动游戏", YES, ^(UIButton *b) { [self engineTapped:b]; });
     UIButton *importBtn = launcher_button(@"导入 zip", NO, ^(UIButton *b) { [self importTapped:b]; });
     UIButton *exportBtn = launcher_button(@"导出", NO, ^(UIButton *b) { [self exportTapped:b]; });
     _diagBtn = launcher_button([LauncherVC diagHoldOn] ? @"下次进引擎" : @"下次诊断", NO, ^(UIButton *b) { [self diagTapped:b]; });
@@ -848,7 +855,7 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
     BOOL stamped = NO;
     if (game)
         stamped = [fm fileExistsAtPath:
-            [NSString stringWithFormat:@"%s/port17-setup.v9.stamp", gameDir]];
+            [NSString stringWithFormat:@"%s/port17-setup.v10.stamp", gameDir]];
 
     // 1 执行模式（上次会话）：jit_effective + jit_arena
     NSString *jit = port17_status_get(h, "jit_effective", v, sizeof v) ? @(v) : nil;
@@ -864,7 +871,7 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
     // 2 Setup v9：本次实况（戳）+ 上次结果
     NSString *setupLast = port17_status_get(h, "setup_last", v, sizeof v) ? @(v) : nil;
     NSString *setupText = !game ? @"游戏不在"
-        : stamped ? @"已改写（v9 戳在）"
+        : stamped ? @"已改写（v10 戳在）"
         : @"未改写——下次启动先跑 setup";
     if (setupLast)
         setupText = [NSString stringWithFormat:@"%@\n上次：%@", setupText, setupLast];
@@ -932,10 +939,30 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
     }
     _engineRan = YES;
     if (_probeRan)
-        append_log("注意：探针已用过 CoreCLR——引擎的 coreclr_initialize 大概率 0x80131022，重启 app 直接点「启动引擎」最稳");
-    append_log("诊断模式试跑引擎：装载链（TPA/CLR/程序集/引擎 Main）全验证；窗口后端例外——");
-    append_log("5014 引擎的 iOS 后端要求主线程并自建 UIApplicationMain，只能由重启后的引擎模式（Documents/game 在即自动）满足");
+        append_log("注意：探针已用过 CoreCLR——引擎的 coreclr_initialize 大概率 0x80131022，重启 app 直接点「启动游戏」最稳");
+    append_log("启动引擎（AndroidPlatform 线）：引擎跑 16MB 大线程，渲染进宿主 CAMetalLayer，输入经 IosHost 桥喂数");
     g_text.hidden = NO; // 引导期看得见装载日志；「日志」按钮随时收起
+    // 桥的初始实况（IosHost.Start 读）：层指针 + 屏幕比例 + 窗口物理尺寸。StartupHook 在
+    // 引擎线程上跑，此刻必然已过 viewDidLoad（层已 attach、布局已定）。
+    {
+        CAMetalLayer *layer = (CAMetalLayer *)_gameView.layer;
+        char hex[32];
+        snprintf(hex, sizeof hex, "%llX", (unsigned long long)(uintptr_t)layer);
+        setenv("PORT17_METAL_LAYER", hex, 1);
+        UIScreen *screen = _gameView.window.screen ?: UIScreen.mainScreen;
+        char scale[32];
+        snprintf(scale, sizeof scale, "%.4f", screen.nativeScale);
+        setenv("PORT17_SCREEN_SCALE", scale, 1);
+        CGSize drawable = layer.drawableSize;
+        CGSize viewPx = _gameView.bounds.size;
+        int w = (int)(drawable.width > 0 ? drawable.width : viewPx.width * screen.nativeScale);
+        int h = (int)(drawable.height > 0 ? drawable.height : viewPx.height * screen.nativeScale);
+        char size[64];
+        snprintf(size, sizeof size, "%dx%d", w, h);
+        setenv("PORT17_SCREEN_SIZE", size, 1);
+        append_log([NSString stringWithFormat:@"桥实况：layer=0x%s，%dx%d @%.2fx",
+            hex, w, h, (double)screen.nativeScale]);
+    }
     // triangle_stop 最多等 2 秒循环收尾，别冻主线程。
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
         triangle_stop();
