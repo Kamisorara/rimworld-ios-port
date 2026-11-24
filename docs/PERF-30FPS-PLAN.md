@@ -7,6 +7,9 @@
 
 ## 0.4.28 实施状态（E0 已写入包）
 
+待测包：`test_work/m4-touch-31/port17host-m2.ipa`（run 45499640519，提交 `a4e8951`）。
+IPA 哈希、关键 DLL 哈希和真机观测点见 `docs/PLAN.md` 的 0.4.28 包落位。
+
 0.4.28 在 `libvulkan.dylib` 里包装 `vkGetInstanceProcAddr` / `vkGetDeviceProcAddr`，对
 `vkExportMetalObjectsEXT`、`vkQueueSubmit`、`vkQueuePresentKHR`、`vkAcquireNextImageKHR`、
 `vkWaitForFences`、`vkCreateSwapchainKHR`、`vkGetSwapchainImagesKHR` 分开计时，每 5 秒输出
