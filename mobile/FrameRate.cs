@@ -251,9 +251,14 @@ namespace PortMobile
 		public static void EveryFrame()
 		{
 			ResolutionChoice.Tick();
-			if (Application.targetFrameRate != limit)
+			// iOS: the engine's own present pacing adds SleepUntil(PresentAt) in the render thread, which stacks
+			// with FIFO vsync to double the frame time (work 0.6 ms + throttle 32 ms = 33 ms = 30 fps). Setting
+			// targetFrameRate to -1 makes _frameRateCapIsFifoSafetyNet true: NextPresentTime returns 0, the
+			// render thread skips PaceToPresentTime, and FifoCapEngaged lets vsync do the pacing alone.
+			int toldTarget = OperatingSystem.IsIOS() ? -1 : limit;
+			if (Application.targetFrameRate != toldTarget)
 			{
-				Application.targetFrameRate = limit;
+				Application.targetFrameRate = toldTarget;
 			}
 			// The window is made anew when the game comes back from the background, so the compositor is told again
 			// now and then (the shim only logs a change).

@@ -146,6 +146,27 @@ namespace PortMobile
 			try
 			{
 				iosWindowType = AccessTools.TypeByName("Waylith.Windowing.Backends.IOS.IOSWindow");
+				if (iosWindowType != null)
+				{
+					Console.WriteLine("[mobile] resolution: IOSWindow type found via TypeByName");
+				}
+				else
+				{
+					foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+					{
+						iosWindowType = assembly.GetType("Waylith.Windowing.Backends.IOS.IOSWindow");
+						if (iosWindowType != null)
+						{
+							Console.WriteLine("[mobile] resolution: IOSWindow type found via assembly scan");
+							break;
+						}
+					}
+				}
+				if (iosWindowType == null)
+				{
+					Console.WriteLine("[mobile] resolution: Waylith.Windowing.Backends.IOS.IOSWindow not found; the drawable is left at the screen's size");
+					return;
+				}
 				iosViewField = AccessTools.Field(iosWindowType, "_view");
 				iosLayerField = AccessTools.Field(iosWindowType, "_layer");
 				iosHandleLayout = AccessTools.Method(iosWindowType, "HandleLayout");
@@ -154,13 +175,45 @@ namespace PortMobile
 					Console.WriteLine("[mobile] resolution: IOSWindow's view or layout not found; the drawable is left at the screen's size");
 					return;
 				}
+				Console.WriteLine("[mobile] resolution: IOSWindow's fields and layout found");
 				Type viewType = iosViewField.FieldType, layerType = iosLayerField.FieldType;
+				Console.WriteLine("[mobile] resolution: view type " + viewType.FullName + ", layer type " + layerType.FullName);
 				iosBoundsGetter = AccessTools.PropertyGetter(viewType, "Bounds");
+				if (iosBoundsGetter == null)
+				{
+					Console.WriteLine("[mobile] resolution: view Bounds property not found; the drawable is left at the screen's size");
+					return;
+				}
 				iosScaleGetter = AccessTools.PropertyGetter(viewType, "ContentScaleFactor");
+				if (iosScaleGetter == null)
+				{
+					Console.WriteLine("[mobile] resolution: view ContentScaleFactor property not found; the drawable is left at the screen's size");
+					return;
+				}
 				iosSetScale = AccessTools.Method(viewType, "SetContentScaleFactor");
+				if (iosSetScale == null)
+				{
+					Console.WriteLine("[mobile] resolution: view SetContentScaleFactor method not found; the drawable is left at the screen's size");
+					return;
+				}
 				iosSetContentsScale = AccessTools.Method(layerType, "SetContentsScale");
+				if (iosSetContentsScale == null)
+				{
+					Console.WriteLine("[mobile] resolution: layer SetContentsScale method not found; the drawable is left at the screen's size");
+					return;
+				}
 				iosRectSizeField = AccessTools.Field(iosBoundsGetter.ReturnType, "Size");
+				if (iosRectSizeField == null)
+				{
+					Console.WriteLine("[mobile] resolution: bounds Size field not found; the drawable is left at the screen's size");
+					return;
+				}
 				iosSizeHeightField = AccessTools.Field(iosRectSizeField.FieldType, "Height");
+				if (iosSizeHeightField == null)
+				{
+					Console.WriteLine("[mobile] resolution: size Height field not found; the drawable is left at the screen's size");
+					return;
+				}
 				harmony.Patch(iosHandleLayout, prefix: new HarmonyMethod(typeof(ResolutionChoice), nameof(BeforeHandleLayout)));
 				Console.WriteLine("[mobile] resolution: IOSWindow.HandleLayout patched");
 			}
