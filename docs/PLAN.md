@@ -262,6 +262,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **六十轮裁决与修法（0.4.21，配置读取兜底）**：0.4.20 真机日志确认版本与 display link 设置都生效，但 `rendering at 1552x1080` 未出现，swapchain 仍为 2360×1640，活性 +451/15s、+419/15s；用户确认 `mobile.txt` 已放在 `Documents/game`。因此问题收敛为 `Settings` 未读到 `renderHeight`，而不是 `glfwSetWindowSize` 或 GPU。0.4.21 做两层兜底：`Settings` 启动时打印实际读取路径、文件是否存在、条目数和 `renderHeight` 值，并额外尝试 `mobile.txt.txt`；`ResolutionChoice` 在 iOS 且屏幕高度大于 1200 时默认 `renderHeight=1080`，这样即使文件名/编码/路径仍有问题，也会先降低渲染负载；显式 `renderHeight=0` 仍恢复原生。`PortMobile.dll` 530,944 字节、SHA256 `E4E542826B64FBB7D3270721A80C2FE6D3320BAB29F1A48FC848910D619B957A`；反编译确认默认值与设置日志已入产物；`patch-harmony smoke prebuilt/0Harmony.dll` 退出码 0。版本升 0.4.21。**待真机裁决。**
 
+**0.4.21 包落位（test_work/m4-touch-25，run [45405467677](https://github.com/Kamisorara/rimworld-ios-port/actions/runs/45405467677)，push 自 0b1b024）**：IPA SHA256 `4F46DB0069DB7B14721EB7660C639F9C86C4396304DF402946768D6A7E627983`（63,016,757 字节）。解包核验版本 0.4.21；包内 `PortMobile.dll` SHA256 `E4E542826B64FBB7D3270721A80C2FE6D3320BAB29F1A48FC848910D619B957A`，与 prebuilt 一致；`PortHooks.dll` SHA256 `B739B85FEA83B0B893B9B6EAF03A519AA4741DF07919283F9017AF221E4FED41`、`0Harmony.dll` SHA256 `2A69CBFAF07D2A2441D90ADBD8F6BC8BE9D2976DF4A61A46E97C0F31E56053BD`，均与 prebuilt 一致。反编译确认包内默认 `renderHeight=1080` 与 `Settings` 路径日志均已入产物。对包内 `0Harmony.dll` 直接跑 smoke：arena、Core110 入口、JIT vtable 交换、Resolve 与 exhelper 可选路径通过，退出码 0。**待真机裁决。**下次日志看什么：`安装身份 版本=0.4.21`、`[mobile] settings: ... renderHeight=1080`、`[mobile] resolution: rendering at 1552x1080`、`port17 活性` 是否到 +900/15s；若仍约 30fps，再改 `mobile.txt` 的 `renderHeight=720` 冷启动对照。
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这十一条）**：
 
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
