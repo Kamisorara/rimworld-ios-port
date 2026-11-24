@@ -232,12 +232,12 @@ static void apply_perf_config(void)
                  !strcmp(key, "mvkSynchronousQueueSubmits") ||
                  !strcmp(key, "mvkPrefillMetalCommandBuffers"))
         {
-            NSString *env = [key isEqualToString:@"mvkPerformanceTracking"]
-                ? @"MVK_CONFIG_PERFORMANCE_TRACKING"
-                : [key isEqualToString:@"mvkSynchronousQueueSubmits"]
-                    ? @"MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS"
-                    : @"MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS";
-            setenv(env.UTF8String, value, 1);
+            const char *env = "MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS";
+            if (!strcmp(key, "mvkPerformanceTracking"))
+                env = "MVK_CONFIG_PERFORMANCE_TRACKING";
+            else if (!strcmp(key, "mvkSynchronousQueueSubmits"))
+                env = "MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS";
+            setenv(env, value, 1);
             boot_log([NSString stringWithFormat:@"perf config: %s=%s", key, value]);
         }
     }
