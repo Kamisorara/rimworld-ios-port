@@ -61,6 +61,7 @@ namespace PortMobile
 
 		private static int displayRate;
 		private static float displayAskedAt = -10f;
+		private static int preferred;
 
 		/// <summary>The display's refresh rate, asked at most once a second (0: not known).</summary>
 		private static int DisplayRate()
@@ -259,6 +260,7 @@ namespace PortMobile
 			{
 				told = limit;
 				toldCountdown = 600;
+				TellDisplayLink();
 				try
 				{
 					glfwAndroidSetFrameRate(limit);
@@ -266,6 +268,36 @@ namespace PortMobile
 				catch (Exception)
 				{
 				}
+			}
+		}
+
+		/// <summary>
+		/// CADisplayLink's zero range is not Apple's range default: it invites a coarse divisor and this
+		/// engine's loop lands at 30 Hz on ProMotion. Give the option's rate as the preferred rate, and
+		/// 120 as the ceiling; iOS clamps the ceiling to what the display policy allows.
+		/// </summary>
+		private static void TellDisplayLink()
+		{
+			try
+			{
+				var window = Waylith.EngineApplication.Instance?.Window;
+				if (window == null)
+				{
+					return;
+				}
+				window.PreferredFrameRate = new Waylith.Windowing.FrameRateRange(
+					Waylith.Windowing.RefreshRate.FromHz((uint)limit),
+					Waylith.Windowing.RefreshRate.FromHz(120u),
+					Waylith.Windowing.RefreshRate.FromHz((uint)limit));
+				if (preferred != limit)
+				{
+					preferred = limit;
+					Console.WriteLine("[mobile] display link preferred " + limit + " (range " + limit + "-120)");
+				}
+			}
+			catch (Exception e)
+			{
+				Console.WriteLine("[mobile] display link frame rate not set: " + e);
 			}
 		}
 

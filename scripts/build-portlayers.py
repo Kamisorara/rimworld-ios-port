@@ -57,7 +57,7 @@ MOBILE_REFS_RT = ["System.Runtime", "System.Runtime.Loader", "System.Console", "
 
 GAME_HOOK_REFS = ["Waylith", "Brutal.Vulkan", "Brutal.Core.Common", "System.IO.Hashing"]
 GAME_MOBILE_REFS = ["Assembly-CSharp", "UnityStubs", "0Harmony", "Waylith", "Waylith.UnityCompat",
-    "Brutal.Vulkan", "Brutal.Vulkan.Abstractions", "Brutal.Vulkan.Vma", "Brutal.Core.Numerics",
+    "Waylith.Windowing", "Brutal.Vulkan", "Brutal.Vulkan.Abstractions", "Brutal.Vulkan.Vma", "Brutal.Core.Numerics",
     "System.IO.Hashing"]
 
 missing = []
@@ -136,7 +136,10 @@ with open(rsp, "w", newline="\n") as f:
         # stage.sh 把它拷进 build/game 后同理）；其余走 relaxed staging（ PortMobile 写
         # 游戏 static readonly 字段，必须引用摘过 initonly 的副本——安卓对 staged 游戏
         # 同一件事，game-stage-relaxed/ 由 scripts/relax-initonly 产出）。
-        w(f'-r:"{HARMONY if name == "0Harmony" else os.path.join(GAME_STAGE, name + ".dll")}"\n')
+        ref = HARMONY if name == "0Harmony" else (
+            os.path.join(GAME, name + ".dll") if name == "Waylith.Windowing"
+            else os.path.join(GAME_STAGE, name + ".dll"))
+        w(f'-r:"{ref}"\n')
     w(f'-r:"{os.path.join(out, "PortHooks.dll")}"\n')
     for s in mobile_srcs + [builtfor, attrs]:
         w(f'"{s}"\n')

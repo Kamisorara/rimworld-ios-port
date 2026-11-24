@@ -168,9 +168,9 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 - PortMobile 若引用安卓 mod 管线的类型（ModPrep/Workshop）→ 同步时一并复制或桩化，审计步产出清单；
 - mod 管线 + CoreLib 20 开关与触控线并行推进（触控不依赖 mod，但 PortMobile 的 mod 兼容面依赖）——顺序：探针 → 触控主线，mod 管线随后。
 
-**0.4.x 真机连载（2026-11-24，0.4.0→0.4.18）：游戏本体完整进入；装载链与 MonoMod/Harmony 运行底座逐层钉死，触控进入 IOS 输入桥裁决**
+**0.4.x 真机连载（2026-11-24，0.4.0→0.4.19）：游戏本体完整进入；装载链与 MonoMod/Harmony 运行底座逐层钉死，触控进入 IOS 输入桥裁决**
 
-**当前进度总览（截至 0.4.18）**：M0–M3 已关闭；M4 进行中。游戏本体在 0.4.x 线稳定进入真机——IOS 后端、JIT 竞技场、Metal 交换链、CoreAudio、世界装载、官方 DLC 与键盘输入都已验证。触控目标仍未关闭：0.4.6 之前是手机层装载问题，0.4.7 起才真正进入 Harmony/MonoMod detour 链。已连修十八关：竞技场时序（0.4.1）、Android 后端劫持（0.4.2）、PortHooks 版本（0.4.3）、PortMobile bundle 回退（0.4.4）、mscorlib 可执行 facade（0.4.5）、宿主自带 0Harmony（0.4.6）、MonoMod 平台钉成 OSX+Arm64（0.4.7）、tuple 原构造保留与签名 exhelper 入包（0.4.8）、静态 JIT 的 `getJit` shim（0.4.9）、MonoMod 宿主件按 bundle 解析 + exhelper 可选化（0.4.10）、exhelper 方法体 IL 的 `leave` 修正（0.4.11）、MonoMod 接入竞技场（0.4.12）、Core110 版本化 native-code 入口（0.4.13）、跨平台线程 ID（0.4.14）、IOS UIKit 输入桥（0.4.15）、桥的 NSObject→UITouch 修正（0.4.16）、装箱 nint 走 Convert 的 InvalidCastException（0.4.17）、分层编译 tier-up 静默丢 detour（0.4.18）。0.4.14 真机证明 detour、触控层初始化和 `OnGUI` 已不再被 `gettid` 打断，但 IOS 后端的原始触摸仍在 PortMobile 手势队列之外；0.4.16 修复初版桥在通用 NSObject 包装上反射 UITouch 成员的 P1；0.4.18 关分层编译后整个补丁层首次在真机长时间存活。通过标准不变——日志不再有 `the phone layer failed to start`，游戏内长按右键/双指缩放/TapAssist 有反应。
+**当前进度总览（截至 0.4.19）**：M0–M3 已关闭；M4 进行中。游戏本体在 0.4.x 线稳定进入真机——IOS 后端、JIT 竞技场、Metal 交换链、CoreAudio、世界装载、官方 DLC 与键盘输入都已验证。触控目标仍未关闭：0.4.6 之前是手机层装载问题，0.4.7 起才真正进入 Harmony/MonoMod detour 链。已连修十九关：竞技场时序（0.4.1）、Android 后端劫持（0.4.2）、PortHooks 版本（0.4.3）、PortMobile bundle 回退（0.4.4）、mscorlib 可执行 facade（0.4.5）、宿主自带 0Harmony（0.4.6）、MonoMod 平台钉成 OSX+Arm64（0.4.7）、tuple 原构造保留与签名 exhelper 入包（0.4.8）、静态 JIT 的 `getJit` shim（0.4.9）、MonoMod 宿主件按 bundle 解析 + exhelper 可选化（0.4.10）、exhelper 方法体 IL 的 `leave` 修正（0.4.11）、MonoMod 接入竞技场（0.4.12）、Core110 版本化 native-code 入口（0.4.13）、跨平台线程 ID（0.4.14）、IOS UIKit 输入桥（0.4.15）、桥的 NSObject→UITouch 修正（0.4.16）、装箱 nint 走 Convert 的 InvalidCastException（0.4.17）、分层编译 tier-up 静默丢 detour（0.4.18）、CADisplayLink 全零范围锁 30Hz（0.4.19）。0.4.14 真机证明 detour、触控层初始化和 `OnGUI` 已不再被 `gettid` 打断，但 IOS 后端的原始触摸仍在 PortMobile 手势队列之外；0.4.16 修复初版桥在通用 NSObject 包装上反射 UITouch 成员的 P1；0.4.18 关分层编译后整个补丁层首次在真机长时间存活。通过标准不变——日志不再有 `the phone layer failed to start`，游戏内长按右键/双指缩放/TapAssist 有反应。
 
 **0.4.0（回退裁决，commit 3beddb9，run 45100332222）**：v2（AndroidPlatform + 大线程 + 桥）六个环节零真机数据，正式引擎路回 IOS 后端 + 主线程自动进引擎（0.3.6 验证链），启动器降为非引擎状态前门，v10 补丁按"休眠无害"假设保留。首测即连环炸，且每一轮的炸点都不重样——0.4.1/0.4.2/0.4.3/0.4.4/0.4.5 五轮各修一处。
 
@@ -252,7 +252,9 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **0.4.18 包落位（test_work/m4-touch-22，run [45385988137](https://github.com/Kamisorara/rimworld-ios-port/actions/runs/45385988137)，push 自 8f0542d）**：IPA SHA256 `555DD8E7AD9EB64321D0E9DB76CC252777DC819C4613EAFE676942DF5A1E576F`（63,016,142 字节）。解包核验版本 0.4.18；包内 `PortMobile.dll` SHA256 `3FCD627CCD6E1C4FBA4B80786BCC1B92AC25D30555E8DD5867A3770B0FC56E63`，与 prebuilt 一致；反编译确认三处心跳（machine frame / raw events consumed / recorder alive）均已入产物。对包内 `0Harmony.dll` 直接跑 smoke：退出码 0，`0Harmony` 引用 `Port17MonoModArena` 正常。**待真机裁决。**下次日志看什么：`安装身份 版本=0.4.18`、生效模式行出现"分层编译=0"、三处心跳（`machine frame 600…`、`recorder alive, frame 600…`、`raw events consumed`）、`record.txt` 出现触控行与快照；六件套逐项过。
 
-**装载连载沉淀的通用规则（后续任何"装了不生效"先查这七条）**：
+**五十八轮根因（0.4.19，30fps 锁定）**：0.4.18 真机触控已活，但 `port17 活性` 恒为 +450/15s=30.00。该计数器就是音频层 `wa_update` 的 `g_updates`（每帧 +1），因此主循环本身钉在 display link 30Hz。反编译定案：`WindowBase.PreferredFrameRate` 是无初始值的可空自动属性，Waylith/游戏侧没有任何赋值点；`IOSPlatform.InstallRunLoopHooks` 因此拿到 null，`SetPreferredFrameRate` 调 `CADisplayLink.SetPreferredFrameRateRange(default(CAFrameRateRange))`，即 minimum/maximum/preferred 全零。Apple 文档明确 CADisplayLink 的属性默认是 `CAFrameRateRange.default`（等价屏幕最大刷新率），而不是托管零结构；全零实际落到 ProMotion 的粗分频 30Hz（来源：[preferredFrameRateRange](https://developer.apple.com/documentation/quartzcore/cadisplaylink/preferredframeraterange)）。主循环每次 tick 由 `IOSPlatform.HandleDisplayLink` 驱动；`ThrottleToTargetFrameRate(60)` 在 `_pacingPresents=true` 时不再额外睡眠，所以 30 不是 CPU 节流叠加 vsync，也不是 GPU 掉半速率。**修法**：`FrameRate.EveryFrame` 在选项变化/窗口周期重报时显式给 `Window.PreferredFrameRate=(limit,120,limit)`——选项 60 仍只偏好 60，最高 120 只是允许系统按 ProMotion 策略精确选 60；选项 30/90/120 同理生效。`PortMobile.dll` 529,920 字节、SHA256 `4C46CEAAFBFB5F29403ED6A0058361097DA6F7791F5ABDC9D2056E5293B06F02`，`PortHooks.dll` SHA256 不变；反编译确认 `TellDisplayLink` 与 `FrameRateRange` 调用已入产物；`patch-harmony smoke prebuilt/0Harmony.dll` 退出码 0。版本升 0.4.19。**待真机裁决。**
+
+**装载连载沉淀的通用规则（后续任何"装了不生效"先查这十条）**：
 
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
 2. iOS 与安卓的宿主件位置不同（bundle vs 游戏目录），"next to the game"式查找必须加 bundle 回退——**iOS 上 `AppContext.BaseDirectory` 就是游戏目录**（engine.c 设 `APP_CONTEXT_BASE_DIRECTORY`），任何用 BaseDirectory 定位宿主件的补丁（PortHooks/PortMobile/MonoMod 的 shim 与 exhelper 同族）都要改走 `Port17HostFiles.Resolve`；
@@ -263,6 +265,7 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 7. IOS 后端的输入源是 Waylith `IOSWindow.HandleTouches`，不是 Android 版 `libglfw` 的 raw-touch 队列；接入 PortMobile 必须从 UIKit 原始事件取手指，并把 Touch 注入的 cursor/button/scroll 回接 `WindowBase` 注入 API。`touch mode managed` 只证明托管层打开了 shim，不证明 IOS 后端会把触摸交给它（0.4.14→0.4.15）。
 8. 反射回读的装箱值先按声明类型 unbox 再做数值比较；装箱 `nint`（IntPtr）不实现 IConvertible，`Convert.ToInt64(object)` 会直接抛 InvalidCastException（0.4.16→0.4.17 真机代价一轮）。静态审查签名匹配不等于装箱转换路径安全。
 9. 分层编译 tier-up 换热方法代码入口时静默丢弃 MonoMod/Harmony detour——混合 runtime 上默认 `DOTNET_TieredCompilation=0`（0.4.17→0.4.18）。"首次运行的日志"不能证明 hook 活着，hook 死活以心跳/计数为准；真机"功能从不生效"先查 hook 存活期，再查逻辑本身。
+10. IOS 后端的 `PreferredFrameRate=null` 会被翻译成 `CAFrameRateRange` 全零；这不是 Apple 文档的 range 默认值，真机上可把 display link 钉到 30Hz。iOS 显示链必须显式设置 `(目标帧率, 屏幕能力上限, 目标帧率)`，选项变化或窗口重建后重设（0.4.18→0.4.19）。
 
 **新账（本轮连载产出）**：
 - mod 程序集的 WaylithClr.* 引用改道未覆盖 Mods 目录：创意工坊 HarmonyMod 的 RuntimeIL 程序集引用 WaylithClr.MethodBodyClause/MethodBodyTransformer（指 System.Private.CoreLib）→ TypeLoadException → 该 mod 的 Harmony 初始化失败。属差距 #4 的实施范围，M4 后半做 CoreLib 开关时把 Mods 目录纳入改道（ModPrep 管线）；
