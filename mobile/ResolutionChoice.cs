@@ -21,11 +21,17 @@ namespace PortMobile
 	internal static class ResolutionChoice
 	{
 		[System.Runtime.InteropServices.DllImport("glfw")] private static extern void glfwAndroidViewSize(out int width, out int height);
-		[System.Runtime.InteropServices.DllImport("glfw")] private static extern void glfwSetWindowSize(IntPtr window, int width, int height);
 
 		private static readonly int[] Heights = { 1080, 720 };
 		private static bool available;
 		private static bool sizeApplied;
+
+		// The engine's own layer (IOSWindow), not the host launcher's: UIApplicationMain makes a new view and
+		// CAMetalLayer when the engine takes the scene, so the GLFW shim's g_layer is not the one on the screen.
+		private static Type iosWindowType;
+		private static FieldInfo iosViewField, iosLayerField;
+		private static MethodInfo iosBoundsGetter, iosScaleGetter, iosSetScale, iosSetContentsScale, iosHandleLayout;
+		private static FieldInfo iosRectSizeField, iosSizeHeightField;
 
 		/// <summary>The screen's pixels for one of the game's (the agent's "phone px"): 1 at the screen's own resolution.</summary>
 		public static float ToScreen
@@ -72,6 +78,7 @@ namespace PortMobile
 				harmony.Patch(AccessTools.Method(typeof(Dialog_Options), "ResToString", new[] { typeof(int), typeof(int) }), postfix: new HarmonyMethod(typeof(ResolutionChoice), nameof(AfterResToString)));
 				harmony.Patch(AccessTools.Method(typeof(ResolutionUtility), nameof(ResolutionUtility.SafeSetResolution)), prefix: new HarmonyMethod(typeof(ResolutionChoice), nameof(BeforeSet)), postfix: new HarmonyMethod(typeof(ResolutionChoice), nameof(AfterSet)));
 				Console.WriteLine("[mobile] resolution: the screen's own, 1080p and 720p offered (" + filters + " filter)");
+				PatchEngineLayout(harmony);
 				ApplySaved();
 			}
 			catch (Exception e)
@@ -97,6 +104,10 @@ namespace PortMobile
 			{
 				return;
 			}
+			if (Waylith.EngineApplication.Instance?.Window == null)
+			{
+				return;
+			}
 			sizeApplied = true;
 			available = true;
 			Console.WriteLine("[mobile] resolution: the window is " + width + "x" + height + " px");
@@ -106,8 +117,10 @@ namespace PortMobile
 
 		/// <summary>
 		/// iOS's window cannot be resized, so the Waylith IOS backend drops Screen.SetResolution. The GLFW shim can
-		/// still make the Metal drawable smaller while UIKit scales it to the same view. mobile.txt: renderHeight=1080
-		/// or 720; 0 leaves the screen's own resolution.
+		/// not reach the engine's layer (UIApplicationMain makes its own), so the engine's view is given a smaller
+		/// content scale factor instead: IOSWindow.HandleLayout then makes the Metal drawable smaller and reports the
+		/// smaller surface, while UIKit scales it to the same view. mobile.txt: renderHeight=1080 or 720; 0 leaves
+		/// the screen's own resolution.
 		/// </summary>
 		private static void ApplyMobileRenderSize()
 		{
@@ -121,10 +134,97 @@ namespace PortMobile
 				return;
 			}
 			int width = Mathf.RoundToInt(screenWidth * (float)height / screenHeight / 2f) * 2;
-			glfwSetWindowSize(IntPtr.Zero, width, height);
+			ApplyRenderScale(height);
 			Prefs.ScreenWidth = width;
 			Prefs.ScreenHeight = height;
 			Console.WriteLine("[mobile] resolution: rendering at " + width + "x" + height + " (mobile.txt renderHeight=" + height + ", screen " + screenWidth + "x" + screenHeight + ")");
+		}
+
+		/// <summary>The engine's layer, through IOSWindow.HandleLayout: the view keeps its points, the drawable shrinks.</summary>
+		private static void PatchEngineLayout(Harmony harmony)
+		{
+			try
+			{
+				iosWindowType = AccessTools.TypeByName("Waylith.Windowing.Backends.IOS.IOSWindow");
+				iosViewField = AccessTools.Field(iosWindowType, "_view");
+				iosLayerField = AccessTools.Field(iosWindowType, "_layer");
+				iosHandleLayout = AccessTools.Method(iosWindowType, "HandleLayout");
+				if (iosViewField == null || iosLayerField == null || iosHandleLayout == null)
+				{
+					Console.WriteLine("[mobile] resolution: IOSWindow's view or layout not found; the drawable is left at the screen's size");
+					return;
+				}
+				Type viewType = iosViewField.FieldType, layerType = iosLayerField.FieldType;
+				iosBoundsGetter = AccessTools.PropertyGetter(viewType, "Bounds");
+				iosScaleGetter = AccessTools.PropertyGetter(viewType, "ContentScaleFactor");
+				iosSetScale = AccessTools.Method(viewType, "SetContentScaleFactor");
+				iosSetContentsScale = AccessTools.Method(layerType, "SetContentsScale");
+				iosRectSizeField = AccessTools.Field(iosBoundsGetter.ReturnType, "Size");
+				iosSizeHeightField = AccessTools.Field(iosRectSizeField.FieldType, "Height");
+				harmony.Patch(iosHandleLayout, prefix: new HarmonyMethod(typeof(ResolutionChoice), nameof(BeforeHandleLayout)));
+				Console.WriteLine("[mobile] resolution: IOSWindow.HandleLayout patched");
+			}
+			catch (Exception e)
+			{
+				Console.WriteLine("[mobile] resolution: the engine's layer not patched: " + e.Message);
+			}
+		}
+
+		/// <summary>Prefix of IOSWindow.HandleLayout: the view's scale is the render height over its points.</summary>
+		public static void BeforeHandleLayout(object __instance)
+		{
+			if (__instance == null)
+			{
+				return;
+			}
+			int height = Settings.Get("renderHeight", OperatingSystem.IsIOS() ? 1080 : 0);
+			if (height > 0)
+			{
+				SetRenderScale(__instance, height);
+			}
+		}
+
+		private static void SetRenderScale(object window, int height)
+		{
+			if (iosViewField == null || iosLayerField == null)
+			{
+				return;
+			}
+			object view = iosViewField.GetValue(window);
+			object layer = iosLayerField.GetValue(window);
+			if (view == null || layer == null)
+			{
+				return;
+			}
+			object bounds = iosBoundsGetter.Invoke(view, null);
+			object size = iosRectSizeField.GetValue(bounds);
+			double points = (double)iosSizeHeightField.GetValue(size);
+			if (points <= 0)
+			{
+				return;
+			}
+			double current = (double)iosScaleGetter.Invoke(view, null);
+			double wanted = height / points;
+			if (wanted <= 0 || wanted >= current - 0.001)
+			{
+				return;
+			}
+			iosSetScale.Invoke(view, new object[] { wanted });
+			iosSetContentsScale.Invoke(layer, new object[] { wanted });
+			Console.WriteLine("[mobile] resolution: the engine's layer scaled " + current.ToString("0.###") + " -> " + wanted.ToString("0.###") + " (" + height + "p)");
+		}
+
+		/// <summary>After the window exists: scale its view and let HandleLayout report the smaller surface.</summary>
+		private static void ApplyRenderScale(int height)
+		{
+			object window = Waylith.EngineApplication.Instance?.Window;
+			if (window == null || iosWindowType == null || !iosWindowType.IsInstanceOfType(window) || iosHandleLayout == null)
+			{
+				Console.WriteLine("[mobile] resolution: the engine's window is not an IOSWindow yet; the drawable is left at the screen's size");
+				return;
+			}
+			SetRenderScale(window, height);
+			iosHandleLayout.Invoke(window, null);
 		}
 
 		/// <summary>
