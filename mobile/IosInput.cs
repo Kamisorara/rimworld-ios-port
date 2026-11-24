@@ -141,7 +141,9 @@ namespace PortMobile
 					object touch = foundationObjectAt.Invoke(null, new[] { array, i });
 					nint handle = (nint)touch.GetType().GetProperty("Handle").GetValue(touch);
 					object nativeTouch = uiTouchConstructor.Invoke(new object[] { handle });
-					int nativeTouchType = (int)Convert.ToInt64(uiTouchTypeProperty.GetValue(nativeTouch));
+					// IntPtr (nint) does not implement IConvertible, so Convert.ToInt64(object)
+					// throws InvalidCastException on the boxed UITouch.Type value; unbox directly.
+					long nativeTouchType = (long)(nint)uiTouchTypeProperty.GetValue(nativeTouch);
 					if (nativeTouchType == 3)
 					{
 						hasMouse = true;

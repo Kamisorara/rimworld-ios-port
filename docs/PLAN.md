@@ -168,9 +168,9 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 - PortMobile 若引用安卓 mod 管线的类型（ModPrep/Workshop）→ 同步时一并复制或桩化，审计步产出清单；
 - mod 管线 + CoreLib 20 开关与触控线并行推进（触控不依赖 mod，但 PortMobile 的 mod 兼容面依赖）——顺序：探针 → 触控主线，mod 管线随后。
 
-**0.4.x 真机连载（2026-11-24，0.4.0→0.4.16）：游戏本体完整进入；装载链与 MonoMod/Harmony 运行底座逐层钉死，触控进入 IOS 输入桥裁决**
+**0.4.x 真机连载（2026-11-24，0.4.0→0.4.17）：游戏本体完整进入；装载链与 MonoMod/Harmony 运行底座逐层钉死，触控进入 IOS 输入桥裁决**
 
-**当前进度总览（截至 0.4.16）**：M0–M3 已关闭；M4 进行中。游戏本体在 0.4.x 线稳定进入真机——IOS 后端、JIT 竞技场、Metal 交换链、CoreAudio、世界装载、官方 DLC 与键盘输入都已验证。触控目标仍未关闭：0.4.6 之前是手机层装载问题，0.4.7 起才真正进入 Harmony/MonoMod detour 链。已连修十六关：竞技场时序（0.4.1）、Android 后端劫持（0.4.2）、PortHooks 版本（0.4.3）、PortMobile bundle 回退（0.4.4）、mscorlib 可执行 facade（0.4.5）、宿主自带 0Harmony（0.4.6）、MonoMod 平台钉成 OSX+Arm64（0.4.7）、tuple 原构造保留与签名 exhelper 入包（0.4.8）、静态 JIT 的 `getJit` shim（0.4.9）、MonoMod 宿主件按 bundle 解析 + exhelper 可选化（0.4.10）、exhelper 方法体 IL 的 `leave` 修正（0.4.11）、MonoMod 接入竞技场（0.4.12）、Core110 版本化 native-code 入口（0.4.13）、跨平台线程 ID（0.4.14）、IOS UIKit 输入桥（0.4.15）、桥的 NSObject→UITouch 修正（0.4.16）。0.4.14 真机证明 detour、触控层初始化和 `OnGUI` 已不再被 `gettid` 打断，但 IOS 后端的原始触摸仍在 PortMobile 手势队列之外；0.4.16 修复初版桥在通用 NSObject 包装上反射 UITouch 成员的 P1。通过标准不变——日志不再有 `the phone layer failed to start`，游戏内长按右键/双指缩放/TapAssist 有反应。
+**当前进度总览（截至 0.4.17）**：M0–M3 已关闭；M4 进行中。游戏本体在 0.4.x 线稳定进入真机——IOS 后端、JIT 竞技场、Metal 交换链、CoreAudio、世界装载、官方 DLC 与键盘输入都已验证。触控目标仍未关闭：0.4.6 之前是手机层装载问题，0.4.7 起才真正进入 Harmony/MonoMod detour 链。已连修十七关：竞技场时序（0.4.1）、Android 后端劫持（0.4.2）、PortHooks 版本（0.4.3）、PortMobile bundle 回退（0.4.4）、mscorlib 可执行 facade（0.4.5）、宿主自带 0Harmony（0.4.6）、MonoMod 平台钉成 OSX+Arm64（0.4.7）、tuple 原构造保留与签名 exhelper 入包（0.4.8）、静态 JIT 的 `getJit` shim（0.4.9）、MonoMod 宿主件按 bundle 解析 + exhelper 可选化（0.4.10）、exhelper 方法体 IL 的 `leave` 修正（0.4.11）、MonoMod 接入竞技场（0.4.12）、Core110 版本化 native-code 入口（0.4.13）、跨平台线程 ID（0.4.14）、IOS UIKit 输入桥（0.4.15）、桥的 NSObject→UITouch 修正（0.4.16）、装箱 nint 走 Convert 的 InvalidCastException（0.4.17）。0.4.14 真机证明 detour、触控层初始化和 `OnGUI` 已不再被 `gettid` 打断，但 IOS 后端的原始触摸仍在 PortMobile 手势队列之外；0.4.16 修复初版桥在通用 NSObject 包装上反射 UITouch 成员的 P1。通过标准不变——日志不再有 `the phone layer failed to start`，游戏内长按右键/双指缩放/TapAssist 有反应。
 
 **0.4.0（回退裁决，commit 3beddb9，run 45100332222）**：v2（AndroidPlatform + 大线程 + 桥）六个环节零真机数据，正式引擎路回 IOS 后端 + 主线程自动进引擎（0.3.6 验证链），启动器降为非引擎状态前门，v10 补丁按"休眠无害"假设保留。首测即连环炸，且每一轮的炸点都不重样——0.4.1/0.4.2/0.4.3/0.4.4/0.4.5 五轮各修一处。
 
@@ -244,6 +244,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **0.4.16 包落位（test_work/m4-touch-20，run [45311651638](https://github.com/Kamisorara/rimworld-ios-port/actions/runs/45311651638)，push 自 c2a8e4f）**：IPA SHA256 `0A964CE8635EF52C0DAE0CDB7BFC885FC4D762D409F7AF72DD672A2133071DB5`（63,015,933 字节）。解包核验版本 0.4.16；包内 `PortMobile.dll` SHA256 `0A00506DCE926CCAD4B5F0E6A8A33063017F325CE5BC2A3E31951F4B12B8B990`、`PortHooks.dll` SHA256 `B739B85FEA83B0B893B9B6EAF03A519AA4741DF07919283F9017AF221E4FED41`，均与 prebuilt 一致。反编译确认包内桥用 `UITouch(nint)` 构造真正的 touch 包装后才读 type/location。对包内 `0Harmony.dll` 直接跑 smoke：arena 分配器、Core110 入口探针、JIT vtable 交换、Resolve 与 exhelper 可选路径全部通过，退出码 0。**待真机裁决。**
 
+**五十六轮裁决（0.4.16，test_work/m4-touch-20，18:52 与 18:57 双会话）**：首轮（18:52）**无裁决数据**——SideStore 覆盖安装静默保留了旧 bundle，宿主启动行 `安装身份 版本=0.4.14`（同一容器 5B58596C），桥代码根本不在，全绿日志全是 0.4.14 的旧能力。**教训：每轮拿到日志先读 `安装身份` 版本行再分析行为。**重装后（18:57，`版本=0.4.16`）桥前两行首次全绿——`HandleTouches patched`、`engine input bridge ready (window IOSWindow, scale 2.0)`——首个触摸死在 `raw touch conversion failed: InvalidCastException: Unable to cast 'System.IntPtr' to 'System.IConvertible'`：`UITouch.Type` 返回装箱 `nint`，`Convert.ToInt64(object)` 依赖 IConvertible 而 IntPtr 不实现；phase（enum）与 scale（double）的 Convert 都正常通过（失败点在其后），`touchHookFailed` 置位后永久回退裸触摸——与"还是只能单击"的用户体感完全一致。**修法（0.4.17）**：`(long)(nint)` 直接 unbox，Convert 其余点位（enum/double）复核安全。重建 `PortMobile.dll` 528,896 字节、SHA256 `027DD4F18D052C9FB92D4B285DD17B317B9A5520E0D45D16A40E7A7A043DFE47`；反编译确认 `Convert.ToInt64` 已消失、unbox 已入产物；版本升 0.4.17。**待真机裁决。**
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这七条）**：
 
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
@@ -253,6 +255,7 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 5. iOS 上任何第三方库的可执行内存都必须来自竞技场（RX 地址执行、RW 别名写入，`Port17ArenaAllocator`），`__DATA_CONST` 的原地写与 `mmap(MAP_JIT|RWX)` 都不可用；MonoMod 这类库要接入就得替换它的 `IMemoryAllocator` 并让 `PatchData` 对竞技场地址走别名，而不是去修它的 Mach 内存代码（0.4.11→0.4.12）。
 6. Android/Linux 专属 libc 入口（尤其 `gettid`）不能在共享 hooks/mobile 代码里直接 P/Invoke；线程身份统一走 `PortHooks.ThreadId.Current`，Linux 专用 `/proc`、affinity、perf-hint 只能留在平台分支内（0.4.13→0.4.14）。
 7. IOS 后端的输入源是 Waylith `IOSWindow.HandleTouches`，不是 Android 版 `libglfw` 的 raw-touch 队列；接入 PortMobile 必须从 UIKit 原始事件取手指，并把 Touch 注入的 cursor/button/scroll 回接 `WindowBase` 注入 API。`touch mode managed` 只证明托管层打开了 shim，不证明 IOS 后端会把触摸交给它（0.4.14→0.4.15）。
+8. 反射回读的装箱值先按声明类型 unbox 再做数值比较；装箱 `nint`（IntPtr）不实现 IConvertible，`Convert.ToInt64(object)` 会直接抛 InvalidCastException（0.4.16→0.4.17 真机代价一轮）。静态审查签名匹配不等于装箱转换路径安全。
 
 **新账（本轮连载产出）**：
 - mod 程序集的 WaylithClr.* 引用改道未覆盖 Mods 目录：创意工坊 HarmonyMod 的 RuntimeIL 程序集引用 WaylithClr.MethodBodyClause/MethodBodyTransformer（指 System.Private.CoreLib）→ TypeLoadException → 该 mod 的 Harmony 初始化失败。属差距 #4 的实施范围，M4 后半做 CoreLib 开关时把 Mods 目录纳入改道（ModPrep 管线）；
