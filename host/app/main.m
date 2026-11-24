@@ -194,8 +194,9 @@ static char *trim_perf_value(char *value)
     return value;
 }
 
-// Perf A/B controls live beside the game and are read before MoltenVK can be loaded. The
-// 0.4.28 package must be observation-only by default: swapchainImages=3 is the only H1 test.
+// Perf controls live beside the game and are read before MoltenVK can be loaded. Since 0.4.29
+// the engine's triple-buffer default lives in the interposer; 0 disables it and 2 forces the
+// double-buffer comparison.
 static void apply_perf_config(void)
 {
     NSString *path = [NSHomeDirectory()

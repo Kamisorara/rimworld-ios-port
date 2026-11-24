@@ -1,11 +1,11 @@
 # RimWorld iOS 30fps 根因分析与修复计划
 
-> 状态：E0 计时与 2/3 图实验开关已在 0.4.28 实施，包默认不改行为。基于 0.4.27 /
+> 状态：0.4.28 E0 与 `swapchainImages=3` 真机裁决通过，H1 成立；0.4.29 已把引擎默认改为 3 图。基于 0.4.27 /
 > `test_work/m4-touch-30` 的真机日志与当前反编译树。
 >
 > 目标：把稳定 30fps 提到稳定 60fps；如果 60fps 不可达，必须用数据证明上限来自 GPU 帧时间，而不是 present/drawable 等待。
 
-## 0.4.28 实施状态（E0 已写入包）
+## 0.4.28 实施状态与真机裁决（H1 成立）
 
 待测包：`test_work/m4-touch-31/port17host-m2.ipa`（run 45499640519，提交 `a4e8951`）。
 IPA 哈希、关键 DLL 哈希和真机观测点见 `docs/PLAN.md` 的 0.4.28 包落位。
@@ -18,6 +18,20 @@ median/99%/max、返回码分布和实际图像数。它同时记录 surface cap
 `swapchainImages=3` 后，下一次冷启动才把同一个 surface 的 `minImageCount` 抬到 3，并且
 只在 caps 允许时生效。三角形支持 `triangleImages=2|3`，并单独输出 submit/present 的
 300 帧聚合。MVK 诊断开关也由同一个文件设置，但默认关闭。
+
+`test_work/m4-touch-31` 裁决：caps 为 `minImages=2 maxImages=3`，`min=2 request=3 forced`
+真实生效，MoltenVK 创建 3 张 2360x1640 图像。稳定窗口 59.8–60.1fps，15 秒活性 +899；
+interval median 16.7–16.8ms，throttle/backlog 接近 0。Vulkan 分段显示等待主要落在
+`exportDrawable`（多窗 median 2.46–14.51ms，99% 可到 16–19ms），`queueSubmit`
+median 0.13–0.82ms，`queuePresent` median 约 0.01ms。这证明 33ms 是 2 图 swapchain 的
+`nextDrawable` 等待，不是 GPU 帧时间或 present 队列本身。
+
+## 0.4.29 固化 3 图
+
+interposer 对 Waylith 引擎实例默认请求 3 张图；caps 不允许时不改。显式
+`PORT17_SWAPCHAIN_IMAGES=0` 关闭，`=2` 回 2 图对照。`port17-triangle` 应用实例不吃该默认，
+继续用自身 `triangleImages=2|3` 控制。文件不存在即默认 3；要关闭或对照时才需要写
+`port17-perf.txt`。
 
 ## 0. 一句话结论
 

@@ -149,10 +149,12 @@ glfwWaitEvents 用条件变量阻塞。
   按需再加——Metal 的内存模型与 ICD 池行为不同，预计不需要或需要不同的）
 - 0.4.28 起钩子位承载性能观测：`vkGetInstanceProcAddr` 与 `vkGetDeviceProcAddr` 包装
   metal export、queue submit/present、acquire、fence wait、swapchain create/image query；
-  聚合 5 秒输出一次。除 `PORT17_SWAPCHAIN_IMAGES` 显式非零外不改行为；该值要求 caps
-  匹配同一 surface 且 max 允许，否则只记录 `cannot force` 形态的原始 request/caps 日志。
+  聚合 5 秒输出一次。0.4.29 起引擎实例默认把 `minImageCount` 抬到 3；caps 必须匹配同一
+  surface 且 max 允许，否则只记录 `cannot force`。`PORT17_SWAPCHAIN_IMAGES=0` 显式关闭，
+  `=2` 回双缓冲对照；`port17-triangle` 实例不吃这个默认，三角形自身仍用
+  `PORT17_TRIANGLE_IMAGES` 做 2/3 图对照。
 - 宿主在 MoltenVK 装载前读 `Documents/game/port17-perf.txt`。可用键：
-  `swapchainImages=3`（引擎 H1 A/B）、`triangleImages=2|3`、`mvkPerformanceTracking`、
+  `swapchainImages=0|2|3`（0.4.29 起缺省即 3）、`triangleImages=2|3`、`mvkPerformanceTracking`、
   `mvkSynchronousQueueSubmits`、`mvkPrefillMetalCommandBuffers`。文件不在或键不在时默认关闭。
 - MoltenVK 官方发布包：`MoltenVK-ios.tar`（v1.4.2，2026-07-20，iOS ≥15.0）里的
   `MoltenVK/MoltenVK/dynamic/MoltenVK.xcframework/ios-arm64/MoltenVK.framework`（动态，放 .app 根，

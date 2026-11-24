@@ -47,6 +47,7 @@ static void log_line(const char* fmt, ...)
 #define RESULT_BUCKETS 7
 
 static volatile uint32_t g_swapchain_images;
+static bool g_force_engine_swapchain;
 
 typedef struct Metric
 {
@@ -172,10 +173,11 @@ static void metric_add(Metric* metric, double milliseconds, VkResult result)
     }
 }
 
-static int env_int(const char* name, int fallback)
+static int swapchain_image_request(void)
 {
-    const char* value = getenv(name);
-    return value ? atoi(value) : fallback;
+    const char* value = getenv("PORT17_SWAPCHAIN_IMAGES");
+    if (!value || !*value) return g_force_engine_swapchain ? 3 : 0;
+    return atoi(value);
 }
 
 static void* g_moltenvk;                       // MoltenVK.framework/MoltenVK, next to this dylib
@@ -356,7 +358,7 @@ static VKAPI_ATTR VkResult VKAPI_CALL hook_vkCreateSwapchainKHR(
     const VkAllocationCallbacks* alloc, VkSwapchainKHR* swapchain)
 {
     VkSwapchainCreateInfoKHR copy = *info;
-    int requested = env_int("PORT17_SWAPCHAIN_IMAGES", 0);
+    int requested = swapchain_image_request();
     bool forced = false;
     bool caps_allow = g_caps_valid && g_caps_surface == info->surface &&
                       (g_caps.maxImageCount == 0 ||
@@ -458,6 +460,7 @@ API VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo* 
 {
     if (!ready()) return VK_ERROR_INITIALIZATION_FAILED;
     if (info && info->pApplicationInfo)
+    {
         log_line("vkCreateInstance: %s (app %u.%u.%u, engine %s, wants API %u.%u)",
                  info->pApplicationInfo->pApplicationName ? info->pApplicationInfo->pApplicationName : "?",
                  VK_API_VERSION_MAJOR(info->pApplicationInfo->applicationVersion),
@@ -466,8 +469,14 @@ API VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo* 
                  info->pApplicationInfo->pEngineName ? info->pApplicationInfo->pEngineName : "?",
                  VK_API_VERSION_MAJOR(info->pApplicationInfo->apiVersion),
                  VK_API_VERSION_MINOR(info->pApplicationInfo->apiVersion));
+        g_force_engine_swapchain = !(info->pApplicationInfo->pApplicationName &&
+                                     strstr(info->pApplicationInfo->pApplicationName, "port17-triangle"));
+        log_line("swapchain default: %s", g_force_engine_swapchain ? "3 images" : "off (triangle)");
+    }
     else
+    {
         log_line("vkCreateInstance (no application info)");
+    }
     return g_real_create_instance(info, alloc, out);
 }
 
