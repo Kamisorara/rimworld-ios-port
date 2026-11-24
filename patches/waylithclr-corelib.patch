@@ -14,7 +14,7 @@ index 474e2c68292..c6c2a94e212 100644
  
          /// <summary>
 diff --git a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
-index 849f33fd9af..8bb4e877f77 100644
+index 849f33fd9af..fc8396e6d0e 100644
 --- a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
 +++ b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
 @@ -2961,7 +2961,9 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
@@ -28,7 +28,7 @@ index 849f33fd9af..8bb4e877f77 100644
          {
              ArgumentNullException.ThrowIfNull(name);
  
-@@ -2998,6 +3000,40 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
+@@ -2998,6 +3000,44 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
              return match;
          }
  
@@ -40,8 +40,12 @@ index 849f33fd9af..8bb4e877f77 100644
 +                 simpleName is "System" or "mscorlib" or "netstandard");
 +        }
 +
++        [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2062",
++            Justification = "Lax field names are derived from an annotated framework field name.")]
 +        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)]
-+        public override FieldInfo? GetField(string name, BindingFlags bindingAttr)
++        public override FieldInfo? GetField(
++            [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)] string name,
++            BindingFlags bindingAttr)
 +        {
 +            ArgumentNullException.ThrowIfNull(name);
 +
@@ -94,10 +98,13 @@ index d97f374d822..66b8735d43b 100644
      // Set the field
      ARG_SLOT value;
 diff --git a/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs b/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs
-index ab7e83c20ea..b052e6231b0 100644
+index ab7e83c20ea..7a30e595db9 100644
 --- a/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs
 +++ b/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs
-@@ -7,6 +7,8 @@
+@@ -4,9 +4,11 @@
+ #pragma warning disable CS0067 // events are declared but not used
+ 
+ using System.Diagnostics;
 +using System.Collections.Generic;
  using System.Diagnostics.CodeAnalysis;
  using System.IO;
@@ -106,7 +113,7 @@ index ab7e83c20ea..b052e6231b0 100644
  using System.Runtime.CompilerServices;
  using System.Runtime.ExceptionServices;
  using System.Runtime.Loader;
-@@ -58,6 +59,24 @@ public event UnhandledExceptionEventHandler? UnhandledException
+@@ -58,6 +60,24 @@ public event UnhandledExceptionEventHandler? UnhandledException
  
          public string? DynamicDirectory => null;
  
@@ -169,22 +176,29 @@ index 9866c0e660c..2808164a852 100644
          }
  
 diff --git a/src/libraries/System.Private.CoreLib/src/System/Reflection/Emit/DynamicMethod.cs b/src/libraries/System.Private.CoreLib/src/System/Reflection/Emit/DynamicMethod.cs
-index 2e0de2124ff..5bdfd2afe1f 100644
+index 2e0de2124ff..693bf909c0e 100644
 --- a/src/libraries/System.Private.CoreLib/src/System/Reflection/Emit/DynamicMethod.cs
 +++ b/src/libraries/System.Private.CoreLib/src/System/Reflection/Emit/DynamicMethod.cs
-@@ -224,8 +224,9 @@ private void Init(string name,
+@@ -224,8 +224,16 @@ private void Init(string name,
  
              AssemblyBuilder.EnsureDynamicCodeSupported();
  
 -            if (attributes != (MethodAttributes.Static | MethodAttributes.Public) || callingConvention != CallingConventions.Standard)
 -                throw new NotSupportedException(SR.NotSupported_DynamicMethodFlags);
 +            // Port17: old mods use Framework-style DynamicMethod flags; Ludeon normalizes them.
-+            attributes = MethodAttributes.Static | MethodAttributes.Public;
-+            callingConvention = CallingConventions.Standard;
++            if (attributes != (MethodAttributes.Static | MethodAttributes.Public))
++            {
++                attributes = MethodAttributes.Static | MethodAttributes.Public;
++            }
++
++            if (callingConvention != CallingConventions.Standard)
++            {
++                callingConvention = CallingConventions.Standard;
++            }
  
              // check and store the signature
              if (signature != null)
-@@ -314,9 +315,10 @@ public override string ToString()
+@@ -314,9 +322,10 @@ public override string ToString()
  
          public override string Name => _name;
  
