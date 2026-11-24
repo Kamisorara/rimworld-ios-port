@@ -20,6 +20,10 @@ namespace PortMobile
 			try
 			{
 				string path = System.IO.Path.Combine(AppContext.BaseDirectory, "mobile.txt");
+				if (!File.Exists(path))
+				{
+					path = System.IO.Path.Combine(AppContext.BaseDirectory, "mobile.txt.txt");
+				}
 				if (File.Exists(path))
 				{
 					foreach (string line in File.ReadAllLines(path))
@@ -31,6 +35,8 @@ namespace PortMobile
 						}
 					}
 				}
+				Console.WriteLine("[mobile] settings: " + path + (File.Exists(path) ? " (" + values.Count + " entries)" : " (not found)")
+					+ ", renderHeight=" + Get("renderHeight", 0));
 			}
 			catch (Exception e)
 			{

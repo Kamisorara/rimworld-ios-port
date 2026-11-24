@@ -88,7 +88,10 @@ namespace PortMobile
 		private static void ApplyMobileRenderSize()
 		{
 			glfwAndroidViewSize(out int screenWidth, out int screenHeight);
-			int height = Settings.Get("renderHeight", 0);
+			// A missing mobile.txt should not leave a high-resolution iPad at its full panel size; an explicit
+			// renderHeight=0 still asks for the screen's own resolution.
+			int fallback = OperatingSystem.IsIOS() && screenHeight > 1200 ? 1080 : 0;
+			int height = Settings.Get("renderHeight", fallback);
 			if (screenWidth <= 0 || screenHeight <= 0 || height <= 0 || height >= screenHeight)
 			{
 				return;
