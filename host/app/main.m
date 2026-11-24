@@ -8,6 +8,8 @@
 #import <UIKit/UIKit.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #import "host.h"
 #import "unzip.h"
 #import "status.h"
@@ -181,6 +183,67 @@ static void crash_handler(int sig)
     raise(sig);
 }
 
+static char *trim_perf_value(char *value)
+{
+    while (*value == ' ' || *value == '\t') value++;
+    char *end = value + strlen(value);
+    while (end > value && (end[-1] == ' ' || end[-1] == '\t' ||
+                           end[-1] == '\r' || end[-1] == '\n'))
+        end--;
+    *end = 0;
+    return value;
+}
+
+// Perf A/B controls live beside the game and are read before MoltenVK can be loaded. The
+// 0.4.28 package must be observation-only by default: swapchainImages=3 is the only H1 test.
+static void apply_perf_config(void)
+{
+    NSString *path = [NSHomeDirectory()
+        stringByAppendingPathComponent:@"Documents/game/port17-perf.txt"];
+    FILE *file = fopen(path.fileSystemRepresentation, "r");
+    if (!file)
+        return;
+
+    char line[128];
+    while (fgets(line, sizeof line, file))
+    {
+        char *cursor = line;
+        while (*cursor == ' ' || *cursor == '\t') cursor++;
+        if (*cursor == 0 || *cursor == '#' || *cursor == ';')
+            continue;
+        char *separator = strchr(cursor, '=');
+        if (!separator)
+            continue;
+        *separator = 0;
+        char *key = trim_perf_value(cursor);
+        char *value = trim_perf_value(separator + 1);
+        if (!strcmp(key, "swapchainImages") || !strcmp(key, "triangleImages"))
+        {
+            int wanted = atoi(value);
+            if (wanted >= 0 && wanted <= 8)
+            {
+                setenv(!strcmp(key, "swapchainImages") ? "PORT17_SWAPCHAIN_IMAGES"
+                                                       : "PORT17_TRIANGLE_IMAGES",
+                       value, 1);
+                boot_log([NSString stringWithFormat:@"perf config: %s=%s", key, value]);
+            }
+        }
+        else if (!strcmp(key, "mvkPerformanceTracking") ||
+                 !strcmp(key, "mvkSynchronousQueueSubmits") ||
+                 !strcmp(key, "mvkPrefillMetalCommandBuffers"))
+        {
+            NSString *env = [key isEqualToString:@"mvkPerformanceTracking"]
+                ? @"MVK_CONFIG_PERFORMANCE_TRACKING"
+                : [key isEqualToString:@"mvkSynchronousQueueSubmits"]
+                    ? @"MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS"
+                    : @"MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS";
+            setenv(env.UTF8String, value, 1);
+            boot_log([NSString stringWithFormat:@"perf config: %s=%s", key, value]);
+        }
+    }
+    fclose(file);
+}
+
 int main(int argc, char *argv[])
 {
     @autoreleasepool {
@@ -215,6 +278,7 @@ int main(int argc, char *argv[])
         // 日志 sink 一开始就装：引擎模式下宿主 UIKit 还没起来，host_log 的行经
         // append_log 落 port17-ui.log（启动器的屏幕部分排队等 UIApplicationMain 后补上屏）。
         port17_ui_install_sinks();
+        apply_perf_config();
         setenv("HELLO_OUT", [[NSHomeDirectory()
             stringByAppendingPathComponent:@"Documents/hello.log"]
             fileSystemRepresentation], 1);

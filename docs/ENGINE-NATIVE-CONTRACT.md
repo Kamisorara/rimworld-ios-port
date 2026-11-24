@@ -147,6 +147,13 @@ glfwWaitEvents 用条件变量阻塞。
 - 前向层薄：5 个全局入口直转 MoltenVK，`vkGetInstanceProcAddr` 包装一层留钩子位
   （M2 首版纯前向；安卓侧的 coherent-memory/descriptor-pool/identity-transform 钩子在 iOS
   按需再加——Metal 的内存模型与 ICD 池行为不同，预计不需要或需要不同的）
+- 0.4.28 起钩子位承载性能观测：`vkGetInstanceProcAddr` 与 `vkGetDeviceProcAddr` 包装
+  metal export、queue submit/present、acquire、fence wait、swapchain create/image query；
+  聚合 5 秒输出一次。除 `PORT17_SWAPCHAIN_IMAGES` 显式非零外不改行为；该值要求 caps
+  匹配同一 surface 且 max 允许，否则只记录 `cannot force` 形态的原始 request/caps 日志。
+- 宿主在 MoltenVK 装载前读 `Documents/game/port17-perf.txt`。可用键：
+  `swapchainImages=3`（引擎 H1 A/B）、`triangleImages=2|3`、`mvkPerformanceTracking`、
+  `mvkSynchronousQueueSubmits`、`mvkPrefillMetalCommandBuffers`。文件不在或键不在时默认关闭。
 - MoltenVK 官方发布包：`MoltenVK-ios.tar`（v1.4.2，2026-07-20，iOS ≥15.0）里的
   `MoltenVK/MoltenVK/dynamic/MoltenVK.xcframework/ios-arm64/MoltenVK.framework`（动态，放 .app 根，
   @executable_path rpath 已由宿主链接参数覆盖）与 `MoltenVK/MoltenVK/include`（完整 Vulkan 头，

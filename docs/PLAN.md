@@ -284,6 +284,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **0.4.27 包落位（test_work/m4-touch-30，run [45424599139](https://github.com/Kamisorara/rimworld-ios-port/actions/runs/45424599139)，push 自 cc985cd）**：IPA SHA256 `4027F8AF785121AA958AD5F07A063C214ED046A5374C31AE01FB26C35D989323`。解包核验版本 0.4.27；包内 `PortMobile.dll` SHA256 `5258562EEC97F51C0343C32E46829E07EA37E3926E82694115A20CD0CAB3B451`，与 prebuilt 一致；包内 `0Harmony.dll` smoke 退出码 0。**待真机裁决。**安装后冷启动，进游戏等 30 秒；日志看 `[mobile] frame:` 行的 `render/acquire/record/submit` 分布。
 
+**六十六轮（0.4.28，Vulkan 分段计时 + 2/3 图实验开关）**：0.4.27 已确认 `render` 33ms 而 acquire/record 几乎为零，submit 混合了 `AcquireMetalDrawable`、`vkQueueSubmit`、`vkQueuePresentKHR`。`libvulkan.dylib` 现在包装 `vkGetInstanceProcAddr`/`vkGetDeviceProcAddr`，分别计时 export、submit、present、acquire、fence wait、swapchain create/image query，并每 5 秒输出 median/99%/max、返回码分布、caps、present modes 和实际图像数。默认不改行为；`Documents/game/port17-perf.txt` 冷启动前写 `swapchainImages=3` 才做 H1 A/B，且必须同一 surface 的 caps 允许。三角形支持 `triangleImages=2|3` 与 submit/present 的 300 帧聚合；MVK 诊断旋钮走同一配置文件，默认关闭。版本升 0.4.28。`PortMobile.dll` 本轮不变；prebuilt `0Harmony.dll` smoke 退出码 0。**待 CI 包落位与真机裁决。**默认包先看 `[vulkan] frame timing window` 中 33ms 归属；切 3 图后看 `Created 3 swapchain images`、`swapchain images observed=3`、interval 是否到 16.7ms、`port17 活性` 是否 +900/15s。
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这十一条）**：
 
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；

@@ -129,6 +129,41 @@ static float g_dragX = 0.0f, g_dragY = -0.6f; // the dragged vertex's position (
 static volatile int g_charCount, g_lastChar;
 static volatile int g_stop;
 static volatile int g_ran, g_done; // ran: the loop started once; done: triangle_main returned
+static uint32_t g_requestedImageCount;
+static double g_submitTimes[300];
+static double g_presentTimes[300];
+static uint32_t g_timingHead;
+static uint32_t g_timingCount;
+
+static void add_timing(double* samples, double milliseconds)
+{
+    samples[g_timingHead] = milliseconds;
+    g_timingHead = (g_timingHead + 1) % 300;
+    if (g_timingCount < 300) g_timingCount++;
+}
+
+static int compare_times(const void* left, const void* right)
+{
+    double a = *(const double*)left, b = *(const double*)right;
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+static void report_timings(void)
+{
+    double submits[300], presents[300];
+    memcpy(submits, g_submitTimes, sizeof submits);
+    memcpy(presents, g_presentTimes, sizeof presents);
+    qsort(submits, g_timingCount, sizeof submits[0], compare_times);
+    qsort(presents, g_timingCount, sizeof presents[0], compare_times);
+    uint32_t high = g_timingCount ? (uint32_t)((g_timingCount * 99 + 99) / 100) : 0;
+    if (high >= g_timingCount) high = g_timingCount ? g_timingCount - 1 : 0;
+    logf_("三角形：submit median %.2f ms, 99%% %.2f; present median %.2f ms, 99%% %.2f（%u 帧）",
+          g_timingCount ? submits[g_timingCount / 2] : 0.0,
+          g_timingCount ? submits[high] : 0.0,
+          g_timingCount ? presents[g_timingCount / 2] : 0.0,
+          g_timingCount ? presents[high] : 0.0,
+          g_timingCount);
+}
 
 // The engine button's pre-flight: stop the loop and wait for the thread to be through (the
 // engine takes the same CAMetalLayer and the shim's single window slot). Never ran → at once.
@@ -350,6 +385,19 @@ static bool create_swapchain(void)
     g_extent = caps.currentExtent;
     g_imageCount = caps.minImageCount + 1;
     if (caps.maxImageCount > 0 && g_imageCount > caps.maxImageCount) g_imageCount = caps.maxImageCount;
+    g_requestedImageCount = (uint32_t)atoi(getenv("PORT17_TRIANGLE_IMAGES") ? getenv("PORT17_TRIANGLE_IMAGES") : "0");
+    if (g_requestedImageCount > 0)
+    {
+        if (caps.maxImageCount == 0 || g_requestedImageCount <= caps.maxImageCount)
+        {
+            g_imageCount = g_requestedImageCount;
+            logf_("三角形：按 PORT17_TRIANGLE_IMAGES 请求 %u 张图", g_requestedImageCount);
+        }
+        else
+        {
+            logf_("三角形：不能强制 %u 张图（surface 上限 %u）", g_requestedImageCount, caps.maxImageCount);
+        }
+    }
     VkSwapchainCreateInfoKHR info = { VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR };
     info.surface = g_surface;
     info.minImageCount = g_imageCount;
@@ -365,6 +413,7 @@ static bool create_swapchain(void)
     info.clipped = VK_TRUE;
     CHECK(vkCreateSwapchainKHR(g_device, &info, NULL, &g_swapchain), "vkCreateSwapchainKHR");
     CHECK(vkGetSwapchainImagesKHR(g_device, g_swapchain, &g_imageCount, NULL), "vkGetSwapchainImagesKHR(数)");
+    logf_("三角形：请求 %u 张，MoltenVK 返回 %u 张", g_requestedImageCount, g_imageCount);
     g_images = calloc(g_imageCount, sizeof *g_images);
     g_views = calloc(g_imageCount, sizeof *g_views);
     g_framebuffers = calloc(g_imageCount, sizeof *g_framebuffers);
@@ -741,14 +790,27 @@ int triangle_main(void)
         submit.pCommandBuffers = &cmd;
         submit.signalSemaphoreCount = 1;
         submit.pSignalSemaphores = &sync->render;
-        if (vkQueueSubmit(g_queue, 1, &submit, sync->fence) != VK_SUCCESS) { failures++; continue; }
+        struct timespec submitStart;
+        clock_gettime(CLOCK_MONOTONIC, &submitStart);
+        VkResult submitted = vkQueueSubmit(g_queue, 1, &submit, sync->fence);
+        struct timespec submitEnd;
+        clock_gettime(CLOCK_MONOTONIC, &submitEnd);
+        add_timing(g_submitTimes, (double)(submitEnd.tv_sec - submitStart.tv_sec) * 1000.0 +
+                   (double)(submitEnd.tv_nsec - submitStart.tv_nsec) / 1e9);
+        if (submitted != VK_SUCCESS) { failures++; continue; }
         VkPresentInfoKHR present = { VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
         present.waitSemaphoreCount = 1;
         present.pWaitSemaphores = &sync->render;
         present.swapchainCount = 1;
         present.pSwapchains = &g_swapchain;
         present.pImageIndices = &imageIndex;
+        struct timespec presentStart;
+        clock_gettime(CLOCK_MONOTONIC, &presentStart);
         VkResult shown = vkQueuePresentKHR(g_queue, &present);
+        struct timespec presentEnd;
+        clock_gettime(CLOCK_MONOTONIC, &presentEnd);
+        add_timing(g_presentTimes, (double)(presentEnd.tv_sec - presentStart.tv_sec) * 1000.0 +
+                   (double)(presentEnd.tv_nsec - presentStart.tv_nsec) / 1e9);
         presents += shown == VK_SUCCESS || shown == VK_SUBOPTIMAL_KHR;
         if (shown != VK_SUCCESS && shown != VK_SUBOPTIMAL_KHR) failures++;
         g_frameIndex = (g_frameIndex + 1) % g_imageCount;
@@ -760,6 +822,9 @@ int triangle_main(void)
             double seconds = (double)(now.tv_sec - start.tv_sec) + (double)(now.tv_nsec - start.tv_nsec) / 1e9;
             logf_("三角形：%ld 帧，%ld 次呈现成功，%ld 次失败，%.1f fps，顶点 (%.2f, %.2f)",
                   frames, presents, failures, seconds > 0 ? frames / seconds : 0.0, g_dragX, g_dragY);
+            report_timings();
+            g_timingHead = 0;
+            g_timingCount = 0;
         }
     }
     logf_("三角形：渲染循环结束（%ld 帧）", frames);
