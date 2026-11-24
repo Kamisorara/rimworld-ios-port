@@ -168,9 +168,9 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 - PortMobile 若引用安卓 mod 管线的类型（ModPrep/Workshop）→ 同步时一并复制或桩化，审计步产出清单；
 - mod 管线 + CoreLib 20 开关与触控线并行推进（触控不依赖 mod，但 PortMobile 的 mod 兼容面依赖）——顺序：探针 → 触控主线，mod 管线随后。
 
-**0.4.x 真机连载（2026-11-24，0.4.0→0.4.15）：游戏本体完整进入；装载链与 MonoMod/Harmony 运行底座逐层钉死，触控进入 IOS 输入桥裁决**
+**0.4.x 真机连载（2026-11-24，0.4.0→0.4.16）：游戏本体完整进入；装载链与 MonoMod/Harmony 运行底座逐层钉死，触控进入 IOS 输入桥裁决**
 
-**当前进度总览（截至 0.4.15）**：M0–M3 已关闭；M4 进行中。游戏本体在 0.4.x 线稳定进入真机——IOS 后端、JIT 竞技场、Metal 交换链、CoreAudio、世界装载、官方 DLC 与键盘输入都已验证。触控目标仍未关闭：0.4.6 之前是手机层装载问题，0.4.7 起才真正进入 Harmony/MonoMod detour 链。已连修十五关：竞技场时序（0.4.1）、Android 后端劫持（0.4.2）、PortHooks 版本（0.4.3）、PortMobile bundle 回退（0.4.4）、mscorlib 可执行 facade（0.4.5）、宿主自带 0Harmony（0.4.6）、MonoMod 平台钉成 OSX+Arm64（0.4.7）、tuple 原构造保留与签名 exhelper 入包（0.4.8）、静态 JIT 的 `getJit` shim（0.4.9）、MonoMod 宿主件按 bundle 解析 + exhelper 可选化（0.4.10）、exhelper 方法体 IL 的 `leave` 修正（0.4.11）、MonoMod 接入竞技场（0.4.12）、Core110 版本化 native-code 入口（0.4.13）、跨平台线程 ID（0.4.14）、IOS UIKit 输入桥（0.4.15）。0.4.14 真机证明 detour、触控层初始化和 `OnGUI` 已不再被 `gettid` 打断，但 IOS 后端的原始触摸仍在 PortMobile 手势队列之外；0.4.15 把两条输入流接通。通过标准不变——日志不再有 `the phone layer failed to start`，游戏内长按右键/双指缩放/TapAssist 有反应。
+**当前进度总览（截至 0.4.16）**：M0–M3 已关闭；M4 进行中。游戏本体在 0.4.x 线稳定进入真机——IOS 后端、JIT 竞技场、Metal 交换链、CoreAudio、世界装载、官方 DLC 与键盘输入都已验证。触控目标仍未关闭：0.4.6 之前是手机层装载问题，0.4.7 起才真正进入 Harmony/MonoMod detour 链。已连修十六关：竞技场时序（0.4.1）、Android 后端劫持（0.4.2）、PortHooks 版本（0.4.3）、PortMobile bundle 回退（0.4.4）、mscorlib 可执行 facade（0.4.5）、宿主自带 0Harmony（0.4.6）、MonoMod 平台钉成 OSX+Arm64（0.4.7）、tuple 原构造保留与签名 exhelper 入包（0.4.8）、静态 JIT 的 `getJit` shim（0.4.9）、MonoMod 宿主件按 bundle 解析 + exhelper 可选化（0.4.10）、exhelper 方法体 IL 的 `leave` 修正（0.4.11）、MonoMod 接入竞技场（0.4.12）、Core110 版本化 native-code 入口（0.4.13）、跨平台线程 ID（0.4.14）、IOS UIKit 输入桥（0.4.15）、桥的 NSObject→UITouch 修正（0.4.16）。0.4.14 真机证明 detour、触控层初始化和 `OnGUI` 已不再被 `gettid` 打断，但 IOS 后端的原始触摸仍在 PortMobile 手势队列之外；0.4.16 修复初版桥在通用 NSObject 包装上反射 UITouch 成员的 P1。通过标准不变——日志不再有 `the phone layer failed to start`，游戏内长按右键/双指缩放/TapAssist 有反应。
 
 **0.4.0（回退裁决，commit 3beddb9，run 45100332222）**：v2（AndroidPlatform + 大线程 + 桥）六个环节零真机数据，正式引擎路回 IOS 后端 + 主线程自动进引擎（0.3.6 验证链），启动器降为非引擎状态前门，v10 补丁按"休眠无害"假设保留。首测即连环炸，且每一轮的炸点都不重样——0.4.1/0.4.2/0.4.3/0.4.4/0.4.5 五轮各修一处。
 
@@ -240,6 +240,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **0.4.15 包落位（test_work/m4-touch-19，run [45288699652](https://github.com/Kamisorara/rimworld-ios-port/actions/runs/45288699652)，push 自 cb36290）**：IPA SHA256 `7F4D70767A34145072424ADAC365CE9CA7CAFF1DF2C69B70A88A5DDBDDE14F3F`（63,015,436 字节）。解包核验版本 0.4.15；包内 `PortMobile.dll` SHA256 `08766AF679745146903359A6AA6EA3F9ECEB2CF486B3B2744A8D12246FF80013`、`PortHooks.dll` SHA256 `B739B85FEA83B0B893B9B6EAF03A519AA4741DF07919283F9017AF221E4FED41`，均与 prebuilt 一致。反编译确认包内 `PortMobile.dll` 含 `ios touch bridge: HandleTouches patched`、`ios engine input bridge ready` 和 `InjectPointerMove/InjectButton/InjectScroll` 路径；对包内 `0Harmony.dll` 直接跑 smoke：arena 分配器、Core110 入口探针、JIT vtable 交换、Resolve 与 exhelper 可选路径全部通过，退出码 0。**待真机裁决。**
 
+**五十五轮 review 裁决（0.4.15 → 0.4.16）：初版 IOS 桥在首个触摸就会回退，必须重建 NSObject 到 UITouch 的包装**：对出包代码复查发现 `Foundation.ObjectAt` 的返回类型是 Waylith 的通用 `NSObject` readonly struct；Waylith 自己在 `IOSWindow.HandleTouches` 里先把它显式转成 `UITouch` 才有 `Type` 和 `LocationInView`。初版 `IosInput` 只取出 `NSObject.Handle`，随后直接在这个通用包装对象上反射 `Type/LocationInView`，首个手指必然进入 `raw touch conversion failed` 并永久回退裸触摸；此时 native gesture 前缀已被关闭，手势层等于没修。**修法**：缓存 `UITouch(nint)` 构造器，先取出 NSObject 的 handle，再构造真正的 `UITouch` 包装后才读 type/location；同一批触摸先完整转换进本地队列，转换失败时一条不进 `Touch.Apply`，避免半套状态。`BeforeHandleTouches` 增加 `EngineReady` 前置，注入桥缺失时不吃掉原始事件；`Skip` 只有桥可用时才关闭 Waylith 原生手势，注入或转换失败时自动恢复原生兜底；cursor/button/scroll 反射失败会置 `injectionFailed` 并带日志。重建 `PortMobile.dll` 528,896 字节、SHA256 `0A00506DCE926CCAD4B5F0E6A8A33063017F325CE5BC2A3E31951F4B12B8B990`；版本升 0.4.16。m4-touch-19 初版桥**作废，不要用于手势裁决**，尚未真机验证。
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这七条）**：
 
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
@@ -273,8 +275,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 | # | 项 | 状态 | 影响 | 收口动作 |
 |---|---|---|---|---|
-| 1 | **Harmony detour 在 iOS 未实测**（M4 五步之第一步「成败手」） | **已过运行底座与首帧 OnGUI**：0.4.1–0.4.15 连修十五关（竞技场时序 / Android 后端劫持 / PortHooks 版本 / PortMobile 查找路径 / mscorlib 毒 facade / 宿主缺 0Harmony / MonoMod 平台探测 / tuple 与签名 exhelper / 静态 JIT shim / MonoMod 宿主件按 bundle 解析 / exhelper IL 的 leave 修正 / MonoMod 接入竞技场 / Core110 版本化 native-code 入口 / 跨平台线程 ID / IOS UIKit 输入桥）；0.4.14 真机确认 detour、patch、`touch layer on` 和 OnGUI 不再被 `gettid` 打断，0.4.15 接通 IOS 原始触摸与 Touch 注入 | 成败手，一切触控裁决的前提 | 0.4.15 包裁决：出现 `ios touch bridge` / `first touch` / `engine input bridge ready`，再测触控六件套 |
-| 2 | **M4 触控六件套真机裁决**（长按右键/双指缩放/TapAssist/惯性滚动/虚拟鼠标键/KeyWheel） | 工程、装载链和 IOS 输入桥完成；0.4.14 证明 Touch 层可启动但旧队列空转，0.4.15 包待逐项裁决 | 触控体验对齐安卓 | 0.4.15 起逐项裁决清单 |
+| 1 | **Harmony detour 在 iOS 未实测**（M4 五步之第一步「成败手」） | **已过运行底座与首帧 OnGUI**：0.4.1–0.4.16 连修十六关（竞技场时序 / Android 后端劫持 / PortHooks 版本 / PortMobile 查找路径 / mscorlib 毒 facade / 宿主缺 0Harmony / MonoMod 平台探测 / tuple 与签名 exhelper / 静态 JIT shim / MonoMod 宿主件按 bundle 解析 / exhelper IL 的 leave 修正 / MonoMod 接入竞技场 / Core110 版本化 native-code 入口 / 跨平台线程 ID / IOS UIKit 输入桥 / NSObject→UITouch 修正）；0.4.14 真机确认 detour、patch、`touch layer on` 和 OnGUI 不再被 `gettid` 打断，0.4.16 修正初版 IOS 桥的首个触摸回退 | 成败手，一切触控裁决的前提 | 0.4.16 包裁决：出现 `ios touch bridge` / `first touch` / `engine input bridge ready` 且无 `raw touch conversion failed`，再测触控六件套 |
+| 2 | **M4 触控六件套真机裁决**（长按右键/双指缩放/TapAssist/惯性滚动/虚拟鼠标键/KeyWheel） | 工程、装载链和 IOS 输入桥完成；m4-touch-19 初版桥作废，0.4.16 包待逐项裁决 | 触控体验对齐安卓 | 0.4.16 起逐项裁决清单 |
 | 3 | **JIT 常开** | 平台约束：每次启动经 StikDebug + rw17-jit26.js 拉起才全速；普通打开 = 解释器（能玩、慢数倍） | 畅玩第一差距，平台天花板无工程解 | 玩家文档把 StikDebug 流程写清（M5） |
 | 4 | **CoreLib 补丁重移植 + libcoreclr 二进制补丁 iOS 版** | **调研已完成（2026-11-23，docs/NET11-COMPARISON.md）**：10.0.12→v11.0.0 判定平滑——20 开关的全部 CoreLib 锚点在 v11 原样存活（抽查复核过）；affinity 字节补丁上游 #125361 已修（iOS 不需要，划掉）；dualjit patch 对 GA tag 实测干净套用，且 v11 上游反而更贴我们的 hybrid 形状（DCC 闸门/iOS 解释器进 CI）。**12 项改动清单已成文**（托管 6 开关 + 原生 initonly + 私有 API 五件），待实施 | 游戏本体不受阻（0.3.6 实证可玩）；影响集中在 PC mod 的反射/DynamicMethod 边缘用法与两个显示细节（小人昵称哈希漂移、浮点位数） | M4 后半开工即做：源码补丁路线（patches/ 同 dualjit 机制），实施顺序见 NET11-COMPARISON.md §3 |
 | 5 | **ModRules.txt（RimSort 社区加载顺序库）未入包** | ModPrep 机制及其规则（v14）随 hooks 已入库——缺的是另一回事：`communityRules.json` 转换的紧凑文本（after/before/top/bottom/incompatible），给 mod 排序界面用；游戏有网时也能自己下载转换 | 已知冲突对的顺序修正缺失，特定 mod 组合可能排序不当；小列表几乎无感 | 打包件（modrules/build.js 产物入 IPA）或运行期自下载兜底 |

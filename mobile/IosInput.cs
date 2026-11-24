@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
 using HarmonyLib;
@@ -32,6 +33,10 @@ namespace PortMobile
 		private static object mouseId, mouseKind, touchKind;
 
 		private static MethodInfo foundationCount, foundationObjectAt;
+		private static Type uiTouchType;
+		private static ConstructorInfo uiTouchConstructor;
+		private static PropertyInfo uiTouchTypeProperty;
+		private static MethodInfo uiTouchLocation;
 
 		public static void Start(Harmony source)
 		{
@@ -93,18 +98,19 @@ namespace PortMobile
 
 		private static bool Skip()
 		{
-			return false;
+			return !touchHookFailed && !injectionFailed && injectionReady;
 		}
 
 		/// <summary>Returns false for finger-only sets, whose engine handling is now Touch's injected mouse.</summary>
 		private static bool BeforeHandleTouches(object __instance, object[] __args)
 		{
-			if (touchHookFailed || __args == null || __args.Length < 3)
+			if (touchHookFailed || injectionFailed || __args == null || __args.Length < 3 || !EngineReady())
 			{
 				return true;
 			}
 
 			bool hasMouse = false;
+			var queued = new List<(int kind, int id, Vector2 pos)>();
 			try
 			{
 				if (foundationCount == null)
@@ -112,6 +118,14 @@ namespace PortMobile
 					Type foundation = AccessTools.TypeByName("Waylith.Windowing.Shared.Apple.Interop.Foundation");
 					foundationCount = AccessTools.Method(foundation, "Count");
 					foundationObjectAt = AccessTools.Method(foundation, "ObjectAt");
+					uiTouchType = AccessTools.TypeByName("Waylith.Windowing.Shared.Apple.Bindings.UITouch");
+					uiTouchConstructor = AccessTools.Constructor(uiTouchType, new[] { typeof(nint) });
+					if (uiTouchConstructor == null)
+					{
+						throw new MissingMethodException(uiTouchType?.FullName ?? "UITouch", ".ctor(nint)");
+					}
+					uiTouchTypeProperty = uiTouchType.GetProperty("Type");
+					uiTouchLocation = uiTouchType.GetMethod("LocationInView");
 				}
 
 				object set = __args[0];
@@ -126,24 +140,30 @@ namespace PortMobile
 				{
 					object touch = foundationObjectAt.Invoke(null, new[] { array, i });
 					nint handle = (nint)touch.GetType().GetProperty("Handle").GetValue(touch);
-					int touchType = (int)Convert.ToInt64(touch.GetType().GetProperty("Type").GetValue(touch));
-					if (touchType == 3)
+					object nativeTouch = uiTouchConstructor.Invoke(new object[] { handle });
+					int nativeTouchType = (int)Convert.ToInt64(uiTouchTypeProperty.GetValue(nativeTouch));
+					if (nativeTouchType == 3)
 					{
 						hasMouse = true;
 						continue;
 					}
 
-					object point = touch.GetType().GetMethod("LocationInView").Invoke(touch, new[] { view });
+					object point = uiTouchLocation.Invoke(nativeTouch, new[] { view });
 					float x = (float)Number(point, "X");
 					float y = (float)Number(point, "Y");
 					Vector2 pixels = new Vector2((float)(x * scale), (float)(y * scale));
 					int id = (int)(handle.ToInt64() & 0x7fffffff);
+					queued.Add((kind, id, pixels));
 					if (Interlocked.Exchange(ref firstRawTouchLogged, 1) == 0)
 					{
 						Console.WriteLine("[mobile] ios touch bridge: first touch at " + pixels + " (scale " +
 							scale.ToString("0.0") + ")");
 					}
-					Touch.Apply(kind, id, pixels);
+				}
+
+				foreach (var touch in queued)
+				{
+					Touch.Apply(touch.kind, touch.id, touch.pos);
 				}
 			}
 			catch (Exception e)
@@ -155,7 +175,6 @@ namespace PortMobile
 				}
 				return true;
 			}
-
 			return hasMouse;
 		}
 
@@ -247,8 +266,15 @@ namespace PortMobile
 			{
 				return;
 			}
-			object position = Activator.CreateInstance(logicalType, x / windowScale, y / windowScale);
-			pointerMove.Invoke(engineWindow, new[] { position, mouseKind, mouseId, null, null });
+			try
+			{
+				object position = Activator.CreateInstance(logicalType, x / windowScale, y / windowScale);
+				Invoke(pointerMove, new[] { position, mouseKind, mouseId, null, null });
+			}
+			catch (Exception e)
+			{
+				InjectionFailed("pointer move", e);
+			}
 		}
 
 		public static void Button(int button, bool down)
@@ -257,8 +283,15 @@ namespace PortMobile
 			{
 				return;
 			}
-			object nativeButton = Enum.ToObject(pointerButtonType, button);
-			pointerButton.Invoke(engineWindow, new[] { nativeButton, down, mouseKind, mouseId, null, null });
+			try
+			{
+				object nativeButton = Enum.ToObject(pointerButtonType, button);
+				Invoke(pointerButton, new[] { nativeButton, down, mouseKind, mouseId, null, null });
+			}
+			catch (Exception e)
+			{
+				InjectionFailed("button", e);
+			}
 		}
 
 		public static void Scroll(double x, double y)
@@ -267,8 +300,27 @@ namespace PortMobile
 			{
 				return;
 			}
-			object delta = scrollLines.Invoke(null, new object[] { x, y });
-			pointerScroll.Invoke(engineWindow, new[] { delta, null });
+			try
+			{
+				object delta = scrollLines.Invoke(null, new object[] { x, y });
+				Invoke(pointerScroll, new[] { delta, null });
+			}
+			catch (Exception e)
+			{
+				InjectionFailed("scroll", e);
+			}
+		}
+
+		private static void Invoke(MethodInfo method, object[] arguments)
+		{
+			method.Invoke(engineWindow, arguments);
+		}
+
+		private static void InjectionFailed(string operation, Exception exception)
+		{
+			injectionFailed = true;
+			Console.WriteLine("[mobile] ios engine input bridge: " + operation + " failed: " +
+				(exception.InnerException?.Message ?? exception.Message));
 		}
 	}
 }
