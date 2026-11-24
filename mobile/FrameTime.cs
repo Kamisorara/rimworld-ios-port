@@ -56,7 +56,8 @@ namespace PortMobile
 				harmony.Patch(AccessTools.Method(renderThread, "RenderFrame"),
 					prefix: new HarmonyMethod(typeof(FrameTime), nameof(BeforeRenderFrame)),
 					postfix: new HarmonyMethod(typeof(FrameTime), nameof(AfterRenderFrame)));
-				Type renderContext = AccessTools.TypeByName("Waylith.Graphics.WindowRenderContext");
+				// TryAcquireNextFrame is declared on RenderContext (virtual); Harmony refuses to patch an override.
+				Type renderContext = AccessTools.TypeByName("Waylith.Graphics.RenderContext");
 				harmony.Patch(AccessTools.Method(renderContext, "TryAcquireNextFrame", Type.EmptyTypes),
 					prefix: new HarmonyMethod(typeof(FrameTime), nameof(BeforeAcquire)),
 					postfix: new HarmonyMethod(typeof(FrameTime), nameof(AfterAcquire)));
