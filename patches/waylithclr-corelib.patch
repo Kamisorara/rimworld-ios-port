@@ -97,7 +97,8 @@ diff --git a/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs b/src/
 index ab7e83c20ea..b052e6231b0 100644
 --- a/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs
 +++ b/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs
-@@ -7,6 +7,7 @@
+@@ -7,6 +7,8 @@
++using System.Collections.Generic;
  using System.Diagnostics.CodeAnalysis;
  using System.IO;
  using System.Reflection;
