@@ -20,3 +20,6 @@ game-stage-relaxed/
 setup-test/
 prebuilt/*.rsp
 prebuilt/BuiltFor.cs
+
+# Local agent instructions must stay machine-local
+AGENTS.md
