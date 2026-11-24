@@ -416,6 +416,12 @@ int run_engine(const char *bundle_dir, const char *home)
     // Threads started without a size (the loading thread, the XML loader's): Darwin leaves
     // them 512 KB where the PC's exe gives 1.5 MB — 16 MB of address space, as the main thread.
     setenv("DOTNET_Thread_DefaultStackSize", "0x1000000", 1);
+    // Tiered compilation swaps a hot method's entry for tier1 code and silently drops the
+    // MonoMod/Harmony detours on the way (0.4.17: the whole PortMobile patch layer - the
+    // touch machine, the recorder, every prefix - died within the first seconds, and the
+    // game fell back to bare native clicks). One full JIT pass per method keeps every
+    // detour stable. runtime.env may say else.
+    setenv("DOTNET_TieredCompilation", "0", 1);
     // The execution mode (M3 JIT line, hybrid runtime): the arena decides, not a guess.
     // Under a StikDebug serve session (rw17-jit26.js) the host acquires the debugger-
     // granted arena itself (jit26.c: brk handshake -> RW alias -> detach -> execution
@@ -523,10 +529,12 @@ int run_engine(const char *bundle_dir, const char *home)
     {
         const char *im = getenv("COMPlus_InterpMode");
         bool jit = (im == NULL || strcmp(im, "0") == 0);
-        snprintf(buf, sizeof buf, "引擎：生效执行模式 = %s（InterpMode=%s）",
-                 jit ? "JIT（分层编译+PGO；帧率若与解释器无差，用同存档 A/B 载入定量）"
+        const char *tc = getenv("DOTNET_TieredCompilation");
+        snprintf(buf, sizeof buf, "引擎：生效执行模式 = %s（InterpMode=%s，分层编译=%s）",
+                 jit ? "JIT（0.4.18 起分层默认关——tier-up 会静默丢 detour，关掉后触控层存活）"
                      : "解释器",
-                 im ? im : "未设");
+                 im ? im : "未设",
+                 tc ? tc : "未设=开");
         host_log(buf);
         // 启动器状态仓：生效模式（启动器「执行模式」卡片的数据源；日志行太长，这里存短话）
         char eff[96];

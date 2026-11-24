@@ -24,6 +24,7 @@ namespace PortMobile
 		private static bool rawTouchHooked;
 		private static bool touchHookFailed;
 		private static int firstRawTouchLogged;
+		private static int rawEvents;
 
 		private static object engineWindow;
 		private static double windowScale = 1;
@@ -107,6 +108,11 @@ namespace PortMobile
 			if (touchHookFailed || injectionFailed || __args == null || __args.Length < 3 || !EngineReady())
 			{
 				return true;
+			}
+			int events = ++rawEvents;
+			if (events % 100 == 0)
+			{
+				Console.WriteLine("[mobile] ios touch bridge: " + events + " raw events consumed");
 			}
 
 			bool hasMouse = false;

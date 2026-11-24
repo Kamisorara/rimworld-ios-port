@@ -51,6 +51,7 @@ namespace PortMobile
 
 		// The frames since the last snap.
 		private static double lastFrameAt, windowStart, longest;
+		private static int afterUpdateFrames;
 		private static int frames, ticksAtStart = -1;
 		private static readonly List<float> frameTimes = new List<float>(2048);
 		private static int mainTid, renderTid;
@@ -229,6 +230,13 @@ namespace PortMobile
 		{
 			try
 			{
+				// Same heartbeat idea as Touch.Update: a tier-up drops this postfix silently
+				// (0.4.17), and the only earlier sign was a record without snap lines.
+				int alive = ++afterUpdateFrames;
+				if (alive == 1 || alive % 600 == 0)
+				{
+					Console.WriteLine("[mobile] recorder alive, frame " + alive);
+				}
 				if (markIn > 0 && --markIn == 0)
 				{
 					TakeMark();

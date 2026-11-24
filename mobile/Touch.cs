@@ -350,6 +350,13 @@ namespace PortMobile
 		{
 			try
 			{
+				// A tier-up silently drops this prefix (0.4.17): the heartbeat is how a dead
+				// machine shows in the log instead of hiding as "only single clicks".
+				int frame = ++machineFrames;
+				if (frame == 1 || frame % 600 == 0)
+				{
+					Log("machine frame " + frame + ", fingers " + fingers.Count + ", mode " + mode);
+				}
 				Step();
 			}
 			catch (Exception e)
@@ -358,6 +365,8 @@ namespace PortMobile
 				mode = Mode.None;
 			}
 		}
+
+		private static int machineFrames;
 
 		private static void Step()
 		{
