@@ -250,6 +250,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **五十七轮裁决（0.4.17，test_work/m4-touch-21，19:14/19:18/19:32 三会话）**：0.4.17 转换层修复在真机生效——`first touch at …` 转换成功、无 `conversion failed`、无注入失败；点击也确实在工作（窗口开了十几次、读档、游戏内切标签）。但 `record.txt` 暴露了真问题：**点击全发生了，触控行和 10 秒快照却一条都没有**。算术定案：`Recorder.AfterUpdate`（Root.Update postfix）只在 1.0s 写过 state/ui 两行、之后 60 秒的会话没有一条快照 = **postfix 活了不到 10 秒**；`HandleTouches` prefix 首触转换后同样失联，所有触摸回到原生裸点击——原生天生只会单击，这就是"只能单击"的完整解释。根因：**CoreCLR 分层编译 tier-up 换热方法代码入口时静默丢弃 MonoMod/Harmony detour**（菜单 60fps，首秒即 tier-up；此前所有"验证过"的证据全是 tier0 第一次运行的痕迹，包括 0.4.14 的 OnGUI postfix `(1)`）。**验证（runtime.env 实验，engine.c 的内置后覆盖机制）**：`DOTNET_TieredCompilation=0` 一行 → 19:32 会话整个补丁层长活——`UIRootOnGUI postfix ran (600)`（此前永远只有 (1)）、虚拟鼠标键（MouseButtons）响应触摸的日志首次出现、用户实测长按/拖动/缩放全活。**修法（0.4.18）**：engine.c 默认 `DOTNET_TieredCompilation=0`（runtime.env 可改回）；"生效执行模式"日志按最终 env 上报分层状态；三处机层心跳（Touch.Update、Recorder.AfterUpdate 每 600 帧，IosInput 每 100 事件）——hook 死活从此一眼可见。**待真机裁决。**
 
+**0.4.18 包落位（test_work/m4-touch-22，run [45385988137](https://github.com/Kamisorara/rimworld-ios-port/actions/runs/45385988137)，push 自 8f0542d）**：IPA SHA256 `555DD8E7AD9EB64321D0E9DB76CC252777DC819C4613EAFE676942DF5A1E576F`（63,016,142 字节）。解包核验版本 0.4.18；包内 `PortMobile.dll` SHA256 `3FCD627CCD6E1C4FBA4B80786BCC1B92AC25D30555E8DD5867A3770B0FC56E63`，与 prebuilt 一致；反编译确认三处心跳（machine frame / raw events consumed / recorder alive）均已入产物。对包内 `0Harmony.dll` 直接跑 smoke：退出码 0，`0Harmony` 引用 `Port17MonoModArena` 正常。**待真机裁决。**下次日志看什么：`安装身份 版本=0.4.18`、生效模式行出现"分层编译=0"、三处心跳（`machine frame 600…`、`recorder alive, frame 600…`、`raw events consumed`）、`record.txt` 出现触控行与快照；六件套逐项过。
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这七条）**：
 
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
