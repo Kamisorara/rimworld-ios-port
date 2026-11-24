@@ -242,6 +242,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **五十五轮 review 裁决（0.4.15 → 0.4.16）：初版 IOS 桥在首个触摸就会回退，必须重建 NSObject 到 UITouch 的包装**：对出包代码复查发现 `Foundation.ObjectAt` 的返回类型是 Waylith 的通用 `NSObject` readonly struct；Waylith 自己在 `IOSWindow.HandleTouches` 里先把它显式转成 `UITouch` 才有 `Type` 和 `LocationInView`。初版 `IosInput` 只取出 `NSObject.Handle`，随后直接在这个通用包装对象上反射 `Type/LocationInView`，首个手指必然进入 `raw touch conversion failed` 并永久回退裸触摸；此时 native gesture 前缀已被关闭，手势层等于没修。**修法**：缓存 `UITouch(nint)` 构造器，先取出 NSObject 的 handle，再构造真正的 `UITouch` 包装后才读 type/location；同一批触摸先完整转换进本地队列，转换失败时一条不进 `Touch.Apply`，避免半套状态。`BeforeHandleTouches` 增加 `EngineReady` 前置，注入桥缺失时不吃掉原始事件；`Skip` 只有桥可用时才关闭 Waylith 原生手势，注入或转换失败时自动恢复原生兜底；cursor/button/scroll 反射失败会置 `injectionFailed` 并带日志。重建 `PortMobile.dll` 528,896 字节、SHA256 `0A00506DCE926CCAD4B5F0E6A8A33063017F325CE5BC2A3E31951F4B12B8B990`；版本升 0.4.16。m4-touch-19 初版桥**作废，不要用于手势裁决**，尚未真机验证。
 
+**0.4.16 包落位（test_work/m4-touch-20，run [45311651638](https://github.com/Kamisorara/rimworld-ios-port/actions/runs/45311651638)，push 自 c2a8e4f）**：IPA SHA256 `0A964CE8635EF52C0DAE0CDB7BFC885FC4D762D409F7AF72DD672A2133071DB5`（63,015,933 字节）。解包核验版本 0.4.16；包内 `PortMobile.dll` SHA256 `0A00506DCE926CCAD4B5F0E6A8A33063017F325CE5BC2A3E31951F4B12B8B990`、`PortHooks.dll` SHA256 `B739B85FEA83B0B893B9B6EAF03A519AA4741DF07919283F9017AF221E4FED41`，均与 prebuilt 一致。反编译确认包内桥用 `UITouch(nint)` 构造真正的 touch 包装后才读 type/location。对包内 `0Harmony.dll` 直接跑 smoke：arena 分配器、Core110 入口探针、JIT vtable 交换、Resolve 与 exhelper 可选路径全部通过，退出码 0。**待真机裁决。**
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这七条）**：
 
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
