@@ -26,9 +26,12 @@ namespace PortMobile
 		private static readonly List<double> throttles = new List<double>(1024);
 		private static long backlogTicks, backlogMaxTicks;
 		private static int backlogCount;
+		private static long renderTicks, acquireTicks, recordTicks, submitTicks;
+		private static int renderCount, acquireCount, recordCount, submitCount;
 
 		private static int mainThread;
 		private static long frameStart, throttleStart, backlogStart;
+		[ThreadStatic] private static long renderStart, acquireStart, recordStart, submitStart;
 		private static bool inFrame, throttleSeen;
 		private static double lastFrameAt, windowStart, longest;
 		private static int frames;
@@ -50,6 +53,20 @@ namespace PortMobile
 				harmony.Patch(AccessTools.Method(renderThread, "WaitForBacklogAtMost"),
 					prefix: new HarmonyMethod(typeof(FrameTime), nameof(BeforeBacklog)),
 					postfix: new HarmonyMethod(typeof(FrameTime), nameof(AfterBacklog)));
+				harmony.Patch(AccessTools.Method(renderThread, "RenderFrame"),
+					prefix: new HarmonyMethod(typeof(FrameTime), nameof(BeforeRenderFrame)),
+					postfix: new HarmonyMethod(typeof(FrameTime), nameof(AfterRenderFrame)));
+				Type renderContext = AccessTools.TypeByName("Waylith.Graphics.WindowRenderContext");
+				harmony.Patch(AccessTools.Method(renderContext, "TryAcquireNextFrame", Type.EmptyTypes),
+					prefix: new HarmonyMethod(typeof(FrameTime), nameof(BeforeAcquire)),
+					postfix: new HarmonyMethod(typeof(FrameTime), nameof(AfterAcquire)));
+				harmony.Patch(AccessTools.Method(renderContext, "TrySubmitFrame", Type.EmptyTypes),
+					prefix: new HarmonyMethod(typeof(FrameTime), nameof(BeforeSubmit)),
+					postfix: new HarmonyMethod(typeof(FrameTime), nameof(AfterSubmit)));
+				Type frameRenderer = AccessTools.TypeByName("Waylith.Rendering.FrameRenderer");
+				harmony.Patch(AccessTools.Method(frameRenderer, "RecordFrame"),
+					prefix: new HarmonyMethod(typeof(FrameTime), nameof(BeforeRecord)),
+					postfix: new HarmonyMethod(typeof(FrameTime), nameof(AfterRecord)));
 				pacingField = AccessTools.Field(app, "_pacingPresents");
 				windowStart = clock.Elapsed.TotalSeconds;
 				Console.WriteLine("[mobile] frame time: measuring every 5 s");
@@ -114,6 +131,66 @@ namespace PortMobile
 			}
 		}
 
+		public static void BeforeRenderFrame()
+		{
+			renderStart = Stopwatch.GetTimestamp();
+		}
+
+		public static void AfterRenderFrame()
+		{
+			if (renderStart != 0)
+			{
+				Interlocked.Add(ref renderTicks, Stopwatch.GetTimestamp() - renderStart);
+				Interlocked.Increment(ref renderCount);
+				renderStart = 0;
+			}
+		}
+
+		public static void BeforeAcquire()
+		{
+			acquireStart = Stopwatch.GetTimestamp();
+		}
+
+		public static void AfterAcquire()
+		{
+			if (acquireStart != 0)
+			{
+				Interlocked.Add(ref acquireTicks, Stopwatch.GetTimestamp() - acquireStart);
+				Interlocked.Increment(ref acquireCount);
+				acquireStart = 0;
+			}
+		}
+
+		public static void BeforeRecord()
+		{
+			recordStart = Stopwatch.GetTimestamp();
+		}
+
+		public static void AfterRecord()
+		{
+			if (recordStart != 0)
+			{
+				Interlocked.Add(ref recordTicks, Stopwatch.GetTimestamp() - recordStart);
+				Interlocked.Increment(ref recordCount);
+				recordStart = 0;
+			}
+		}
+
+		public static void BeforeSubmit()
+		{
+			submitStart = Stopwatch.GetTimestamp();
+		}
+
+		public static void AfterSubmit()
+		{
+			if (submitStart != 0)
+			{
+				Interlocked.Add(ref submitTicks, Stopwatch.GetTimestamp() - submitStart);
+				Interlocked.Increment(ref submitCount);
+				submitStart = 0;
+			}
+		}
+
 		public static void AfterFrame()
 		{
 			if (!inFrame)
@@ -158,11 +235,23 @@ namespace PortMobile
 			int backlogFrames = Interlocked.Exchange(ref backlogCount, 0);
 			long backlogSum = Interlocked.Exchange(ref backlogTicks, 0);
 			long backlogMax = Interlocked.Exchange(ref backlogMaxTicks, 0);
+			int renders = Interlocked.Exchange(ref renderCount, 0);
+			int acquires = Interlocked.Exchange(ref acquireCount, 0);
+			int records = Interlocked.Exchange(ref recordCount, 0);
+			int submits = Interlocked.Exchange(ref submitCount, 0);
+			long renderSum = Interlocked.Exchange(ref renderTicks, 0);
+			long acquireSum = Interlocked.Exchange(ref acquireTicks, 0);
+			long recordSum = Interlocked.Exchange(ref recordTicks, 0);
+			long submitSum = Interlocked.Exchange(ref submitTicks, 0);
 			Console.WriteLine(string.Format(
-				"[mobile] frame: {0:F1} fps; interval median {1:F1} ms, 99% {2:F1}, longest {3:F0}; work median {4:F1}, 99% {5:F1}; throttle median {6:F1}, 99% {7:F1}; backlog median {8:F1}, max {9:F1}; screen {10}x{11}; cap {12}; pacing {13}",
+				"[mobile] frame: {0:F1} fps; interval median {1:F1} ms, 99% {2:F1}, longest {3:F0}; work median {4:F1}, 99% {5:F1}; throttle median {6:F1}, 99% {7:F1}; backlog median {8:F1}, max {9:F1}; render {14:F1} ms (acquire {15:F1}, record {16:F1}, submit {17:F1}); screen {10}x{11}; cap {12}; pacing {13}",
 				frames / seconds, Median(intervals), High(intervals), longest, Median(works), High(works), Median(throttles), High(throttles),
 				backlogFrames > 0 ? Millis(backlogSum) / backlogFrames : 0.0, Millis(backlogMax),
-			 UnityEngine.Screen.width, UnityEngine.Screen.height, cap, pacing));
+				UnityEngine.Screen.width, UnityEngine.Screen.height, cap, pacing,
+				renders > 0 ? Millis(renderSum) / renders : 0.0,
+				acquires > 0 ? Millis(acquireSum) / acquires : 0.0,
+				records > 0 ? Millis(recordSum) / records : 0.0,
+				submits > 0 ? Millis(submitSum) / submits : 0.0));
 			frames = 0;
 			longest = 0;
 			intervals.Clear();

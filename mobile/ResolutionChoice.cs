@@ -31,7 +31,7 @@ namespace PortMobile
 		private static Type iosWindowType;
 		private static FieldInfo iosViewField, iosLayerField;
 		private static MethodInfo iosBoundsGetter, iosScaleGetter, iosSetScale, iosSetContentsScale, iosHandleLayout;
-		private static FieldInfo iosRectSizeField, iosSizeHeightField;
+		private static MethodInfo iosRectSizeGetter, iosSizeHeightGetter;
 
 		/// <summary>The screen's pixels for one of the game's (the agent's "phone px"): 1 at the screen's own resolution.</summary>
 		public static float ToScreen
@@ -202,14 +202,15 @@ namespace PortMobile
 					Console.WriteLine("[mobile] resolution: layer SetContentsScale method not found; the drawable is left at the screen's size");
 					return;
 				}
-				iosRectSizeField = AccessTools.Field(iosBoundsGetter.ReturnType, "Size");
-				if (iosRectSizeField == null)
+				// NSRect/NSSize are record structs: Size and Height are properties, not fields.
+				iosRectSizeGetter = AccessTools.PropertyGetter(iosBoundsGetter.ReturnType, "Size");
+				if (iosRectSizeGetter == null)
 				{
 					Console.WriteLine("[mobile] resolution: bounds Size field not found; the drawable is left at the screen's size");
 					return;
 				}
-				iosSizeHeightField = AccessTools.Field(iosRectSizeField.FieldType, "Height");
-				if (iosSizeHeightField == null)
+				iosSizeHeightGetter = AccessTools.PropertyGetter(iosRectSizeGetter.ReturnType, "Height");
+				if (iosSizeHeightGetter == null)
 				{
 					Console.WriteLine("[mobile] resolution: size Height field not found; the drawable is left at the screen's size");
 					return;
@@ -239,7 +240,7 @@ namespace PortMobile
 
 		private static void SetRenderScale(object window, int height)
 		{
-			if (iosViewField == null || iosLayerField == null)
+			if (iosViewField == null || iosLayerField == null || iosRectSizeGetter == null || iosSizeHeightGetter == null)
 			{
 				return;
 			}
@@ -250,8 +251,8 @@ namespace PortMobile
 				return;
 			}
 			object bounds = iosBoundsGetter.Invoke(view, null);
-			object size = iosRectSizeField.GetValue(bounds);
-			double points = (double)iosSizeHeightField.GetValue(size);
+			object size = iosRectSizeGetter.Invoke(bounds, null);
+			double points = (double)iosSizeHeightGetter.Invoke(size, null);
 			if (points <= 0)
 			{
 				return;
