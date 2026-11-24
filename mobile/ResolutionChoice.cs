@@ -21,6 +21,7 @@ namespace PortMobile
 	internal static class ResolutionChoice
 	{
 		[System.Runtime.InteropServices.DllImport("glfw")] private static extern void glfwAndroidViewSize(out int width, out int height);
+		[System.Runtime.InteropServices.DllImport("glfw")] private static extern void glfwSetWindowSize(IntPtr window, int width, int height);
 
 		private static readonly int[] Heights = { 1080, 720 };
 		private static bool available;
@@ -76,6 +77,27 @@ namespace PortMobile
 			{
 				Console.WriteLine("[mobile] resolution: the game's list is left: " + e.Message);
 			}
+			ApplyMobileRenderSize();
+		}
+
+		/// <summary>
+		/// iOS's window cannot be resized, so the Waylith IOS backend drops Screen.SetResolution. The GLFW shim can
+		/// still make the Metal drawable smaller while UIKit scales it to the same view. mobile.txt: renderHeight=1080
+		/// or 720; 0 leaves the screen's own resolution.
+		/// </summary>
+		private static void ApplyMobileRenderSize()
+		{
+			glfwAndroidViewSize(out int screenWidth, out int screenHeight);
+			int height = Settings.Get("renderHeight", 0);
+			if (screenWidth <= 0 || screenHeight <= 0 || height <= 0 || height >= screenHeight)
+			{
+				return;
+			}
+			int width = Mathf.RoundToInt(screenWidth * (float)height / screenHeight / 2f) * 2;
+			glfwSetWindowSize(IntPtr.Zero, width, height);
+			Prefs.ScreenWidth = width;
+			Prefs.ScreenHeight = height;
+			Console.WriteLine("[mobile] resolution: rendering at " + width + "x" + height + " (mobile.txt renderHeight=" + height + ", screen " + screenWidth + "x" + screenHeight + ")");
 		}
 
 		/// <summary>
