@@ -25,6 +25,7 @@ namespace PortMobile
 
 		private static readonly int[] Heights = { 1080, 720 };
 		private static bool available;
+		private static bool sizeApplied;
 
 		/// <summary>The screen's pixels for one of the game's (the agent's "phone px"): 1 at the screen's own resolution.</summary>
 		public static float ToScreen
@@ -77,6 +78,29 @@ namespace PortMobile
 			{
 				Console.WriteLine("[mobile] resolution: the game's list is left: " + e.Message);
 			}
+			ApplyMobileRenderSize();
+		}
+
+		/// <summary>
+		/// The window's size is not known yet when Start runs (the GLFW shim is attached later), so the size asked for
+		/// above is kept until the first frame that has it. Until then ApplyMobileRenderSize would return silently and
+		/// leave the panel at its full size (0.4.21 on the iPad).
+		/// </summary>
+		public static void Tick()
+		{
+			if (sizeApplied)
+			{
+				return;
+			}
+			glfwAndroidViewSize(out int width, out int height);
+			if (width <= 0 || height <= 0)
+			{
+				return;
+			}
+			sizeApplied = true;
+			available = true;
+			Console.WriteLine("[mobile] resolution: the window is " + width + "x" + height + " px");
+			ApplySaved();
 			ApplyMobileRenderSize();
 		}
 

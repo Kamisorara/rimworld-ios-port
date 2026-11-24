@@ -60,6 +60,7 @@ namespace PortMobile
 			SpawnDiag.Start(harmony);
 			Sched.Start(harmony);
 			FrameRate.Start(harmony);
+			FrameTime.Start(harmony);
 			Perf.Start(harmony);
 			WorldLabels.Start(harmony);
 			if (!Compat.On)

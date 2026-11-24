@@ -250,6 +250,7 @@ namespace PortMobile
 		/// <summary>Postfix of Root.Update. The game sets the target once at its start (to the display's rate); it is kept up here.</summary>
 		public static void EveryFrame()
 		{
+			ResolutionChoice.Tick();
 			if (Application.targetFrameRate != limit)
 			{
 				Application.targetFrameRate = limit;
