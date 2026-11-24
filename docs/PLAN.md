@@ -246,6 +246,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **五十六轮裁决（0.4.16，test_work/m4-touch-20，18:52 与 18:57 双会话）**：首轮（18:52）**无裁决数据**——SideStore 覆盖安装静默保留了旧 bundle，宿主启动行 `安装身份 版本=0.4.14`（同一容器 5B58596C），桥代码根本不在，全绿日志全是 0.4.14 的旧能力。**教训：每轮拿到日志先读 `安装身份` 版本行再分析行为。**重装后（18:57，`版本=0.4.16`）桥前两行首次全绿——`HandleTouches patched`、`engine input bridge ready (window IOSWindow, scale 2.0)`——首个触摸死在 `raw touch conversion failed: InvalidCastException: Unable to cast 'System.IntPtr' to 'System.IConvertible'`：`UITouch.Type` 返回装箱 `nint`，`Convert.ToInt64(object)` 依赖 IConvertible 而 IntPtr 不实现；phase（enum）与 scale（double）的 Convert 都正常通过（失败点在其后），`touchHookFailed` 置位后永久回退裸触摸——与"还是只能单击"的用户体感完全一致。**修法（0.4.17）**：`(long)(nint)` 直接 unbox，Convert 其余点位（enum/double）复核安全。重建 `PortMobile.dll` 528,896 字节、SHA256 `027DD4F18D052C9FB92D4B285DD17B317B9A5520E0D45D16A40E7A7A043DFE47`；反编译确认 `Convert.ToInt64` 已消失、unbox 已入产物；版本升 0.4.17。**待真机裁决。**
 
+**0.4.17 包落位（test_work/m4-touch-21，run [45380513533](https://github.com/Kamisorara/rimworld-ios-port/actions/runs/45380513533)，push 自 e640b6f）**：IPA SHA256 `F639EE13DC70AB34743E649B4665BA2B5B23FCEAA852CEB007315BA792F351C2`（63,015,941 字节）。解包核验版本 0.4.17；包内 `PortMobile.dll` SHA256 `027DD4F18D052C9FB92D4B285DD17B317B9A5520E0D45D16A40E7A7A043DFE47`、`PortHooks.dll` SHA256 `B739B85FEA83B0B893B9B6EAF03A519AA4741DF07919283F9017AF221E4FED41`（与上轮一致），均与 prebuilt 一致。反编译确认包内桥已改为 `(long)(nint)` unbox。对包内 `0Harmony.dll` 直接跑 smoke：arena 分配器自测、Core110 入口探针（本机走 `GetFunctionPointer` 回退）、JIT vtable 交换、Resolve 与 exhelper 可选路径全部通过，退出码 0。**待真机裁决。**下次日志看什么：`安装身份 版本=0.4.17`、`HandleTouches patched`、`engine input bridge ready`、`first touch at …`，且不得再出现 `raw touch conversion failed`。
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这七条）**：
 
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
