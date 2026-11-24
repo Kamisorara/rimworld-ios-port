@@ -282,6 +282,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **六十五轮裁决与修法（0.4.27，修渲染线程分段 patch）**：0.4.26 真机日志确认 `render` 总时长 33.3ms（正好 2 个 vsync），但 `acquire/record/submit` 全是 0.0。日志里有 `[mobile] frame time not measured: System.ArgumentException: You can only patch implemented methods/constructors. Patch the declared method virtual Waylith.Graphics.RenderContext::TryAcquireNextFrame() instead.`——`TryAcquireNextFrame` 是 `RenderContext` 上声明的虚方法，`WindowRenderContext` 没有 override，Harmony 拒绝 patch `WindowRenderContext` 上的方法。0.4.27 把 `TryAcquireNextFrame` 和 `TrySubmitFrame` 的 patch 目标改成 `Waylith.Graphics.RenderContext`，`RecordFrame` 仍在 `FrameRenderer`。这样下一包的 `render X ms (acquire A, record R, submit S)` 才是真的分段数据。`PortMobile.dll` 540,672 字节；版本升 0.4.27。**待真机裁决。**下次日志看 `acquire`/`record`/`submit` 哪个接近 30ms：acquire 大 = 等 drawable（swapchain/compositor 持有）；record 大 = CPU 录命令；submit 大 = GPU 或 FIFO present 等待。
 
+**0.4.27 包落位（test_work/m4-touch-30，run [45424599139](https://github.com/Kamisorara/rimworld-ios-port/actions/runs/45424599139)，push 自 cc985cd）**：IPA SHA256 `4027F8AF785121AA958AD5F07A063C214ED046A5374C31AE01FB26C35D989323`。解包核验版本 0.4.27；包内 `PortMobile.dll` SHA256 `5258562EEC97F51C0343C32E46829E07EA37E3926E82694115A20CD0CAB3B451`，与 prebuilt 一致；包内 `0Harmony.dll` smoke 退出码 0。**待真机裁决。**安装后冷启动，进游戏等 30 秒；日志看 `[mobile] frame:` 行的 `render/acquire/record/submit` 分布。
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这十一条）**：
 
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
