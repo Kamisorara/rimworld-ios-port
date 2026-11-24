@@ -1,34 +1,36 @@
 diff --git a/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs b/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs
-index 474e2c68292..c6c2a94e212 100644
+index 474e2c68292..77e9aca0e52 100644
 --- a/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs
 +++ b/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs
-@@ -200,6 +200,10 @@ protected override ModuleBuilder DefineDynamicModuleCore(string name)
+@@ -200,6 +200,13 @@ protected override ModuleBuilder DefineDynamicModuleCore(string name)
              }
          }
  
 +        // Port17: Framework callers pass fileName; runtime dynamic modules remain transient.
 +        public ModuleBuilder DefineDynamicModule(string name, string fileName)
-+            => DefineDynamicModule(name);
++        {
++            _ = fileName;
++            return DefineDynamicModule(name);
++        }
 +
          #endregion
  
          /// <summary>
 diff --git a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
-index 849f33fd9af..fc8396e6d0e 100644
+index 849f33fd9af..88e3faf6116 100644
 --- a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
 +++ b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
-@@ -2961,7 +2961,9 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
+@@ -2961,7 +2961,8 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
          }
  
          [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)]
 -        public override FieldInfo? GetField(string name, BindingFlags bindingAttr)
-+        private FieldInfo? GetFieldExact(
-+            [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)] string name,
-+            BindingFlags bindingAttr)
++        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)]
++        private FieldInfo? GetFieldExact(string name, BindingFlags bindingAttr)
          {
              ArgumentNullException.ThrowIfNull(name);
  
-@@ -2998,6 +3000,44 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
+@@ -2998,6 +2999,42 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
              return match;
          }
  
@@ -43,9 +45,7 @@ index 849f33fd9af..fc8396e6d0e 100644
 +        [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2062",
 +            Justification = "Lax field names are derived from an annotated framework field name.")]
 +        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)]
-+        public override FieldInfo? GetField(
-+            [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)] string name,
-+            BindingFlags bindingAttr)
++        public override FieldInfo? GetField(string name, BindingFlags bindingAttr)
 +        {
 +            ArgumentNullException.ThrowIfNull(name);
 +
@@ -212,12 +212,15 @@ index 2e0de2124ff..693bf909c0e 100644
          public override Module Module => _module;
  
 diff --git a/src/libraries/System.Private.CoreLib/src/System/Reflection/FieldAccessor.cs b/src/libraries/System.Private.CoreLib/src/System/Reflection/FieldAccessor.cs
-index 8490ff20104..3cbe03f7ee9 100644
+index 8490ff20104..dd4982b77b3 100644
 --- a/src/libraries/System.Private.CoreLib/src/System/Reflection/FieldAccessor.cs
 +++ b/src/libraries/System.Private.CoreLib/src/System/Reflection/FieldAccessor.cs
-@@ -381,13 +381,7 @@ private void CheckValue(ref object? value, BindingFlags invokeAttr, Binder? bind
+@@ -379,15 +379,9 @@ private void CheckValue(ref object? value, BindingFlags invokeAttr, Binder? bind
+         }
+ 
          [MethodImpl(MethodImplOptions.AggressiveInlining)]
-         internal void VerifyInitOnly()
+-        internal void VerifyInitOnly()
++        internal static void VerifyInitOnly()
          {
 -            Debug.Assert(IsStatic());
 -
