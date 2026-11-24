@@ -33,7 +33,8 @@ IPA 哈希、关键 DLL 哈希和真机验收点见 `docs/PLAN.md` 的 0.4.29 �
 
 2026-11-25 真机裁决通过：无 `port17-perf.txt` 时默认 3 图；菜单 60fps，进图后用户切
 `display link preferred 30` 再切回 60，swapchain 全程保持 3 图且 60fps 恢复。约 54 秒
-会话含装载/JIT 尖峰，尚不是 5 分钟长 soak。
+会话含装载/JIT 尖峰，尚不是 5 分钟长 soak。同日用户裁决：补充长 soak 暂搁置，
+0.4.29 关项与 M4 后半推进不受其阻塞。
 
 interposer 对 Waylith 引擎实例默认请求 3 张图；caps 不允许时不改。显式
 `PORT17_SWAPCHAIN_IMAGES=0` 关闭，`=2` 回 2 图对照。`port17-triangle` 应用实例不吃该默认，

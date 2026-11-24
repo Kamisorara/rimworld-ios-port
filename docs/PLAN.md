@@ -172,6 +172,10 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **当前进度总览（截至 0.4.22）**：M0–M3 已关闭；M4 进行中。游戏本体在 0.4.x 线稳定进入真机——IOS 后端、JIT 竞技场、Metal 交换链、CoreAudio、世界装载、官方 DLC 与键盘输入都已验证。触控目标仍未关闭：0.4.6 之前是手机层装载问题，0.4.7 起才真正进入 Harmony/MonoMod detour 链。已连修二十关：竞技场时序（0.4.1）、Android 后端劫持（0.4.2）、PortHooks 版本（0.4.3）、PortMobile bundle 回退（0.4.4）、mscorlib 可执行 facade（0.4.5）、宿主自带 0Harmony（0.4.6）、MonoMod 平台钉成 OSX+Arm64（0.4.7）、tuple 原构造保留与签名 exhelper 入包（0.4.8）、静态 JIT 的 `getJit` shim（0.4.9）、MonoMod 宿主件按 bundle 解析 + exhelper 可选化（0.4.10）、exhelper 方法体 IL 的 `leave` 修正（0.4.11）、MonoMod 接入竞技场（0.4.12）、Core110 版本化 native-code 入口（0.4.13）、跨平台线程 ID（0.4.14）、IOS UIKit 输入桥（0.4.15）、桥的 NSObject→UITouch 修正（0.4.16）、装箱 nint 走 Convert 的 InvalidCastException（0.4.17）、分层编译 tier-up 静默丢 detour（0.4.18）、IOS 渲染高度无法切换（0.4.20）、渲染高度应用时机（0.4.22）。0.4.14 真机证明 detour、触控层初始化和 `OnGUI` 已不再被 `gettid` 打断，但 IOS 后端的原始触摸仍在 PortMobile 手势队列之外；0.4.16 修复初版桥在通用 NSObject 包装上反射 UITouch 成员的 P1；0.4.18 关分层编译后整个补丁层首次在真机长时间存活。通过标准不变——日志不再有 `the phone layer failed to start`，游戏内长按右键/双指缩放/TapAssist 有反应。
 
+**触控线关闭与 M4 后半转向（2026-11-25 裁决）**：用户确认触控线已经好了，上述“触控目标仍未关闭”和差距表里 0.4.16 待测状态只是历史快照。补充逐项长测试与 0.4.29 的长 soak 暂时搁置，不作为 M4 继续推进的阻塞。M4 触控半边关闭；下一阶段是差距 #4——CoreLib 源码补丁重移植、原生 initonly 放行和 ModPrep 的 Mods 目录引用改道，实施基准见 [NET11-COMPARISON.md](NET11-COMPARISON.md) §3。
+
+**六十八轮实施（0.4.30，差距 #4 离线完成）**：新增 `patches/waylithclr-corelib.patch`，基于 v11.0.0 + dualjit 基线落 12 项：Mono 字符串哈希、G7/G15 浮点格式、DynamicMethod 属性/Owner、隔离 Assembly.Load(byte[])/LoadFile 按简单名回查、LaxPrivateFieldNames、托管 initonly 放行、`AppDomain.DefineDynamicAssembly` 2/3 参、`AssemblyBuilder.DefineDynamicModule(name,fileName)`、公共 JitHelpers 位宽 cast、原生 `InvokeUtil::SetValidField` 静态 initonly 检查移除。ModPrep 升 v15，把 Mods/RuntimeIL 中作用域错指到框架件的 `WaylithClr.*` 类型改到 PortHooks；m1-probe runtime 缓存键升 c23。离线验证：新补丁在干净 v11.0.0 worktree 先套 dualjit 后干净组合应用且 `diff --check` 通过；`build-portlayers.py` 0 error，`PortHooks.dll` SHA256 `A31FC5FFBEFE46208E953CC8545E5648AF3C4C87BD6D7E8A1249A847E1F7FB57`（202,752 字节），`PortMobile.dll` 哈希不变 `5258562EEC97F51C0343C32E46829E07EA37E3926E82694115A20CD0CAB3B451`；反编译确认 v15 与 `RetargetWaylithClrTypes`；`patch-harmony smoke prebuilt/0Harmony.dll` 退出码 0。版本升 0.4.30。**待 m1-probe 重编 runtime 与 CI 包落位；CoreLib 编译、ModPrep 真实 HarmonyMod、短启动回归都必须等真机/CI 裁决。**
+
 **0.4.0（回退裁决，commit 3beddb9，run 45100332222）**：v2（AndroidPlatform + 大线程 + 桥）六个环节零真机数据，正式引擎路回 IOS 后端 + 主线程自动进引擎（0.3.6 验证链），启动器降为非引擎状态前门，v10 补丁按"休眠无害"假设保留。首测即连环炸，且每一轮的炸点都不重样——0.4.1/0.4.2/0.4.3/0.4.4/0.4.5 五轮各修一处。
 
 **三十七轮（0.4.1）：JIT/普通启动双黑屏——setup 跑在竞技场之前，.ips 裁决 CODESIGNING Invalid Page**：真机双症状：普通启动闪退、StikDebug 会话黑屏。port17-ui 四段会话全部停在「setup：初始化 CoreCLR」，.ips 裁决：`CorHost2::CreateAppDomainWithManager` 里 `blr` 跳进 `rw-/rwx SM=COW` 页（max rwx 当前 rw-，不属于任何已加载镜像），termination = `CODESIGNING / Invalid Page`，ktriage「Failed to fault in a page with execute permissions」——**执行了没有执行权限的页，内核代码签名直接判死**。0.4.0 重构把 `jit26_acquire` 留在 `run_engine` 里，setup 的 coreclr_initialize 无竞技场硬闯：0.3.6 的 PORT17_JIT_RX 门让 W^X=false 走 legacy 单映射，iOS 27 上无签名页不可执行（JIT 会话里 debugserver 吞 fault → 黑屏不闪退，0.2.7 教训的第三次重演）。**修法**：main.m 启动路径先拿竞技场再决定 setup/引擎，拿不到不硬闯（普通启动停启动器并写明"本版只能走 JIT 会话"）；setup 执行模式与引擎门对齐（PORT17_JIT_RX 在位 = InterpMode=0 + R2R 关）；engine.c 见 PORT17_JIT_* 在位不重复握手。**教训（规则化）：混合运行时下任何 coreclr_initialize 位点（setup/engine/探针）都必须先有竞技场，无竞技场一律干净降级。**
@@ -294,6 +298,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **0.4.29 真机裁决（2026-11-25，test_work/m4-touch-32，通过）**：设备上没有 `perf config` 行，默认路径生效：`swapchain default: 3 images`；caps `minImages=2 maxImages=3`；`min=2 request=3 forced extent=2360x1640`；MoltenVK `Created 3 swapchain images`。全程每个 Vulkan 5 秒窗都是 `swapchain images observed=3`。菜单稳定窗 60.0fps、interval median 16.7ms；进图 `New Arrivals1` 用 1.9 秒，250x250 / 60 pawns / 35006 things。`record.txt` 前 10 秒显示菜单 60.0fps、0 错误 0 警告；地图首窗 40.2fps 是被装载/JIT 尖峰（7448 methods / 1390ms、两个约 2s 帧）拉低的聚合，median 仍 16.7ms。用户在游戏内主动切换帧率：06:44:03 `display link preferred 30`，随后的 5 秒窗按 30fps 节拍；06:44:11 `display link preferred 60`，06:44:17 回到 60.0fps / interval median 16.7ms。切换期间 swapchain 始终 3 图，`queuePresent` median 0.01–0.02ms、`queueSubmit` median 0.20–1.28ms，无三图失效或重建。结论：0.4.29 三图默认修复通过；30/60 游戏内切换正常。本局约 54 秒且含装载尖峰，未完成菜单+殖民地 5 分钟长 soak，正式关项前可另跑长会话。
 
+**0.4.29 关项修订（2026-11-25）**：同日用户裁决触控线关闭，补充真机测试与 5 分钟长 soak 暂时搁置，不再阻塞 0.4.29 关项或进入 M4 后半。若后续回到性能回归或触控异常，再按原观测点补测。
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这十一条）**：
 
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
@@ -329,12 +335,14 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 ### 差距（按畅玩影响排序）
 
+**2026-11-25 状态修订**：#1 和 #2 已随触控线关闭，下面两行的旧“待测”文字保留为 0.4.16 时点快照。#4 的 0.4.30 离线实施已完成，但 CI runtime 编译和真机裁决还没完成；通过前不得宣称 mod 兼容面已对齐。
+
 | # | 项 | 状态 | 影响 | 收口动作 |
 |---|---|---|---|---|
 | 1 | **Harmony detour 在 iOS 未实测**（M4 五步之第一步「成败手」） | **已过运行底座与首帧 OnGUI**：0.4.1–0.4.16 连修十六关（竞技场时序 / Android 后端劫持 / PortHooks 版本 / PortMobile 查找路径 / mscorlib 毒 facade / 宿主缺 0Harmony / MonoMod 平台探测 / tuple 与签名 exhelper / 静态 JIT shim / MonoMod 宿主件按 bundle 解析 / exhelper IL 的 leave 修正 / MonoMod 接入竞技场 / Core110 版本化 native-code 入口 / 跨平台线程 ID / IOS UIKit 输入桥 / NSObject→UITouch 修正）；0.4.14 真机确认 detour、patch、`touch layer on` 和 OnGUI 不再被 `gettid` 打断，0.4.16 修正初版 IOS 桥的首个触摸回退 | 成败手，一切触控裁决的前提 | 0.4.16 包裁决：出现 `ios touch bridge` / `first touch` / `engine input bridge ready` 且无 `raw touch conversion failed`，再测触控六件套 |
 | 2 | **M4 触控六件套真机裁决**（长按右键/双指缩放/TapAssist/惯性滚动/虚拟鼠标键/KeyWheel） | 工程、装载链和 IOS 输入桥完成；m4-touch-19 初版桥作废，0.4.16 包待逐项裁决 | 触控体验对齐安卓 | 0.4.16 起逐项裁决清单 |
 | 3 | **JIT 常开** | 平台约束：每次启动经 StikDebug + rw17-jit26.js 拉起才全速；普通打开 = 解释器（能玩、慢数倍） | 畅玩第一差距，平台天花板无工程解 | 玩家文档把 StikDebug 流程写清（M5） |
-| 4 | **CoreLib 补丁重移植 + libcoreclr 二进制补丁 iOS 版** | **调研已完成（2026-11-23，docs/NET11-COMPARISON.md）**：10.0.12→v11.0.0 判定平滑——20 开关的全部 CoreLib 锚点在 v11 原样存活（抽查复核过）；affinity 字节补丁上游 #125361 已修（iOS 不需要，划掉）；dualjit patch 对 GA tag 实测干净套用，且 v11 上游反而更贴我们的 hybrid 形状（DCC 闸门/iOS 解释器进 CI）。**12 项改动清单已成文**（托管 6 开关 + 原生 initonly + 私有 API 五件），待实施 | 游戏本体不受阻（0.3.6 实证可玩）；影响集中在 PC mod 的反射/DynamicMethod 边缘用法与两个显示细节（小人昵称哈希漂移、浮点位数） | M4 后半开工即做：源码补丁路线（patches/ 同 dualjit 机制），实施顺序见 NET11-COMPARISON.md §3 |
+| 4 | **CoreLib 补丁重移植 + libcoreclr 二进制补丁 iOS 版** | **0.4.30 离线实施完成（2026-11-25）**：`patches/waylithclr-corelib.patch` 已成文并在 v11+dualjit 基线干净应用；ModPrep v15 覆盖 Mods 目录的 WaylithClr 引用改道。CI runtime 编译和真机裁决未完成 | 游戏本体不受阻（0.3.6 实证可玩）；影响集中在 PC mod 的反射/DynamicMethod 边缘用法与两个显示细节（小人昵称哈希漂移、浮点位数） | m1-probe c23 重编 runtime → m2 出 0.4.30 IPA → 真机短启动与 HarmonyMod/Mods 裁决 |
 | 5 | **ModRules.txt（RimSort 社区加载顺序库）未入包** | ModPrep 机制及其规则（v14）随 hooks 已入库——缺的是另一回事：`communityRules.json` 转换的紧凑文本（after/before/top/bottom/incompatible），给 mod 排序界面用；游戏有网时也能自己下载转换 | 已知冲突对的顺序修正缺失，特定 mod 组合可能排序不当；小列表几乎无感 | 打包件（modrules/build.js 产物入 IPA）或运行期自下载兜底 |
 | 6 | **PortWorkshop 创意工坊下载器未移植** | 安卓有（workshop/：Downloads/Session/Updates/WorkshopWindow）；iOS 无 | 便利大件；zip 导入链兜底 | M5 候选 |
 | 7 | **NotoEmoji 兜底字体未入包** | 已知未清项 | 游戏文本 emoji/特殊字形缺字 | 打包件 |

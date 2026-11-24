@@ -83,6 +83,8 @@ internal sealed class InMemoryResolver : DefaultAssemblyResolver
 ///   - an override of a game method by its old return type, where the old type converts implicitly to the new one,
 ///     joined by the override the game does call, which returns the mod's result;
 ///   - Lunar Framework's checksum of the file (name.lfc beside name.dll) recomputed when the file changed;
+///   - references to the port's WaylithClr.* stand-ins (some RuntimeIL assemblies point them at CoreLib) moved to
+///     PortHooks.dll;
 ///   - its debug information kept: a portable PDB embedded in it, or beside it under the name its CodeView entry
 ///     gives, is written again for the rewritten code (ReadForPreparing, WriteAssembly);
 ///   - the three things Ludeon's runtime finds for a mod where the stock one does not (its LaxTypeRefResolution,
@@ -101,7 +103,7 @@ internal sealed class InMemoryResolver : DefaultAssemblyResolver
 internal static class ModPrep
 {
 	/// <summary>Bumped whenever what is done to an assembly changes; part of the stamp, so prepared mods are done again.</summary>
-	public const int RulesVersion = 14;
+	public const int RulesVersion = 15;
 
 	public const string StampName = ".port17-prepared";
 
@@ -659,6 +661,7 @@ internal static class ModPrep
 		ModuleDefinition module = assembly.MainModule;
 		int edits = AddAccessCheckExemptions(assembly);
 		// First: the rules below look types up, and a type pointed at its assembly resolves for them.
+		edits += RetargetWaylithClrTypes(module, resolver, label, log);
 		edits += RetargetMissingFrameworkTypes(module, resolver, label, log);
 		edits += AdaptFrameworkReturnTypes(module, label, log);
 		edits += MatchFrameworkFieldNames(module, label, log);
@@ -1172,6 +1175,62 @@ internal static class ModPrep
 	private static bool IsFrameworkName(string assembly)
 	{
 		return assembly == "mscorlib" || assembly == "netstandard" || assembly.StartsWith("System", StringComparison.Ordinal);
+	}
+
+	/// <summary>
+	/// RuntimeIL assemblies built against Ludeon's fork can carry WaylithClr.MethodBody* references with CoreLib (or
+	/// another framework assembly) as their scope. That scope does not define them; the PortHooks stand-ins do. Point
+	/// top-level WaylithClr references at the bundled PortHooks assembly. Nested references follow their outer type in
+	/// the generic framework pass below.
+	/// </summary>
+	private static int RetargetWaylithClrTypes(ModuleDefinition module, IAssemblyResolver resolver, string label, Action<string> log)
+	{
+		var names = new List<string>();
+		AssemblyDefinition portHooks = null;
+		bool looked = false;
+		foreach (TypeReference type in module.GetTypeReferences().ToList())
+		{
+			if (type.DeclaringType != null
+				|| type.Namespace != "WaylithClr"
+				|| !(type.Scope is AssemblyNameReference scope)
+				|| scope.Name == "PortHooks")
+			{
+				continue;
+			}
+
+			if (!looked)
+			{
+				looked = true;
+				portHooks = TryResolve(resolver, "PortHooks");
+			}
+
+			if (portHooks == null
+				|| (portHooks.MainModule.GetType(type.FullName) == null
+					&& !portHooks.MainModule.ExportedTypes.Any(exported => exported.FullName == type.FullName)))
+			{
+				continue;
+			}
+
+			AssemblyNameReference target = module.AssemblyReferences.FirstOrDefault(r => r.Name == "PortHooks");
+			if (target == null)
+			{
+				target = new AssemblyNameReference("PortHooks", portHooks.Name.Version)
+				{
+					PublicKeyToken = portHooks.Name.PublicKeyToken,
+				};
+				module.AssemblyReferences.Add(target);
+			}
+
+			type.Scope = target;
+			names.Add(type.FullName + " (" + scope.Name + " -> PortHooks)");
+		}
+
+		if (names.Count > 0)
+		{
+			log(label + ": " + names.Count + " WaylithClr type(s) retargeted to PortHooks: "
+				+ string.Join(", ", names.Take(4)) + (names.Count > 4 ? ", ..." : ""));
+		}
+		return names.Count;
 	}
 
 	private static TypeDefinition TryResolve(TypeReference type)
