@@ -278,6 +278,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **六十四轮裁决与修法（0.4.26，渲染线程分段计时 + 修 NSRect 反射）**：0.4.25 真机日志确认 present pacing 修复生效：`cap 60 fps from monitor refresh (game target -1, ..., safety net while vsync paces); pacing False`。但 `throttle median` 仍 24–32ms、`backlog median` 21–30ms、`interval median` 恒定 33.3ms，说明渲染线程每帧仍要 24ms 左右，主线程在 `WaitForBacklogAtMost(1)` 等 it。分辨率路径仍卡在 `bounds Size field not found`：`NSRect`/`NSSize` 是 record struct，`Size`/`Height` 是属性不是字段，`AccessTools.Field` 找不到。0.4.26 改成 `AccessTools.PropertyGetter`，这样 `renderHeight=1080` 才真正生效；同时给渲染线程加分段计时（`TryAcquireNextFrame` / `RecordFrame` / `TrySubmitFrame`），每 5 秒打 `render X ms (acquire A, record R, submit S)`，用来判断 24ms 是等 drawable、CPU 录命令还是提交/present 等待。`PortMobile.dll` 540,672 字节；版本升 0.4.26。**待真机裁决。**下次日志看 `[mobile] frame:` 行的 `render/acquire/record/submit` 分布：acquire 大 = 等 drawable（swapchain/compositor）；record 大 = CPU 录命令（渲染器 draw call 太多）；submit 大 = GPU 渲染或 FIFO present 等待。另外 `mobile.txt` 里现在是 `renderHeight=0`（明确要求原生），要测 1080p 需改成 `renderHeight=1080`。
 
+**0.4.26 包落位（test_work/m4-touch-29，run [45422615841](https://github.com/Kamisorara/rimworld-ios-port/actions/runs/45422615841)，push 自 f98430c）**：IPA SHA256 `DD74ABE09E820561C0F1A76458127B7419A469222CCA099E4A65E8DE8B7EC208`（63,020,079 字节）。解包核验版本 0.4.26；包内 `PortMobile.dll` SHA256 `D1438973D8654DE82D40882FFBEAB4D82B5AC7912E3143C0804398EDA6AF86EA`，与 prebuilt 一致；包内 `0Harmony.dll` smoke 退出码 0。**待真机裁决。**安装后冷启动，进游戏等 30 秒；日志看 `[mobile] frame:` 行的 `render/acquire/record/submit` 分布。
+
 **装载连载沉淀的通用规则（后续任何"装了不生效"先查这十一条）**：
 
 1. 任何 coreclr_initialize 位点必须先有竞技场，无竞技场一律干净降级不硬闯；
