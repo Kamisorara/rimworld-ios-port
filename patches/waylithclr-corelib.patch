@@ -1,3 +1,22 @@
+diff --git a/src/coreclr/System.Private.CoreLib/CompatibilitySuppressions.xml b/src/coreclr/System.Private.CoreLib/CompatibilitySuppressions.xml
+index 141210a166b..f8247f20d38 100644
+--- a/src/coreclr/System.Private.CoreLib/CompatibilitySuppressions.xml
++++ b/src/coreclr/System.Private.CoreLib/CompatibilitySuppressions.xml
+@@ -9,6 +9,14 @@
+     <DiagnosticId>CP0002</DiagnosticId>
+     <Target>F:System.Resources.ResourceManager.BaseNameField</Target>
+   </Suppression>
++  <Suppression>
++    <DiagnosticId>CP0002</DiagnosticId>
++    <Target>M:System.AppDomain.DefineDynamicAssembly(System.Reflection.AssemblyName,System.Reflection.Emit.AssemblyBuilderAccess)</Target>
++  </Suppression>
++  <Suppression>
++    <DiagnosticId>CP0002</DiagnosticId>
++    <Target>M:System.AppDomain.DefineDynamicAssembly(System.Reflection.AssemblyName,System.Reflection.Emit.AssemblyBuilderAccess,System.Collections.Generic.IEnumerable{System.Reflection.Emit.CustomAttributeBuilder})</Target>
++  </Suppression>
+   <Suppression>
+     <DiagnosticId>CP0002</DiagnosticId>
+     <Target>F:System.Resources.ResourceSet.Reader</Target>
 diff --git a/src/coreclr/System.Private.CoreLib/System.Private.CoreLib.csproj b/src/coreclr/System.Private.CoreLib/System.Private.CoreLib.csproj
 index 874529fa233..d37f17e48af 100644
 --- a/src/coreclr/System.Private.CoreLib/System.Private.CoreLib.csproj
@@ -13,3 +32,390 @@ index 874529fa233..d37f17e48af 100644
    <!-- Platform specific properties -->
    <PropertyGroup Condition="'$(Platform)' == 'x64'">
      <DefineConstants>$(DefineConstants);TARGET_AMD64</DefineConstants>
+diff --git a/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs b/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs
+index 474e2c68292..77e9aca0e52 100644
+--- a/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs
++++ b/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs
+@@ -200,6 +200,13 @@ protected override ModuleBuilder DefineDynamicModuleCore(string name)
+             }
+         }
+ 
++        // Port17: Framework callers pass fileName; runtime dynamic modules remain transient.
++        public ModuleBuilder DefineDynamicModule(string name, string fileName)
++        {
++            _ = fileName;
++            return DefineDynamicModule(name);
++        }
++
+         #endregion
+ 
+         /// <summary>
+diff --git a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
+index 849f33fd9af..013fb3db6f0 100644
+--- a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
++++ b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
+@@ -2961,7 +2961,7 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
+         }
+ 
+         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)]
+-        public override FieldInfo? GetField(string name, BindingFlags bindingAttr)
++        private FieldInfo? GetFieldExact(string name, BindingFlags bindingAttr)
+         {
+             ArgumentNullException.ThrowIfNull(name);
+ 
+@@ -2998,6 +2998,42 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
+             return match;
+         }
+ 
++        private bool IsWaylithFrameworkType()
++        {
++            string? simpleName = GetRuntimeModule().GetRuntimeAssembly().GetSimpleName();
++            return simpleName != null &&
++                (simpleName.StartsWith("System.", StringComparison.Ordinal) ||
++                 simpleName is "System" or "mscorlib" or "netstandard");
++        }
++
++        [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2062",
++            Justification = "Lax field names are derived from an annotated framework field name.")]
++        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)]
++        public override FieldInfo? GetField(string name, BindingFlags bindingAttr)
++        {
++            ArgumentNullException.ThrowIfNull(name);
++
++            FieldInfo? field = GetFieldExact(name, bindingAttr);
++            if (field != null ||
++                (bindingAttr & BindingFlags.NonPublic) == 0 ||
++                name.Length == 0 ||
++                name[0] == '_' ||
++                !IsWaylithFrameworkType())
++            {
++                return field;
++            }
++
++            bool monoName = name.StartsWith("m_", StringComparison.Ordinal);
++            string firstCandidate = "_" + (monoName ? name.Substring(2) : name);
++            FieldInfo? laxField = GetFieldExact(firstCandidate, bindingAttr);
++            if (laxField == null && !monoName)
++            {
++                laxField = GetFieldExact("m_" + name, bindingAttr);
++            }
++
++            return laxField != null && !laxField.IsPublic ? laxField : field;
++        }
++
+         [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2063:UnrecognizedReflectionPattern",
+             Justification = "Trimming makes sure that interfaces are fully preserved, so the Interfaces annotation is transitive." +
+                             "The cache doesn't carry the necessary annotation since it returns an array type," +
+diff --git a/src/coreclr/vm/invokeutil.cpp b/src/coreclr/vm/invokeutil.cpp
+index d97f374d822..66b8735d43b 100644
+--- a/src/coreclr/vm/invokeutil.cpp
++++ b/src/coreclr/vm/invokeutil.cpp
+@@ -725,17 +725,8 @@ void InvokeUtil::SetValidField(CorElementType fldType,
+         GCPROTECT_END();
+     }
+ 
+-    // Verify we're not trying to set the value of a static initonly field
+-    // once the class has been initialized.
+-    if (pField->IsStatic() && pDeclMT->IsClassInited() && IsFdInitOnly(pField->GetAttributes()))
+-    {
+-        DefineFullyQualifiedNameForClassW();
+-        SString ssFieldName(SString::Utf8, pField->GetName());
+-        COMPlusThrow(kFieldAccessException,
+-            IDS_EE_CANNOT_SET_INITONLY_STATIC_FIELD,
+-            ssFieldName.GetUnicode(),
+-            GetFullyQualifiedNameForClassW(pDeclMT));
+-    }
++    // Port17: the managed FieldAccessor and native paths both permit writes to static readonly
++    // fields after class initialization, matching Ludeon's AllowInitOnlyStaticWrites behavior.
+ 
+     // Set the field
+     ARG_SLOT value;
+diff --git a/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs b/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs
+index ab7e83c20ea..7a30e595db9 100644
+--- a/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs
++++ b/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs
+@@ -4,9 +4,11 @@
+ #pragma warning disable CS0067 // events are declared but not used
+ 
+ using System.Diagnostics;
++using System.Collections.Generic;
+ using System.Diagnostics.CodeAnalysis;
+ using System.IO;
+ using System.Reflection;
++using System.Reflection.Emit;
+ using System.Runtime.CompilerServices;
+ using System.Runtime.ExceptionServices;
+ using System.Runtime.Loader;
+@@ -58,6 +60,24 @@ public event UnhandledExceptionEventHandler? UnhandledException
+ 
+         public string? DynamicDirectory => null;
+ 
++        // Port17: Framework-era mods call these AppDomain overloads. Normalize the access bits
++        // before delegating to CoreCLR's AssemblyBuilder entry points.
++        public AssemblyBuilder DefineDynamicAssembly(AssemblyName name, AssemblyBuilderAccess access) =>
++            AssemblyBuilder.DefineDynamicAssembly(name, WaylithNormalizeAccess(access));
++
++        public AssemblyBuilder DefineDynamicAssembly(
++            AssemblyName name,
++            AssemblyBuilderAccess access,
++            IEnumerable<CustomAttributeBuilder>? assemblyAttributes) =>
++            AssemblyBuilder.DefineDynamicAssembly(name, WaylithNormalizeAccess(access), assemblyAttributes);
++
++        private static AssemblyBuilderAccess WaylithNormalizeAccess(AssemblyBuilderAccess access) =>
++            access == AssemblyBuilderAccess.Run || access == AssemblyBuilderAccess.RunAndCollect
++                ? access
++                : (access & (AssemblyBuilderAccess)8) == 0
++                    ? AssemblyBuilderAccess.Run
++                    : AssemblyBuilderAccess.RunAndCollect;
++
+         [Obsolete("AppDomain.SetDynamicBase has been deprecated and is not supported.")]
+         public void SetDynamicBase(string? path) { }
+ 
+diff --git a/src/libraries/System.Private.CoreLib/src/System/Number.Formatting.cs b/src/libraries/System.Private.CoreLib/src/System/Number.Formatting.cs
+index fc6af82f720..5133e9ace7c 100644
+--- a/src/libraries/System.Private.CoreLib/src/System/Number.Formatting.cs
++++ b/src/libraries/System.Private.CoreLib/src/System/Number.Formatting.cs
+@@ -1039,7 +1039,8 @@ public static unsafe bool TryFormatFloat<TNumber, TChar>(TNumber value, ReadOnly
+ 
+             byte* pDigits = stackalloc byte[TNumber.NumberBufferLength];
+ 
+-            if (fmt == '\0')
++            // Port17: unspecified "G" uses Mono/Ludeon precision instead of shortest roundtrip.
++            if (fmt == '\0' || ((fmt | 0x20) == 'g' && precision <= 0))
+             {
+                 precision = TNumber.MaxPrecisionCustomFormat;
+             }
+diff --git a/src/libraries/System.Private.CoreLib/src/System/Reflection/Assembly.cs b/src/libraries/System.Private.CoreLib/src/System/Reflection/Assembly.cs
+index 9866c0e660c..2808164a852 100644
+--- a/src/libraries/System.Private.CoreLib/src/System/Reflection/Assembly.cs
++++ b/src/libraries/System.Private.CoreLib/src/System/Reflection/Assembly.cs
+@@ -265,7 +265,9 @@ public static Assembly Load(byte[] rawAssembly, byte[]? rawSymbolStore)
+                 ref s_cachedSerializationSwitch);
+ 
+             AssemblyLoadContext alc = new IndividualAssemblyLoadContext("Assembly.Load(byte[], ...)");
+-            return alc.InternalLoad(rawAssembly, rawSymbolStore);
++            Assembly assembly = alc.InternalLoad(rawAssembly, rawSymbolStore);
++            AssemblyLoadContext.WaylithRegisterIsolatedLoad(assembly);
++            return assembly;
+         }
+ 
+         [RequiresUnreferencedCode("Types and members the loaded assembly depends on might be removed")]
+@@ -296,6 +298,7 @@ public static Assembly LoadFile(string path)
+                 result = alc.LoadFromAssemblyPath(normalizedPath);
+                 s_loadfile.Add(normalizedPath, result);
+             }
++            AssemblyLoadContext.WaylithRegisterIsolatedLoad(result);
+             return result;
+         }
+ 
+diff --git a/src/libraries/System.Private.CoreLib/src/System/Reflection/Emit/DynamicMethod.cs b/src/libraries/System.Private.CoreLib/src/System/Reflection/Emit/DynamicMethod.cs
+index 2e0de2124ff..693bf909c0e 100644
+--- a/src/libraries/System.Private.CoreLib/src/System/Reflection/Emit/DynamicMethod.cs
++++ b/src/libraries/System.Private.CoreLib/src/System/Reflection/Emit/DynamicMethod.cs
+@@ -224,8 +224,16 @@ private void Init(string name,
+ 
+             AssemblyBuilder.EnsureDynamicCodeSupported();
+ 
+-            if (attributes != (MethodAttributes.Static | MethodAttributes.Public) || callingConvention != CallingConventions.Standard)
+-                throw new NotSupportedException(SR.NotSupported_DynamicMethodFlags);
++            // Port17: old mods use Framework-style DynamicMethod flags; Ludeon normalizes them.
++            if (attributes != (MethodAttributes.Static | MethodAttributes.Public))
++            {
++                attributes = MethodAttributes.Static | MethodAttributes.Public;
++            }
++
++            if (callingConvention != CallingConventions.Standard)
++            {
++                callingConvention = CallingConventions.Standard;
++            }
+ 
+             // check and store the signature
+             if (signature != null)
+@@ -314,9 +322,10 @@ public override string ToString()
+ 
+         public override string Name => _name;
+ 
+-        public override Type? DeclaringType => null;
++        // Port17: expose a DynamicMethod's owner type for Framework-style method resolution.
++        public override Type? DeclaringType => _typeOwner;
+ 
+-        public override Type? ReflectedType => null;
++        public override Type? ReflectedType => _typeOwner;
+ 
+         public override Module Module => _module;
+ 
+diff --git a/src/libraries/System.Private.CoreLib/src/System/Reflection/FieldAccessor.cs b/src/libraries/System.Private.CoreLib/src/System/Reflection/FieldAccessor.cs
+index 8490ff20104..dd4982b77b3 100644
+--- a/src/libraries/System.Private.CoreLib/src/System/Reflection/FieldAccessor.cs
++++ b/src/libraries/System.Private.CoreLib/src/System/Reflection/FieldAccessor.cs
+@@ -379,15 +379,9 @@ private void CheckValue(ref object? value, BindingFlags invokeAttr, Binder? bind
+         }
+ 
+         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+-        internal void VerifyInitOnly()
++        internal static void VerifyInitOnly()
+         {
+-            Debug.Assert(IsStatic());
+-
+-            if ((_fieldInfo.Attributes & FieldAttributes.InitOnly) == FieldAttributes.InitOnly &&
+-                _fieldAccessType != FieldAccessorType.SlowPathUntilClassInitialized)
+-            {
+-                ThrowHelperFieldAccessException(_fieldInfo);
+-            }
++            // Port17: AllowInitOnlyStaticWrites is always enabled for the game's mod surface.
+         }
+ 
+         /// <summary>
+diff --git a/src/libraries/System.Private.CoreLib/src/System/Runtime/CompilerServices/JitHelpers.Waylith.cs b/src/libraries/System.Private.CoreLib/src/System/Runtime/CompilerServices/JitHelpers.Waylith.cs
+new file mode 100644
+index 00000000000..9507045e429
+--- /dev/null
++++ b/src/libraries/System.Private.CoreLib/src/System/Runtime/CompilerServices/JitHelpers.Waylith.cs
+@@ -0,0 +1,46 @@
++// Licensed to the .NET Foundation under one or more agreements.
++// The .NET Foundation licenses this file to you under the MIT license.
++
++using System.Diagnostics.CodeAnalysis;
++using System.Runtime.CompilerServices;
++
++namespace System.Runtime.CompilerServices
++{
++    // Port17: publicizer-based Framework mods call Mono's bit-preserving enum casts. Keep the
++    // small integral widths exact, including unsigned-to-wide sign extension behavior.
++    [ExcludeFromCodeCoverage]
++    public static class JitHelpers
++    {
++        public static int UnsafeEnumCast<T>(T value) where T : struct
++        {
++            Type underlyingType = typeof(T).IsEnum ? Enum.GetUnderlyingType(typeof(T)) : typeof(T);
++            return underlyingType switch
++            {
++                _ when underlyingType == typeof(sbyte) => Unsafe.BitCast<T, sbyte>(value),
++                _ when underlyingType == typeof(byte) => Unsafe.BitCast<T, byte>(value),
++                _ when underlyingType == typeof(short) => Unsafe.BitCast<T, short>(value),
++                _ when underlyingType == typeof(ushort) => Unsafe.BitCast<T, ushort>(value),
++                _ when underlyingType == typeof(uint) => unchecked((int)Unsafe.BitCast<T, uint>(value)),
++                _ when underlyingType == typeof(long) => unchecked((int)Unsafe.BitCast<T, long>(value)),
++                _ when underlyingType == typeof(ulong) => unchecked((int)Unsafe.BitCast<T, ulong>(value)),
++                _ => Unsafe.BitCast<T, int>(value),
++            };
++        }
++
++        public static long UnsafeEnumCastLong<T>(T value) where T : struct
++        {
++            Type underlyingType = typeof(T).IsEnum ? Enum.GetUnderlyingType(typeof(T)) : typeof(T);
++            return underlyingType switch
++            {
++                _ when underlyingType == typeof(sbyte) => Unsafe.BitCast<T, sbyte>(value),
++                _ when underlyingType == typeof(byte) => Unsafe.BitCast<T, byte>(value),
++                _ when underlyingType == typeof(short) => Unsafe.BitCast<T, short>(value),
++                _ when underlyingType == typeof(ushort) => Unsafe.BitCast<T, ushort>(value),
++                _ when underlyingType == typeof(int) => Unsafe.BitCast<T, int>(value),
++                _ when underlyingType == typeof(uint) => Unsafe.BitCast<T, uint>(value),
++                _ when underlyingType == typeof(ulong) => unchecked((long)Unsafe.BitCast<T, ulong>(value)),
++                _ => Unsafe.BitCast<T, long>(value),
++            };
++        }
++    }
++}
+diff --git a/src/libraries/System.Private.CoreLib/src/System/Runtime/Loader/AssemblyLoadContext.cs b/src/libraries/System.Private.CoreLib/src/System/Runtime/Loader/AssemblyLoadContext.cs
+index 8064d2a46a7..9394e033f88 100644
+--- a/src/libraries/System.Private.CoreLib/src/System/Runtime/Loader/AssemblyLoadContext.cs
++++ b/src/libraries/System.Private.CoreLib/src/System/Runtime/Loader/AssemblyLoadContext.cs
+@@ -1,6 +1,7 @@
+ // Licensed to the .NET Foundation under one or more agreements.
+ // The .NET Foundation licenses this file to you under the MIT license.
+ 
++using System.Collections;
+ using System.Collections.Generic;
+ using System.ComponentModel;
+ using System.Diagnostics;
+@@ -16,6 +17,9 @@ namespace System.Runtime.Loader
+ {
+     public partial class AssemblyLoadContext
+     {
++        // Port17: isolated byte-array/file loads remain resolvable by simple name, as in Mono.
++        private static readonly Hashtable s_waylithIsolatedLoads = Hashtable.Synchronized(new Hashtable());
++
+         // Keep in sync with MonoAssemblyLoadContextInternalState in object-internals.h
+         private enum InternalState
+         {
+@@ -679,6 +683,27 @@ public void Dispose()
+             return null;
+         }
+ 
++        internal static void WaylithRegisterIsolatedLoad(Assembly assembly)
++        {
++            string? simpleName = assembly.GetName().Name;
++            if (!string.IsNullOrEmpty(simpleName) && !s_waylithIsolatedLoads.ContainsKey(simpleName))
++            {
++                s_waylithIsolatedLoads[simpleName] = assembly;
++            }
++        }
++
++        private Assembly? WaylithResolveFirst(AssemblyName assemblyName)
++        {
++            string? simpleName = assemblyName.Name;
++            if (!string.IsNullOrEmpty(simpleName) &&
++                s_waylithIsolatedLoads[simpleName] is Assembly isolatedLoad)
++            {
++                return isolatedLoad;
++            }
++
++            return GetFirstResolvedAssemblyFromResolvingEvent(assemblyName);
++        }
++
+         private static RuntimeAssembly ValidateAssemblyNameWithSimpleName(Assembly assembly, string? requestedSimpleName)
+         {
+             ArgumentException.ThrowIfNullOrEmpty(requestedSimpleName, "AssemblyName.Name");
+@@ -714,7 +739,7 @@ private static RuntimeAssembly ValidateAssemblyNameWithSimpleName(Assembly assem
+             string? simpleName = assemblyName.Name;
+ 
+             // Invoke the Resolving event callbacks if wired up
+-            Assembly? assembly = GetFirstResolvedAssemblyFromResolvingEvent(assemblyName);
++            Assembly? assembly = WaylithResolveFirst(assemblyName);
+ 
+             return (assembly != null) ? ValidateAssemblyNameWithSimpleName(assembly, simpleName) : null;
+         }
+diff --git a/src/libraries/System.Private.CoreLib/src/System/String.Comparison.cs b/src/libraries/System.Private.CoreLib/src/System/String.Comparison.cs
+index fd346c17eb3..54f98ee3b20 100644
+--- a/src/libraries/System.Private.CoreLib/src/System/String.Comparison.cs
++++ b/src/libraries/System.Private.CoreLib/src/System/String.Comparison.cs
+@@ -690,10 +690,34 @@ public static bool Equals(string? a, string? b, StringComparison comparisonType)
+         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+         public override int GetHashCode()
+         {
+-            ulong seed = Marvin.DefaultSeed;
++            // Port17: RimWorld persists values derived from Ludeon's stable Mono string hash.
++            return GetMonoHashCode();
++        }
+ 
+-            // Multiplication below will not overflow since going from positive Int32 to UInt32.
+-            return Marvin.ComputeHash32(ref Unsafe.As<char, byte>(ref _firstChar), (uint)_stringLength * 2 /* in bytes, not chars */, (uint)seed, (uint)(seed >> 32));
++        private unsafe int GetMonoHashCode()
++        {
++            int h1 = 5381;
++            int h2 = h1;
++
++            fixed (char* pinned = &_firstChar)
++            {
++                char* current = pinned;
++                int c;
++                while ((c = current[0]) != 0)
++                {
++                    h1 = ((h1 << 5) + h1) ^ c;
++                    c = current[1];
++                    if (c == 0)
++                    {
++                        break;
++                    }
++
++                    h2 = ((h2 << 5) + h2) ^ c;
++                    current += 2;
++                }
++            }
++
++            return h1 + h2 * 1566083941;
+         }
+ 
+         // Gets a hash code for this string and this comparison. If strings A and B and comparison C are such
