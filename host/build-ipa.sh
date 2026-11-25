@@ -326,14 +326,18 @@ mv "$MM_SRC/exhelper_linux_macos_arm64.S" "$MM_SRC/exhelper.S"
 sed -e 's/\.build_version macos, 12, 0 sdk_version 12, 0/.build_version ios, 15, 0 sdk_version 15, 0/' \
     "$MM_SRC/asm.i" > "$MM_SRC/asm-ios.i"
 mv "$MM_SRC/asm-ios.i" "$MM_SRC/asm.i"
+# iOS has no pthread JIT W^X toggle; the host already provides the executable/RW arena pair. The EH
+# code is unchanged. Neutralizing these calls leaves the hook config installed and memcpy untouched.
+sed -e 's/pthread_jit_write_protect_supported_np()/false/g' \
+    -e 's/pthread_jit_write_protect_np([^)]*);/;/g' \
+    "$MM_SRC/helper_macos_arm64.cpp" > "$MM_SRC/helper_ios_arm64.cpp"
 xcrun -sdk "$SDK" clang++ \
     -target "$TARGET" \
     -std=c++20 -O2 -dynamiclib -fvisibility=default \
-    -include cstring \
     -Wl,-install_name,@rpath/exhelper_macos_arm64.dylib \
     -I "$MM_SRC" \
     -o "$APP/exhelper_macos_arm64.dylib" \
-    "$MM_SRC/helper_macos_arm64.cpp" "$MM_SRC/exhelper.S"
+    "$MM_SRC/helper_ios_arm64.cpp" "$MM_SRC/exhelper.S"
 nm -gU "$APP/exhelper_macos_arm64.dylib" | grep -q ' T _mmch_jit_hook_config$' \
     || { echo "::error::exhelper 没有导出 _mmch_jit_hook_config"; exit 1; }
 nm -gU "$APP/exhelper_macos_arm64.dylib" | grep -q ' T _mmch_jit_memcpy$' \
