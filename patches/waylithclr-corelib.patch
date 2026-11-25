@@ -131,7 +131,7 @@ index d97f374d..66b8735d 100644
      // Set the field
      ARG_SLOT value;
 diff --git a/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs b/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs
-index ab7e83c2..7a30e595 100644
+index ab7e83c2..5f73b028 100644
 --- a/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs
 +++ b/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs
 @@ -4,9 +4,11 @@
@@ -146,10 +146,11 @@ index ab7e83c2..7a30e595 100644
  using System.Runtime.CompilerServices;
  using System.Runtime.ExceptionServices;
  using System.Runtime.Loader;
-@@ -58,6 +60,24 @@ public event UnhandledExceptionEventHandler? UnhandledException
+@@ -58,6 +60,26 @@ public event UnhandledExceptionEventHandler? UnhandledException
  
          public string? DynamicDirectory => null;
  
++#if !NATIVEAOT
 +        // Port17: Framework-era mods call these AppDomain overloads. Normalize the access bits
 +        // before delegating to CoreCLR's AssemblyBuilder entry points.
 +        public AssemblyBuilder DefineDynamicAssembly(AssemblyName name, AssemblyBuilderAccess access) =>
@@ -167,6 +168,7 @@ index ab7e83c2..7a30e595 100644
 +                : (access & (AssemblyBuilderAccess)8) == 0
 +                    ? AssemblyBuilderAccess.Run
 +                    : AssemblyBuilderAccess.RunAndCollect;
++#endif
 +
          [Obsolete("AppDomain.SetDynamicBase has been deprecated and is not supported.")]
          public void SetDynamicBase(string? path) { }

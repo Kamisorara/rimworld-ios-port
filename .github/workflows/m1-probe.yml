@@ -32,8 +32,8 @@ jobs:
           # 补丁或收集逻辑变化时把后缀升级一位，强制重跑（也要重编译，runner 上没有源产物）
           # c5 = 双JIT竞技场补丁（替换 jit-write-protect-ios.patch）
           # c12 = JIT26 协议（扫描 → brk 握手 + 提前分离，PLAN-JIT26.md）
-          # c24 = waylithclr-corelib.patch nativeaot registration visibility fix
-          echo "key=runtime-ios-arm64-$PIN-c24" >> "$GITHUB_OUTPUT"
+          # c25 = waylithclr-corelib.patch nativeaot AppDomain overload scoping
+          echo "key=runtime-ios-arm64-$PIN-c25" >> "$GITHUB_OUTPUT"
 
       - name: 查缓存
         id: cache
