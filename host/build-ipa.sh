@@ -310,7 +310,7 @@ vtool -set-build-version ios 15.0 15.0 -replace \
     -output "$APP/exhelper_macos_arm64.ios.dylib" "$APP/exhelper_macos_arm64.dylib" \
     || { echo "::error::exhelper vtool 改平台失败"; exit 1; }
 mv "$APP/exhelper_macos_arm64.ios.dylib" "$APP/exhelper_macos_arm64.dylib"
-otool -l "$APP/exhelper_macos_arm64.dylib" | grep -A3 LC_BUILD_VERSION | grep -q "platform IOS" \
+otool -l "$APP/exhelper_macos_arm64.dylib" | grep -A3 LC_BUILD_VERSION | grep -q -E "platform (2|IOS)" \
     || { echo "::error::exhelper 改平台后仍不是 iOS："; otool -l "$APP/exhelper_macos_arm64.dylib" | grep -A3 LC_BUILD_VERSION; exit 1; }
 echo "exhelper_macos_arm64.dylib: platform -> iOS 15.0 (was macOS; MonoMod's JIT exception catcher)"
 # MonoMod 的内存分配器/别名写入/JIT vtable 交换都住在这个程序集里（patch-harmony 把
