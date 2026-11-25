@@ -1,5 +1,5 @@
 diff --git a/src/coreclr/System.Private.CoreLib/CompatibilitySuppressions.xml b/src/coreclr/System.Private.CoreLib/CompatibilitySuppressions.xml
-index 141210a166b..f8247f20d38 100644
+index 141210a1..f8247f20 100644
 --- a/src/coreclr/System.Private.CoreLib/CompatibilitySuppressions.xml
 +++ b/src/coreclr/System.Private.CoreLib/CompatibilitySuppressions.xml
 @@ -9,6 +9,14 @@
@@ -18,7 +18,7 @@ index 141210a166b..f8247f20d38 100644
      <DiagnosticId>CP0002</DiagnosticId>
      <Target>F:System.Resources.ResourceSet.Reader</Target>
 diff --git a/src/coreclr/System.Private.CoreLib/System.Private.CoreLib.csproj b/src/coreclr/System.Private.CoreLib/System.Private.CoreLib.csproj
-index 874529fa233..d37f17e48af 100644
+index 874529fa..d37f17e4 100644
 --- a/src/coreclr/System.Private.CoreLib/System.Private.CoreLib.csproj
 +++ b/src/coreclr/System.Private.CoreLib/System.Private.CoreLib.csproj
 @@ -54,6 +54,10 @@
@@ -33,7 +33,7 @@ index 874529fa233..d37f17e48af 100644
    <PropertyGroup Condition="'$(Platform)' == 'x64'">
      <DefineConstants>$(DefineConstants);TARGET_AMD64</DefineConstants>
 diff --git a/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs b/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs
-index 474e2c68292..77e9aca0e52 100644
+index 474e2c68..77e9aca0 100644
 --- a/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs
 +++ b/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs
 @@ -200,6 +200,13 @@ protected override ModuleBuilder DefineDynamicModuleCore(string name)
@@ -51,7 +51,7 @@ index 474e2c68292..77e9aca0e52 100644
  
          /// <summary>
 diff --git a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
-index 849f33fd9af..013fb3db6f0 100644
+index 849f33fd..013fb3db 100644
 --- a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
 +++ b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
 @@ -2961,7 +2961,7 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
@@ -107,7 +107,7 @@ index 849f33fd9af..013fb3db6f0 100644
              Justification = "Trimming makes sure that interfaces are fully preserved, so the Interfaces annotation is transitive." +
                              "The cache doesn't carry the necessary annotation since it returns an array type," +
 diff --git a/src/coreclr/vm/invokeutil.cpp b/src/coreclr/vm/invokeutil.cpp
-index d97f374d822..66b8735d43b 100644
+index d97f374d..66b8735d 100644
 --- a/src/coreclr/vm/invokeutil.cpp
 +++ b/src/coreclr/vm/invokeutil.cpp
 @@ -725,17 +725,8 @@ void InvokeUtil::SetValidField(CorElementType fldType,
@@ -131,7 +131,7 @@ index d97f374d822..66b8735d43b 100644
      // Set the field
      ARG_SLOT value;
 diff --git a/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs b/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs
-index ab7e83c20ea..7a30e595db9 100644
+index ab7e83c2..7a30e595 100644
 --- a/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs
 +++ b/src/libraries/System.Private.CoreLib/src/System/AppDomain.cs
 @@ -4,9 +4,11 @@
@@ -172,7 +172,7 @@ index ab7e83c20ea..7a30e595db9 100644
          public void SetDynamicBase(string? path) { }
  
 diff --git a/src/libraries/System.Private.CoreLib/src/System/Number.Formatting.cs b/src/libraries/System.Private.CoreLib/src/System/Number.Formatting.cs
-index fc6af82f720..5133e9ace7c 100644
+index fc6af82f..5133e9ac 100644
 --- a/src/libraries/System.Private.CoreLib/src/System/Number.Formatting.cs
 +++ b/src/libraries/System.Private.CoreLib/src/System/Number.Formatting.cs
 @@ -1039,7 +1039,8 @@ public static unsafe bool TryFormatFloat<TNumber, TChar>(TNumber value, ReadOnly
@@ -186,7 +186,7 @@ index fc6af82f720..5133e9ace7c 100644
                  precision = TNumber.MaxPrecisionCustomFormat;
              }
 diff --git a/src/libraries/System.Private.CoreLib/src/System/Reflection/Assembly.cs b/src/libraries/System.Private.CoreLib/src/System/Reflection/Assembly.cs
-index 9866c0e660c..2808164a852 100644
+index 9866c0e6..2808164a 100644
 --- a/src/libraries/System.Private.CoreLib/src/System/Reflection/Assembly.cs
 +++ b/src/libraries/System.Private.CoreLib/src/System/Reflection/Assembly.cs
 @@ -265,7 +265,9 @@ public static Assembly Load(byte[] rawAssembly, byte[]? rawSymbolStore)
@@ -209,7 +209,7 @@ index 9866c0e660c..2808164a852 100644
          }
  
 diff --git a/src/libraries/System.Private.CoreLib/src/System/Reflection/Emit/DynamicMethod.cs b/src/libraries/System.Private.CoreLib/src/System/Reflection/Emit/DynamicMethod.cs
-index 2e0de2124ff..693bf909c0e 100644
+index 2e0de212..693bf909 100644
 --- a/src/libraries/System.Private.CoreLib/src/System/Reflection/Emit/DynamicMethod.cs
 +++ b/src/libraries/System.Private.CoreLib/src/System/Reflection/Emit/DynamicMethod.cs
 @@ -224,8 +224,16 @@ private void Init(string name,
@@ -245,7 +245,7 @@ index 2e0de2124ff..693bf909c0e 100644
          public override Module Module => _module;
  
 diff --git a/src/libraries/System.Private.CoreLib/src/System/Reflection/FieldAccessor.cs b/src/libraries/System.Private.CoreLib/src/System/Reflection/FieldAccessor.cs
-index 8490ff20104..dd4982b77b3 100644
+index 8490ff20..dd4982b7 100644
 --- a/src/libraries/System.Private.CoreLib/src/System/Reflection/FieldAccessor.cs
 +++ b/src/libraries/System.Private.CoreLib/src/System/Reflection/FieldAccessor.cs
 @@ -379,15 +379,9 @@ private void CheckValue(ref object? value, BindingFlags invokeAttr, Binder? bind
@@ -268,7 +268,7 @@ index 8490ff20104..dd4982b77b3 100644
          /// <summary>
 diff --git a/src/libraries/System.Private.CoreLib/src/System/Runtime/CompilerServices/JitHelpers.Waylith.cs b/src/libraries/System.Private.CoreLib/src/System/Runtime/CompilerServices/JitHelpers.Waylith.cs
 new file mode 100644
-index 00000000000..9507045e429
+index 00000000..9507045e
 --- /dev/null
 +++ b/src/libraries/System.Private.CoreLib/src/System/Runtime/CompilerServices/JitHelpers.Waylith.cs
 @@ -0,0 +1,46 @@
@@ -319,7 +319,7 @@ index 00000000000..9507045e429
 +    }
 +}
 diff --git a/src/libraries/System.Private.CoreLib/src/System/Runtime/Loader/AssemblyLoadContext.cs b/src/libraries/System.Private.CoreLib/src/System/Runtime/Loader/AssemblyLoadContext.cs
-index 8064d2a46a7..9394e033f88 100644
+index 8064d2a4..0c770e79 100644
 --- a/src/libraries/System.Private.CoreLib/src/System/Runtime/Loader/AssemblyLoadContext.cs
 +++ b/src/libraries/System.Private.CoreLib/src/System/Runtime/Loader/AssemblyLoadContext.cs
 @@ -1,6 +1,7 @@
@@ -340,8 +340,8 @@ index 8064d2a46a7..9394e033f88 100644
          // Keep in sync with MonoAssemblyLoadContextInternalState in object-internals.h
          private enum InternalState
          {
-@@ -679,6 +683,27 @@ public void Dispose()
-             return null;
+@@ -641,6 +645,15 @@ public void Dispose()
+             }
          }
  
 +        internal static void WaylithRegisterIsolatedLoad(Assembly assembly)
@@ -353,6 +353,13 @@ index 8064d2a46a7..9394e033f88 100644
 +            }
 +        }
 +
+ #if !NATIVEAOT
+         // This method is invoked by the VM when using the host-provided assembly load context
+         // implementation.
+@@ -679,6 +692,18 @@ public void Dispose()
+             return null;
+         }
+ 
 +        private Assembly? WaylithResolveFirst(AssemblyName assemblyName)
 +        {
 +            string? simpleName = assemblyName.Name;
@@ -378,7 +385,7 @@ index 8064d2a46a7..9394e033f88 100644
              return (assembly != null) ? ValidateAssemblyNameWithSimpleName(assembly, simpleName) : null;
          }
 diff --git a/src/libraries/System.Private.CoreLib/src/System/String.Comparison.cs b/src/libraries/System.Private.CoreLib/src/System/String.Comparison.cs
-index fd346c17eb3..54f98ee3b20 100644
+index fd346c17..54f98ee3 100644
 --- a/src/libraries/System.Private.CoreLib/src/System/String.Comparison.cs
 +++ b/src/libraries/System.Private.CoreLib/src/System/String.Comparison.cs
 @@ -690,10 +690,34 @@ public static bool Equals(string? a, string? b, StringComparison comparisonType)
