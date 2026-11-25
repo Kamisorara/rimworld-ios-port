@@ -334,7 +334,7 @@ int main(int argc, char *argv[])
             // 只认当前版本的 setup 戳——旧的 os-detect+platform 组合旁路曾把版本轮换架空
             // （v6 补丁在设备上从未执行：用户游戏目录里有这对老戳，setupDone 恒真）。
             // PC 打包流程的旧戳副本：setup 重跑一遍全幂等，顺手补写当前版戳，无害。
-            NSString *stamp = [gameNS stringByAppendingPathComponent:@"port17-setup.v10.stamp"];
+            NSString *stamp = [gameNS stringByAppendingPathComponent:@"port17-setup.v11.stamp"];
             BOOL setupDone = [fm fileExistsAtPath:stamp];
             // 竞技场必须先于任何 coreclr_initialize 到位：混合运行时在 iOS 27 上没有
             // 竞技场就没有可执行内存——解释器会话同样要执行生成的桩/预代码（.ips 裁决：

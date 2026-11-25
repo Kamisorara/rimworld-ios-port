@@ -627,48 +627,66 @@ internal static class StartupHook
 
 	public static void Initialize()
 	{
+		// iOS（0.4.31 起）：这个钩此前从未在 iOS 上运行——engine.c 只在 game/PortHooks.dll 存在时设
+		// STARTUP_HOOKS，而 0.4.3 起该文件在 .app bundle 里，属性恒为空。0.4.30 带 mod 冷启动闪退把它揪出来：
+		// ModPrep 的触发器（PatchLoadFrom）、Unity 门面回查（Resolve）、MissingAssemblies 全在这里。iOS 先只开
+		// 装载链；android 分支里的各项对着安卓的文件系统、字体、代理与运行时环境写，没在 iOS 上验过，不开，
+		// 逐项验证后再放。
+		bool android = !OperatingSystem.IsIOS();
 		PortHooks.PortPlatform.StartedAtTick = Environment.TickCount64;
-		PortHooks.PortLog.Start();
-		// Memory and the game's last log line while it loads (the record starts only with the main menu), stalls later.
-		PortHooks.Watch.Start();
-		// Before anything of Harmony's runs: a kernel that names its CPU oddly left MonoMod without detours (a Kirin 8000).
-		PortHooks.MonoModArch.Check();
-		PortHooks.JitProfile.Start();
-		PortHooks.InlineWatch.Start();
+		if (android)
+		{
+			PortHooks.PortLog.Start();
+			// Memory and the game's last log line while it loads (the record starts only with the main menu), stalls later.
+			PortHooks.Watch.Start();
+			// Before anything of Harmony's runs: a kernel that names its CPU oddly left MonoMod without detours (a Kirin 8000).
+			PortHooks.MonoModArch.Check();
+			PortHooks.JitProfile.Start();
+			PortHooks.InlineWatch.Start();
+		}
 		AssemblyLoadContext.Default.Resolving += Resolve;
-		PretendProcessPath();
-		LimitGraphicsMemory();
-		DropAtlasCacheIfAsked();
-		MoveBackslashNames();
-		MakeHomeFolders();
-		// Before the first patch: the order in which Harmony's replacements are put in, for PortMobile's InlineGuard.
-		PortHooks.ReplacementCalls.Watch(new HarmonyLib.Harmony("port17.replacements"));
-		// A mod that takes every owner's patches off leaves the port's, which are engine code on the PC.
-		PortHooks.PortPatches.Keep(new HarmonyLib.Harmony("port17.keeppatches"));
-		PortHooks.Textures.Start();
-		PortHooks.UiDescriptors.Start();
-		// A mod's mesh renderer let go while the game runs must not take the white fallback textures every renderer shares.
-		PortHooks.SharedFallbacks.Start(new HarmonyLib.Harmony("port17.sharedfallbacks"));
-		PortHooks.AndroidFonts.Start();
-		// Mods' asset bundles name their assets after the Workshop folder the PC has, which a mod's folder here may not be.
-		PortHooks.BundlePaths.Start(new HarmonyLib.Harmony("port17.bundlepaths"));
-		PortHooks.WindowsLibraries.Start();
-		// The phone's proxy for web requests, as the PC's runtime follows Windows' proxy settings.
-		PortHooks.SystemProxy.Start();
+		if (android)
+		{
+			PretendProcessPath();
+			LimitGraphicsMemory();
+			DropAtlasCacheIfAsked();
+			MoveBackslashNames();
+			MakeHomeFolders();
+			// Before the first patch: the order in which Harmony's replacements are put in, for PortMobile's InlineGuard.
+			PortHooks.ReplacementCalls.Watch(new HarmonyLib.Harmony("port17.replacements"));
+			// A mod that takes every owner's patches off leaves the port's, which are engine code on the PC.
+			PortHooks.PortPatches.Keep(new HarmonyLib.Harmony("port17.keeppatches"));
+			PortHooks.Textures.Start();
+			PortHooks.UiDescriptors.Start();
+			// A mod's mesh renderer let go while the game runs must not take the white fallback textures every renderer shares.
+			PortHooks.SharedFallbacks.Start(new HarmonyLib.Harmony("port17.sharedfallbacks"));
+			PortHooks.AndroidFonts.Start();
+			// Mods' asset bundles name their assets after the Workshop folder the PC has, which a mod's folder here may not be.
+			PortHooks.BundlePaths.Start(new HarmonyLib.Harmony("port17.bundlepaths"));
+			PortHooks.WindowsLibraries.Start();
+			// The phone's proxy for web requests, as the PC's runtime follows Windows' proxy settings.
+			PortHooks.SystemProxy.Start();
+		}
 		PortHooks.MissingAssemblies.Start(new HarmonyLib.Harmony("port17.missingassemblies"));
-		// The PC's self-contained game folder, restart and Assembly.LoadFrom, which tools that rewrite the game (PurePatcher) count on.
-		PortHooks.SelfContained.CopyRuntime();
-		PortHooks.SelfContained.Start(new HarmonyLib.Harmony("port17.selfcontained"));
+		if (android)
+		{
+			// The PC's self-contained game folder, restart and Assembly.LoadFrom, which tools that rewrite the game (PurePatcher) count on.
+			PortHooks.SelfContained.CopyRuntime();
+			PortHooks.SelfContained.Start(new HarmonyLib.Harmony("port17.selfcontained"));
+		}
 		PortHooks.PortPlatform.PatchLoadFrom(new HarmonyLib.Harmony("port17.loadfrom"));
-		// Slang's sessions hold its core module (about 250 MB each): one at a time, let go when idle.
-		PortHooks.ShaderSessions.Start(new HarmonyLib.Harmony("port17.shadersessions"));
-		// The chip's name and the native heap figures, which the engine's Linux code reads from places Android has not.
-		PortHooks.HardwareInfo.Start(new HarmonyLib.Harmony("port17.hardwareinfo"));
+		if (android)
+		{
+			// Slang's sessions hold its core module (about 250 MB each): one at a time, let go when idle.
+			PortHooks.ShaderSessions.Start(new HarmonyLib.Harmony("port17.shadersessions"));
+			// The chip's name and the native heap figures, which the engine's Linux code reads from places Android has not.
+			PortHooks.HardwareInfo.Start(new HarmonyLib.Harmony("port17.hardwareinfo"));
+		}
 		PortHooks.LoadRecovery.Start();
 		// ICU as on the PC unless the host found the system's unusable (host.c system_icu) or runtime.properties says otherwise.
 		bool invariant = AppContext.TryGetSwitch("System.Globalization.Invariant", out bool on) && on;
 		Console.WriteLine("[port17] globalization: " + (invariant ? "invariant (no ICU)" : "ICU, as on the PC (zh-CN October: " + System.Globalization.CultureInfo.GetCultureInfo("zh-CN").DateTimeFormat.GetMonthName(10) + ")"));
-		Console.WriteLine("[port17] startup hook installed (Unity assembly names resolve to UnityStubs)");
+		Console.WriteLine("[port17] startup hook installed (Unity assembly names resolve to UnityStubs" + (android ? ")" : "; iOS: load chain only)"));
 		// 窗口后端反转 v2 的宿主桥（AndroidPlatform 喂数——WAYLITH_BACKEND=Android 时引擎的
 		// AndroidBackend.Open 在这条线程上构造平台，两道门由桥点亮）。失败只记日志：
 		// 桥不可用时引擎自报 "No windowing backend could start"，不至于哑崩。

@@ -394,9 +394,9 @@ int run_engine(const char *bundle_dir, const char *home)
     // 文件后来被替换过。（只认当前版戳；老的 os-detect+platform 组合不再放行。）
     {
         char stamp[1100];
-        snprintf(stamp, sizeof stamp, "%s/port17-setup.v10.stamp", game);
+        snprintf(stamp, sizeof stamp, "%s/port17-setup.v11.stamp", game);
         if (!file_exists(stamp))
-            host_log("引擎：没有当前版改写戳（port17-setup.v10.stamp）——这份游戏文件没被最新 setup 改写过；"
+            host_log("引擎：没有当前版改写戳（port17-setup.v11.stamp）——这份游戏文件没被最新 setup 改写过；"
                      "重开 app 会让宿主自动跑设备内 setup");
     }
 
@@ -566,9 +566,14 @@ int run_engine(const char *bundle_dir, const char *home)
     char nativeDirs[2200];
     snprintf(nativeDirs, sizeof nativeDirs, "%s:%s", bundle_dir, game);
 
-    // The startup hook of M3 (PortHooks.dll in game/): the property is there the day the file is.
+    // PortHooks.dll 的启动钩。0.4.3 起它在 .app bundle（build-ipa.sh 4.99 拷进 .app 根），不在
+    // game/；此前只认 game/PortHooks.dll，属性恒为空串，StartupHook.Initialize 在 iOS 上从未运行
+    // ——ModPrep 触发器、Unity 门面解析、MissingAssemblies 全在里面，0.4.30 带 mod 冷启动闪退
+    // （2026-11-25）的根因。bundle 优先，game/ 仍认（M3 布局、本地调试）。
     char hooks[1100];
-    snprintf(hooks, sizeof hooks, "%s/PortHooks.dll", game);
+    snprintf(hooks, sizeof hooks, "%s/PortHooks.dll", bundle_dir);
+    if (!file_exists(hooks))
+        snprintf(hooks, sizeof hooks, "%s/PortHooks.dll", game);
     if (!file_exists(hooks))
         hooks[0] = '\0';
 

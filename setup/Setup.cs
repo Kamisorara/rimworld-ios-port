@@ -37,7 +37,13 @@
 //   11.  new AndroidSurfaceHandle(...) 两处（AndroidWindow.InitialSurface getter 与
 //        AndroidPlatform.OnSurfaceChanged）→ new IOSSurfaceHandle(...)（同为单 nint 参数，
 //        VulkanSurface.Create 的 IOS 分支 → vkCreateMetalSurfaceEXT，layer=宿主 CAMetalLayer）。
-//   成功写 port17-setup.v10.stamp（宿主认它决定进引擎还是先跑 setup）。
+//   12.  Unity 程序集名的类型转发门面（v11；安卓 patch/Patch.cs WriteForwarders 同款）：mod 是对着
+//        UnityEngine.CoreModule 等 Unity 程序集编译的，引擎用 UnityStubs.dll 顶替；Ludeon 定制运行时靠
+//        AssemblyNameRedirects 改名，官方运行时的 Resolving 回调又不许拿另一个名字的程序集应答，所以走
+//        标准做法——每个名字一个只含 TypeForwardedTo 的门面 dll 写进 game/（宿主下次启动把它们收进 TPA）。
+//        名单 = 安卓 host/forwarders.txt（从工坊 mod 的引用数出来的 72 个）。0.4.30 真机带 mod：
+//        DamageMotes / RimPawnChineseName 因缺 UnityEngine.CoreModule 门面 ReflectionTypeLoad。
+//   成功写 port17-setup.v11.stamp（宿主认它决定进引擎还是先跑 setup）。
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -92,6 +98,7 @@ namespace Port17Setup
                 RetargetAndroidSurfaceHandle(game, ref changed, ref kept);
                 PortMobileSupport(game, bundle, ref changed, ref kept);
                 HarmonyCompatRewrites(game, bundle, ref changed, ref kept);
+                WriteUnityForwarders(game, ref changed, ref kept);
                 MarkArm64(game);
             }
             catch (Exception e)
@@ -99,8 +106,8 @@ namespace Port17Setup
                 Say("[setup] failed: " + e);
                 return 3;
             }
-            File.WriteAllLines(Path.Combine(game, "port17-setup.v10.stamp"),
-                new[] { "Port17Setup v10", "changed=" + changed, "kept=" + kept });
+            File.WriteAllLines(Path.Combine(game, "port17-setup.v11.stamp"),
+                new[] { "Port17Setup v11", "changed=" + changed, "kept=" + kept });
             Say($"[setup] done: {changed} rewritten, {kept} already");
             return 0;
         }
@@ -838,6 +845,109 @@ namespace Port17Setup
         }
 
         // ---- 9. 机器类型 AMD64 → ARM64（原地 2 字节，幂等） ----
+
+        /// <summary>
+        /// The Unity assembly names Workshop mods were compiled against; the engine's UnityStubs.dll stands in for all of
+        /// them (the list of the Android port's host/forwarders.txt, counted from Workshop mods with patch.dll --refs).
+        /// </summary>
+        private static readonly string[] UnityForwarderNames =
+        {
+            "Assembly-CSharp-firstpass", "Unity.Burst.Unsafe", "Unity.Burst", "Unity.Collections.LowLevel.ILSupport",
+            "Unity.Collections", "Unity.Mathematics", "Unity.TextMeshPro", "UnityEngine.AIModule",
+            "UnityEngine.ARModule", "UnityEngine.AccessibilityModule", "UnityEngine.AndroidJNIModule",
+            "UnityEngine.AnimationModule", "UnityEngine.AssetBundleModule", "UnityEngine.AudioModule",
+            "UnityEngine.ClothModule", "UnityEngine.ClusterInputModule", "UnityEngine.ClusterRendererModule",
+            "UnityEngine.ContentLoadModule", "UnityEngine.CoreModule", "UnityEngine.CrashReportingModule",
+            "UnityEngine.DSPGraphModule", "UnityEngine.DirectorModule", "UnityEngine.GIModule",
+            "UnityEngine.GameCenterModule", "UnityEngine.GridModule", "UnityEngine.HotReloadModule",
+            "UnityEngine.IMGUIModule", "UnityEngine.ImageConversionModule", "UnityEngine.InputLegacyModule",
+            "UnityEngine.InputModule", "UnityEngine.JSONSerializeModule", "UnityEngine.LocalizationModule",
+            "UnityEngine.NVIDIAModule", "UnityEngine.ParticleSystemModule", "UnityEngine.ParticlesLegacyModule",
+            "UnityEngine.PerformanceReportingModule", "UnityEngine.Physics2DModule", "UnityEngine.PhysicsModule",
+            "UnityEngine.ProfilerModule", "UnityEngine.PropertiesModule", "UnityEngine.RuntimeInitializeOnLoadManagerInitializerModule",
+            "UnityEngine.ScreenCaptureModule", "UnityEngine.SharedInternalsModule", "UnityEngine.SpriteMaskModule",
+            "UnityEngine.SpriteShapeModule", "UnityEngine.StreamingModule", "UnityEngine.SubsystemsModule",
+            "UnityEngine.TLSModule", "UnityEngine.TerrainModule", "UnityEngine.TerrainPhysicsModule",
+            "UnityEngine.TextCoreFontEngineModule", "UnityEngine.TextCoreModule", "UnityEngine.TextCoreTextEngineModule",
+            "UnityEngine.TextRenderingModule", "UnityEngine.TilemapModule", "UnityEngine.UI",
+            "UnityEngine.UIElementsModule", "UnityEngine.UIModule", "UnityEngine.UmbraModule",
+            "UnityEngine.UnityAnalyticsModule", "UnityEngine.UnityConnectModule", "UnityEngine.UnityCurlModule",
+            "UnityEngine.UnityTestProtocolModule", "UnityEngine.UnityWebRequestAssetBundleModule",
+            "UnityEngine.UnityWebRequestAudioModule", "UnityEngine.UnityWebRequestModule",
+            "UnityEngine.UnityWebRequestTextureModule", "UnityEngine.UnityWebRequestWWWModule",
+            "UnityEngine.VFXModule", "UnityEngine.VRModule", "UnityEngine.VehiclesModule", "UnityEngine.VideoModule",
+            "UnityEngine.VirtualTexturingModule", "UnityEngine.WindModule", "UnityEngine.XRModule", "UnityEngine",
+        };
+
+        /// <summary>
+        /// Type-forwarding facades for the Unity assembly names (patch/Patch.cs WriteForwarders, the Android port): an
+        /// assembly of each name whose every public type of UnityStubs.dll is forwarded to it. Written into the game folder,
+        /// which the host's TPA takes in whole; all there already = kept.
+        /// </summary>
+        private static void WriteUnityForwarders(string game, ref int changed, ref int kept)
+        {
+            string stubsPath = Path.Combine(game, "UnityStubs.dll");
+            if (!File.Exists(stubsPath))
+            {
+                Say("[setup] no UnityStubs.dll in the game folder; Unity forwarders not written");
+                return;
+            }
+            int missing = UnityForwarderNames.Count(n => !File.Exists(Path.Combine(game, n + ".dll")));
+            if (missing == 0)
+            {
+                kept += UnityForwarderNames.Length;
+                Say("[setup] Unity forwarders: " + UnityForwarderNames.Length + " already there");
+                return;
+            }
+            using (AssemblyDefinition stubs = AssemblyDefinition.ReadAssembly(stubsPath,
+                new ReaderParameters { ReadingMode = ReadingMode.Deferred, InMemory = true }))
+            {
+                var publicTypes = stubs.MainModule.Types.Where(t => t.IsPublic).ToList();
+                var scope = new AssemblyNameReference(stubs.Name.Name, stubs.Name.Version);
+                foreach (string name in UnityForwarderNames)
+                {
+                    string target = Path.Combine(game, name + ".dll");
+                    if (File.Exists(target))
+                    {
+                        kept++;
+                        continue;
+                    }
+                    var assemblyName = new AssemblyNameDefinition(name, new Version(0, 0, 0, 0));
+                    using (AssemblyDefinition facade = AssemblyDefinition.CreateAssembly(assemblyName, name + ".dll", ModuleKind.Dll))
+                    {
+                        ModuleDefinition module = facade.MainModule;
+                        module.AssemblyReferences.Add(scope);
+                        int count = 0;
+                        foreach (TypeDefinition type in publicTypes)
+                        {
+                            count += ForwardUnityType(module, scope, type, null);
+                        }
+                        facade.Write(target);
+                        changed++;
+                        Say("[setup] " + name + ".dll: " + count + " types forwarded to " + scope.Name);
+                    }
+                }
+            }
+        }
+
+        private static int ForwardUnityType(ModuleDefinition module, AssemblyNameReference scope, TypeDefinition type, ExportedType declaring)
+        {
+            var exported = new ExportedType(declaring == null ? type.Namespace : null, type.Name, module, scope)
+            {
+                IsForwarder = true,
+                DeclaringType = declaring,
+            };
+            module.ExportedTypes.Add(exported);
+            int count = 1;
+            foreach (TypeDefinition nested in type.NestedTypes)
+            {
+                if (nested.IsNestedPublic)
+                {
+                    count += ForwardUnityType(module, scope, nested, exported);
+                }
+            }
+            return count;
+        }
 
         private static void MarkArm64(string game)
         {

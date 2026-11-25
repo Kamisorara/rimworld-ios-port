@@ -642,7 +642,7 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
         [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"?"];
 
     // ---- 状态卡片（五张：值由 refreshCards 填）----
-    NSArray *cardNames = @[@"执行模式（上次会话）", @"Setup v10 改写", @"Mod（上次会话）",
+    NSArray *cardNames = @[@"执行模式（上次会话）", @"Setup v11 改写", @"Mod（上次会话）",
                            @"上次引擎会话", @"本次实况"];
     NSMutableArray *cards = [NSMutableArray array];
     NSMutableArray *values = [NSMutableArray array];
@@ -878,7 +878,7 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
     BOOL stamped = NO;
     if (game)
         stamped = [fm fileExistsAtPath:
-            [NSString stringWithFormat:@"%s/port17-setup.v10.stamp", gameDir]];
+            [NSString stringWithFormat:@"%s/port17-setup.v11.stamp", gameDir]];
 
     // 1 执行模式（上次会话）：jit_effective + jit_arena
     NSString *jit = port17_status_get(h, "jit_effective", v, sizeof v) ? @(v) : nil;
@@ -894,7 +894,7 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
     // 2 Setup v9：本次实况（戳）+ 上次结果
     NSString *setupLast = port17_status_get(h, "setup_last", v, sizeof v) ? @(v) : nil;
     NSString *setupText = !game ? @"游戏不在"
-        : stamped ? @"已改写（v10 戳在）"
+        : stamped ? @"已改写（v11 戳在）"
         : @"未改写——下次启动先跑 setup";
     if (setupLast)
         setupText = [NSString stringWithFormat:@"%@\n上次：%@", setupText, setupLast];
