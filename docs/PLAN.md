@@ -323,6 +323,7 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 **新账（本轮连载产出）**：
 - mod 程序集的 WaylithClr.* 引用改道未覆盖 Mods 目录：创意工坊 HarmonyMod 的 RuntimeIL 程序集引用 WaylithClr.MethodBodyClause/MethodBodyTransformer（指 System.Private.CoreLib）→ TypeLoadException → 该 mod 的 Harmony 初始化失败。属差距 #4 的实施范围，M4 后半做 CoreLib 开关时把 Mods 目录纳入改道（ModPrep 管线）；
 - collect-runtime.sh 的 ref 件长期修：mscorlib 已在包层兜底（官方 facade 覆盖），正解是 collect 时排除 ref 件或改取官方 pack；其余 305 个 dll 游戏本体已在用 = 实现件无恙。
+- iOS 的「导入Mod…」按钮原生半边缺失（2026-11-25，`releases/0.4.30/日志` 20:20:53，用户连点三次）：`mobile/ModImport.cs` P/Invoke `glfwAndroidPickFiles`，`host/glfw/glfw_ios.m` 只导出了 `glfwAndroidRestart` / `glfwAndroidPrepareExit`，点导入即 `EntryPointNotFoundException`，弹“打不开系统的文件选择界面”。**绕法**：mod 文件夹直接拷进 `Documents/game/Mods/`（Files app 或Finder），`ModPrepHost.BeforeLoad` 在首次装载前照常准备。**修法**：shim 加 `glfwAndroidPickFiles`——主线程 present `UIDocumentPickerViewController`（zip + 文件夹，Import 模式），拷进 `AppContext.BaseDirectory/../ModImport`，按 `ModImport.state` 首行 `state files bytes` 协议落盘（3 完成 / 4 失败 / 5 取消）；宿主改动，m2-host 出包即可，不碰 runtime。
 
 ### M5 玩家可用 beta
 - 导入流程进程内化（iOS 无 fork，PortSetup 不能独立进程）；
