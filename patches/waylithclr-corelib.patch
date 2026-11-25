@@ -1,3 +1,22 @@
+diff --git a/src/coreclr/System.Private.CoreLib/CompatibilitySuppressions.xml b/src/coreclr/System.Private.CoreLib/CompatibilitySuppressions.xml
+index 141210a166b..f8247f20d38 100644
+--- a/src/coreclr/System.Private.CoreLib/CompatibilitySuppressions.xml
++++ b/src/coreclr/System.Private.CoreLib/CompatibilitySuppressions.xml
+@@ -9,6 +9,14 @@
+     <DiagnosticId>CP0002</DiagnosticId>
+     <Target>F:System.Resources.ResourceManager.BaseNameField</Target>
+   </Suppression>
++  <Suppression>
++    <DiagnosticId>CP0002</DiagnosticId>
++    <Target>M:System.AppDomain.DefineDynamicAssembly(System.Reflection.AssemblyName,System.Reflection.Emit.AssemblyBuilderAccess)</Target>
++  </Suppression>
++  <Suppression>
++    <DiagnosticId>CP0002</DiagnosticId>
++    <Target>M:System.AppDomain.DefineDynamicAssembly(System.Reflection.AssemblyName,System.Reflection.Emit.AssemblyBuilderAccess,System.Collections.Generic.IEnumerable{System.Reflection.Emit.CustomAttributeBuilder})</Target>
++  </Suppression>
+   <Suppression>
+     <DiagnosticId>CP0002</DiagnosticId>
+     <Target>F:System.Resources.ResourceSet.Reader</Target>
 diff --git a/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs b/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs
 index 474e2c68292..77e9aca0e52 100644
 --- a/src/coreclr/System.Private.CoreLib/src/System/Reflection/Emit/RuntimeAssemblyBuilder.cs
@@ -17,7 +36,7 @@ index 474e2c68292..77e9aca0e52 100644
  
          /// <summary>
 diff --git a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
-index 849f33fd9af..88e3faf6116 100644
+index 849f33fd9af..013fb3db6f0 100644
 --- a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
 +++ b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
 @@ -2961,7 +2961,7 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
@@ -29,7 +48,7 @@ index 849f33fd9af..88e3faf6116 100644
          {
              ArgumentNullException.ThrowIfNull(name);
  
-@@ -2998,6 +2999,42 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
+@@ -2998,6 +2998,42 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
              return match;
          }
  
