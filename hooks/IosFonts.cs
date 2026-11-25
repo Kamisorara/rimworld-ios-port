@@ -16,7 +16,8 @@ namespace PortHooks
 	/// 0.4.34 只把 Linux 族名映射到系统字体文件名；0.4.34 真机（iPadOS 26）：四个目录里 PingFang/STHeiti/Songti/Arial Unicode
 	/// 一个都没有——iOS 18 起 Apple 删了 /System/Library/Fonts/Core/PingFang.ttc，换成私有框架里的 PingFangUI.ttc，字形是 hvgl
 	/// 表，FreeType 画不出来（Unity 文本引擎同样中招）。所以中文不能靠系统字体：随包带 Noto Sans SC（OFL，host/app/fonts/，
-	/// build-ipa.sh 放进 bundle 根），简中回退第一候选就是它；系统字体只作补充，按 name table 建索引而不是按文件名猜——
+	/// build-ipa.sh 放进 bundle 根；iOS 上 AppContext.BaseDirectory 是 Documents/game，所以按 PortHooks.dll 的所在目录
+	/// 找它），简中回退第一候选就是它；系统字体只作补充，按 name table 建索引而不是按文件名猜——
 	/// 哪个目录、哪个文件名都随系统版本变。TTC 的 face 序号不猜：按文件里的 name table 定位族名与 Regular。没有 glyf/CFF
 	/// 轮廓表的文件（hvgl）直接跳过。彩色 emoji 与安卓同样不给：移植层的 FreeType 没有 PNG 解码。
 	/// </summary>
@@ -171,7 +172,17 @@ namespace PortHooks
 					return;
 				}
 				indexed = true;
-				bundled = Path.Combine(AppContext.BaseDirectory, BundledFile);
+				// The host sets APP_CONTEXT_BASE_DIRECTORY to Documents/game. PortHooks itself lives in the .app root
+				// (TPA), next to the file build-ipa.sh copied there.
+				string assemblyDir = Path.GetDirectoryName(typeof(IosFonts).Assembly.Location);
+				if (!string.IsNullOrEmpty(assemblyDir))
+				{
+					bundled = Path.Combine(assemblyDir, BundledFile);
+				}
+				if (bundled == null || !File.Exists(bundled))
+				{
+					bundled = Path.Combine(AppContext.BaseDirectory, BundledFile);
+				}
 				if (!File.Exists(bundled))
 				{
 					Console.WriteLine("[port17] fonts: iOS bundled Noto Sans SC missing at " + bundled);

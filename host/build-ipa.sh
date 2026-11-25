@@ -294,7 +294,7 @@ cp "$ROOT/prebuilt/PortHooks.dll" "$ROOT/prebuilt/PortMobile.dll" "$APP/"
 # 4.99) 随包的中文字体（0.4.35）。iOS 18 起系统没有可用的中文回退字体文件：/System/Library/Fonts/Core/PingFang.ttc
 #      被删，PingFangUI.ttc 住在私有框架里且字形是 FreeType 画不出的 hvgl 表；0.4.34 真机四个目录里 STHeiti/Songti/
 #      Arial Unicode 也一个没有。引擎的 Linux 族名分支在 iOS 上什么都找不到 → 中文全方框。Noto Sans SC（OFL，
-#      host/app/fonts/LICENSE-OFL.txt）放 bundle 根，hooks/IosFonts 以 AppContext.BaseDirectory 取它作简中第一候选。
+#      host/app/fonts/LICENSE-OFL.txt）放 bundle 根，hooks/IosFonts 按 PortHooks.dll 的所在目录取它作简中第一候选。
 FONT="$ROOT/host/app/fonts/NotoSansSC-Regular.otf"
 [ -f "$FONT" ] || { echo "::error::host/app/fonts/NotoSansSC-Regular.otf 缺"; exit 1; }
 cp "$FONT" "$APP/"
@@ -305,31 +305,42 @@ cp "$FONT" "$APP/"
 #      mod 也会被 StartupHook 统一改用它。
 [ -f "$ROOT/prebuilt/0Harmony.dll" ] || { echo "::error::prebuilt/0Harmony.dll 缺（本地跑 scripts/patch-harmony）"; exit 1; }
 cp "$ROOT/prebuilt/0Harmony.dll" "$APP/"
-[ -f "$ROOT/prebuilt/exhelper_macos_arm64.dylib" ] || { echo "::error::prebuilt/exhelper_macos_arm64.dylib 缺（本地跑 scripts/patch-harmony extract-exhelper）"; exit 1; }
-cp "$ROOT/prebuilt/exhelper_macos_arm64.dylib" "$APP/"
-# 0.4.32：这个件是 MonoMod CI 的 macOS 版（LC_BUILD_VERSION platform=1，minos 13.0；唯一依赖
-# /usr/lib/libSystem.B.dylib，没有 libstdc++/libc++），iOS dyld 拒载（"incompatible platform (have
-# 'macOS', need 'iOS')"，0.4.10 起日志里的 "exhelper unavailable" 就是它）。它不是可选项：MonoMod
-# 的托管 JIT 钩靠它包装原 JIT，在原生 catch(...) 里接住 JIT 期抛出的 C++ 异常写进槽位，托管钩子
-# 看到槽非空就正常返回——没有它，任何 JIT 期异常（mod 引用缺类型/缺方法）都穿过托管帧直接
-# SIGABRT（0.4.31 真机：中文人物名字 Startup.HasChinese 首次 JIT）。纯 libSystem 的 arm64 件改平台
-# 即可，签名在下面第 7 步统一重做（codesign --force 覆盖所有 *.dylib）。
-# 0.4.33：先剥掉 MonoMod CI 留下的 ad-hoc 签名再改平台。0.4.32 的做法（vtool 作用于带签名的件）让
-# vtool 把 LC_BUILD_VERSION 追加到了 LC_CODE_SIGNATURE 之后（其他 dylib 的签名命令都是最后一条），
-# 真机（SideStore 安装）报 "code signature invalid … codeBlobOffset=0x2D310 codeBlobSize=0x4D20"——偏移
-# 与我们 CI 的 ad-hoc 签名完全一致，即安装器重签了其他 dylib、唯独这个没签上，内核拒了 ad-hoc 件。
-# 剥掉签名后 vtool，再由第 7 步 codesign 把 LC_CODE_SIGNATURE 作为最后一条加回去，形态与其他 dylib 一致。
-codesign --remove-signature "$APP/exhelper_macos_arm64.dylib" \
-    || { echo "::error::exhelper 旧签名剥除失败"; exit 1; }
-vtool -set-build-version ios 15.0 15.0 -replace \
-    -output "$APP/exhelper_macos_arm64.ios.dylib" "$APP/exhelper_macos_arm64.dylib" \
-    || { echo "::error::exhelper vtool 改平台失败"; exit 1; }
-mv "$APP/exhelper_macos_arm64.ios.dylib" "$APP/exhelper_macos_arm64.dylib"
+
+# 0.4.36：LiveContainer 覆盖安装的 0.4.35 日志显示设备件哈希是 624CA7A0…，而 IPA 件是 DE6F41C8…；
+#      LC_UUID 不变 → LiveContainer 确实重签/改写了 re-platform 后的 macOS 件，然后内核拒了重签结果。
+#      不再拿 macOS 件改平台：直接从 MonoMod 0.4.35 所用的 Harmony 3.0 rc.7 子模块提交（14b9f28）
+#      下载两个 arm64 exhelper 源文件，按 iOS 15 目标编 dylib。哈希钉住上游内容，第 7 步统一签名。
+MM_COMMIT=14b9f28a04f9281fb032cb1d1e2339305b734869
+MM_SRC="$ROOT/build-m2/monomod-exhelper-src"
+mkdir -p "$MM_SRC"
+fetch_mm_source() {  # <file> <sha256>
+    local file="$1" want="$2"
+    curl -fsSL "https://raw.githubusercontent.com/MonoMod/MonoMod/$MM_COMMIT/src/MonoMod.Core/Platforms/Architectures/arm64/$file" \
+        -o "$MM_SRC/$file"
+    echo "$want  $MM_SRC/$file" | shasum -a 256 -c -
+}
+fetch_mm_source "asm.i" "f3c362e88a7bb48b387089fe4b6f3e844c0326006de4063f4305d6426aeac17d"
+fetch_mm_source "exhelper_linux_macos_arm64.S" "ab0a50f21e205d60601de98cb82434d6d68c759339ad9fe5bb24025ea17acff1"
+fetch_mm_source "helper_macos_arm64.cpp" "6036b859bab3e87ea7364210010be1643fb4d922cba870b2d40803a8ce993ed8"
+mv "$MM_SRC/exhelper_linux_macos_arm64.S" "$MM_SRC/exhelper.S"
+sed -e 's/\.build_version macos, 12, 0 sdk_version 12, 0/.build_version ios, 15, 0 sdk_version 15, 0/' \
+    "$MM_SRC/asm.i" > "$MM_SRC/asm-ios.i"
+mv "$MM_SRC/asm-ios.i" "$MM_SRC/asm.i"
+xcrun -sdk "$SDK" clang++ \
+    -target "$TARGET" \
+    -std=c++20 -O2 -dynamiclib -fvisibility=default \
+    -include cstring \
+    -Wl,-install_name,@rpath/exhelper_macos_arm64.dylib \
+    -I "$MM_SRC" \
+    -o "$APP/exhelper_macos_arm64.dylib" \
+    "$MM_SRC/helper_macos_arm64.cpp" "$MM_SRC/exhelper.S"
+nm -gU "$APP/exhelper_macos_arm64.dylib" | grep -q ' T _mmch_jit_hook_config$' \
+    || { echo "::error::exhelper 没有导出 _mmch_jit_hook_config"; exit 1; }
+nm -gU "$APP/exhelper_macos_arm64.dylib" | grep -q ' T _mmch_jit_memcpy$' \
+    || { echo "::error::exhelper 没有导出 _mmch_jit_memcpy"; exit 1; }
 otool -l "$APP/exhelper_macos_arm64.dylib" | grep -A3 LC_BUILD_VERSION | grep -q -E "platform (2|IOS)" \
-    || { echo "::error::exhelper 改平台后仍不是 iOS："; otool -l "$APP/exhelper_macos_arm64.dylib" | grep -A3 LC_BUILD_VERSION; exit 1; }
-otool -l "$APP/exhelper_macos_arm64.dylib" | grep -q LC_CODE_SIGNATURE \
-    && { echo "::error::exhelper 剥签名后仍有 LC_CODE_SIGNATURE"; exit 1; }
-echo "exhelper_macos_arm64.dylib: platform -> iOS 15.0 (unsigned until step 7; MonoMod's JIT exception catcher)"
+    || { echo "::error::exhelper 编译后仍不是 iOS："; otool -l "$APP/exhelper_macos_arm64.dylib" | grep -A3 LC_BUILD_VERSION; exit 1; }
+echo "exhelper_macos_arm64.dylib: compiled from MonoMod $MM_COMMIT for iOS 15.0 (unsigned until step 7; MonoMod's JIT exception catcher)"
 # MonoMod 的内存分配器/别名写入/JIT vtable 交换都住在这个程序集里（patch-harmony 把
 # 0Harmony 的改写点全部 import 自它）；0Harmony.dll 对它有程序集引用，必须与 0Harmony 同在 bundle 根（TPA 平铺）。
 [ -f "$ROOT/prebuilt/Port17MonoModArena.dll" ] || { echo "::error::prebuilt/Port17MonoModArena.dll 缺（先 patch-harmony prepare，再 dotnet build scripts/monomod-arena）"; exit 1; }
