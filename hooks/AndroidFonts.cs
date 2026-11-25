@@ -77,7 +77,7 @@ namespace PortHooks
 					return;
 				}
 				new Harmony("port17.fonts").Patch(find, postfix: new HarmonyMethod(typeof(AndroidFonts), nameof(AfterTryFind)));
-				Console.WriteLine("[port17] fonts: Linux fallback families without a phone font get the phone's files");
+				Console.WriteLine("[port17] fonts: Linux fallback families without a " + (OperatingSystem.IsIOS() ? "font on iOS get the system's files (IosFonts)" : "phone font get the phone's files"));
 			}
 			catch (Exception e)
 			{
@@ -89,6 +89,11 @@ namespace PortHooks
 		{
 			if (__result || family == null)
 			{
+				return;
+			}
+			if (OperatingSystem.IsIOS())
+			{
+				IosFonts.Find(family, ref path, ref fontNo, ref __result);
 				return;
 			}
 			foreach ((string name, string[] files) in Stand)

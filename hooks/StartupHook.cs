@@ -660,12 +660,16 @@ internal static class StartupHook
 			PortHooks.UiDescriptors.Start();
 			// A mod's mesh renderer let go while the game runs must not take the white fallback textures every renderer shares.
 			PortHooks.SharedFallbacks.Start(new HarmonyLib.Harmony("port17.sharedfallbacks"));
+			}
+			// iOS 的中文/符号回退字体也靠它（IosFonts）：引擎在 iOS 上走 Linux 族名分支却找不到任何系统字体目录。
 			PortHooks.AndroidFonts.Start();
-			// Mods' asset bundles name their assets after the Workshop folder the PC has, which a mod's folder here may not be.
-			PortHooks.BundlePaths.Start(new HarmonyLib.Harmony("port17.bundlepaths"));
-			PortHooks.WindowsLibraries.Start();
-			// The phone's proxy for web requests, as the PC's runtime follows Windows' proxy settings.
-			PortHooks.SystemProxy.Start();
+			if (android)
+			{
+				// Mods' asset bundles name their assets after the Workshop folder the PC has, which a mod's folder here may not be.
+				PortHooks.BundlePaths.Start(new HarmonyLib.Harmony("port17.bundlepaths"));
+				PortHooks.WindowsLibraries.Start();
+				// The phone's proxy for web requests, as the PC's runtime follows Windows' proxy settings.
+				PortHooks.SystemProxy.Start();
 		}
 		PortHooks.MissingAssemblies.Start(new HarmonyLib.Harmony("port17.missingassemblies"));
 		if (android)
