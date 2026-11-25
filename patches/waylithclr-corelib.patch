@@ -20,7 +20,7 @@ diff --git a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.c
 index 849f33fd9af..88e3faf6116 100644
 --- a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
 +++ b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
-@@ -2961,7 +2961,8 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
+@@ -2961,7 +2961,7 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
          }
  
          [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)]
