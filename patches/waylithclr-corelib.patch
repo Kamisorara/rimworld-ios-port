@@ -17,20 +17,19 @@ index 474e2c68292..77e9aca0e52 100644
  
          /// <summary>
 diff --git a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
-index 849f33fd9af..88e3faf6116 100644
+index 849f33fd9af..013fb3db6f0 100644
 --- a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
 +++ b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
-@@ -2961,7 +2961,8 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
+@@ -2961,7 +2961,7 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
          }
  
          [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)]
 -        public override FieldInfo? GetField(string name, BindingFlags bindingAttr)
-+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)]
 +        private FieldInfo? GetFieldExact(string name, BindingFlags bindingAttr)
          {
              ArgumentNullException.ThrowIfNull(name);
  
-@@ -2998,6 +2999,42 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
+@@ -2998,6 +2998,42 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
              return match;
          }
  
@@ -233,58 +232,6 @@ index 8490ff20104..dd4982b77b3 100644
          }
  
          /// <summary>
-diff --git a/src/libraries/System.Private.CoreLib/src/System/Runtime/CompilerServices/JitHelpers.Waylith.cs b/src/libraries/System.Private.CoreLib/src/System/Runtime/CompilerServices/JitHelpers.Waylith.cs
-new file mode 100644
-index 00000000000..9507045e429
---- /dev/null
-+++ b/src/libraries/System.Private.CoreLib/src/System/Runtime/CompilerServices/JitHelpers.Waylith.cs
-@@ -0,0 +1,46 @@
-+// Licensed to the .NET Foundation under one or more agreements.
-+// The .NET Foundation licenses this file to you under the MIT license.
-+
-+using System.Diagnostics.CodeAnalysis;
-+using System.Runtime.CompilerServices;
-+
-+namespace System.Runtime.CompilerServices
-+{
-+    // Port17: publicizer-based Framework mods call Mono's bit-preserving enum casts. Keep the
-+    // small integral widths exact, including unsigned-to-wide sign extension behavior.
-+    [ExcludeFromCodeCoverage]
-+    public static class JitHelpers
-+    {
-+        public static int UnsafeEnumCast<T>(T value) where T : struct
-+        {
-+            Type underlyingType = typeof(T).IsEnum ? Enum.GetUnderlyingType(typeof(T)) : typeof(T);
-+            return underlyingType switch
-+            {
-+                _ when underlyingType == typeof(sbyte) => Unsafe.BitCast<T, sbyte>(value),
-+                _ when underlyingType == typeof(byte) => Unsafe.BitCast<T, byte>(value),
-+                _ when underlyingType == typeof(short) => Unsafe.BitCast<T, short>(value),
-+                _ when underlyingType == typeof(ushort) => Unsafe.BitCast<T, ushort>(value),
-+                _ when underlyingType == typeof(uint) => unchecked((int)Unsafe.BitCast<T, uint>(value)),
-+                _ when underlyingType == typeof(long) => unchecked((int)Unsafe.BitCast<T, long>(value)),
-+                _ when underlyingType == typeof(ulong) => unchecked((int)Unsafe.BitCast<T, ulong>(value)),
-+                _ => Unsafe.BitCast<T, int>(value),
-+            };
-+        }
-+
-+        public static long UnsafeEnumCastLong<T>(T value) where T : struct
-+        {
-+            Type underlyingType = typeof(T).IsEnum ? Enum.GetUnderlyingType(typeof(T)) : typeof(T);
-+            return underlyingType switch
-+            {
-+                _ when underlyingType == typeof(sbyte) => Unsafe.BitCast<T, sbyte>(value),
-+                _ when underlyingType == typeof(byte) => Unsafe.BitCast<T, byte>(value),
-+                _ when underlyingType == typeof(short) => Unsafe.BitCast<T, short>(value),
-+                _ when underlyingType == typeof(ushort) => Unsafe.BitCast<T, ushort>(value),
-+                _ when underlyingType == typeof(int) => Unsafe.BitCast<T, int>(value),
-+                _ when underlyingType == typeof(uint) => Unsafe.BitCast<T, uint>(value),
-+                _ when underlyingType == typeof(ulong) => unchecked((long)Unsafe.BitCast<T, ulong>(value)),
-+                _ => Unsafe.BitCast<T, long>(value),
-+            };
-+        }
-+    }
-+}
 diff --git a/src/libraries/System.Private.CoreLib/src/System/Runtime/Loader/AssemblyLoadContext.cs b/src/libraries/System.Private.CoreLib/src/System/Runtime/Loader/AssemblyLoadContext.cs
 index 8064d2a46a7..9394e033f88 100644
 --- a/src/libraries/System.Private.CoreLib/src/System/Runtime/Loader/AssemblyLoadContext.cs
