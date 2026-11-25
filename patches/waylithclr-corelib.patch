@@ -51,7 +51,7 @@ index 474e2c68..77e9aca0 100644
  
          /// <summary>
 diff --git a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
-index 849f33fd..013fb3db 100644
+index 849f33fd..fb3db8c6 100644
 --- a/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
 +++ b/src/coreclr/System.Private.CoreLib/src/System/RuntimeType.CoreCLR.cs
 @@ -2961,7 +2961,7 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
@@ -63,7 +63,7 @@ index 849f33fd..013fb3db 100644
          {
              ArgumentNullException.ThrowIfNull(name);
  
-@@ -2998,6 +2998,42 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
+@@ -2998,6 +2998,40 @@ public override InterfaceMapping GetInterfaceMap([DynamicallyAccessedMembers(Dyn
              return match;
          }
  
@@ -75,8 +75,6 @@ index 849f33fd..013fb3db 100644
 +                 simpleName is "System" or "mscorlib" or "netstandard");
 +        }
 +
-+        [UnconditionalSuppressMessage("ReflectionAnalysis", "IL2062",
-+            Justification = "Lax field names are derived from an annotated framework field name.")]
 +        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)]
 +        public override FieldInfo? GetField(string name, BindingFlags bindingAttr)
 +        {
