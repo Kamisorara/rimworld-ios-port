@@ -306,13 +306,22 @@ cp "$ROOT/prebuilt/exhelper_macos_arm64.dylib" "$APP/"
 # 看到槽非空就正常返回——没有它，任何 JIT 期异常（mod 引用缺类型/缺方法）都穿过托管帧直接
 # SIGABRT（0.4.31 真机：中文人物名字 Startup.HasChinese 首次 JIT）。纯 libSystem 的 arm64 件改平台
 # 即可，签名在下面第 7 步统一重做（codesign --force 覆盖所有 *.dylib）。
+# 0.4.33：先剥掉 MonoMod CI 留下的 ad-hoc 签名再改平台。0.4.32 的做法（vtool 作用于带签名的件）让
+# vtool 把 LC_BUILD_VERSION 追加到了 LC_CODE_SIGNATURE 之后（其他 dylib 的签名命令都是最后一条），
+# 真机（SideStore 安装）报 "code signature invalid … codeBlobOffset=0x2D310 codeBlobSize=0x4D20"——偏移
+# 与我们 CI 的 ad-hoc 签名完全一致，即安装器重签了其他 dylib、唯独这个没签上，内核拒了 ad-hoc 件。
+# 剥掉签名后 vtool，再由第 7 步 codesign 把 LC_CODE_SIGNATURE 作为最后一条加回去，形态与其他 dylib 一致。
+codesign --remove-signature "$APP/exhelper_macos_arm64.dylib" \
+    || { echo "::error::exhelper 旧签名剥除失败"; exit 1; }
 vtool -set-build-version ios 15.0 15.0 -replace \
     -output "$APP/exhelper_macos_arm64.ios.dylib" "$APP/exhelper_macos_arm64.dylib" \
     || { echo "::error::exhelper vtool 改平台失败"; exit 1; }
 mv "$APP/exhelper_macos_arm64.ios.dylib" "$APP/exhelper_macos_arm64.dylib"
 otool -l "$APP/exhelper_macos_arm64.dylib" | grep -A3 LC_BUILD_VERSION | grep -q -E "platform (2|IOS)" \
     || { echo "::error::exhelper 改平台后仍不是 iOS："; otool -l "$APP/exhelper_macos_arm64.dylib" | grep -A3 LC_BUILD_VERSION; exit 1; }
-echo "exhelper_macos_arm64.dylib: platform -> iOS 15.0 (was macOS; MonoMod's JIT exception catcher)"
+otool -l "$APP/exhelper_macos_arm64.dylib" | grep -q LC_CODE_SIGNATURE \
+    && { echo "::error::exhelper 剥签名后仍有 LC_CODE_SIGNATURE"; exit 1; }
+echo "exhelper_macos_arm64.dylib: platform -> iOS 15.0 (unsigned until step 7; MonoMod's JIT exception catcher)"
 # MonoMod 的内存分配器/别名写入/JIT vtable 交换都住在这个程序集里（patch-harmony 把
 # 0Harmony 的改写点全部 import 自它）；0Harmony.dll 对它有程序集引用，必须与 0Harmony 同在 bundle 根（TPA 平铺）。
 [ -f "$ROOT/prebuilt/Port17MonoModArena.dll" ] || { echo "::error::prebuilt/Port17MonoModArena.dll 缺（先 patch-harmony prepare，再 dotnet build scripts/monomod-arena）"; exit 1; }
@@ -399,6 +408,11 @@ for f in "$APP"/*.dylib "$APP"/libslang-glslang-*.so "$APP"/libslang-glsl-module
 done
 codesign --force --sign - --timestamp=none --entitlements "$ENT" "$APP/MoltenVK.framework"
 codesign --force --sign - --timestamp=none --entitlements "$ENT" "$APP"
+# exhelper 的签名必须是最后一条 load command（其他 dylib 的形态）且可校验——SideStore 安装时按这个形态重签。
+LASTCMD=$(otool -l "$APP/exhelper_macos_arm64.dylib" | grep -E '^[[:space:]]+cmd ' | tail -1)
+echo "$LASTCMD" | grep -q LC_CODE_SIGNATURE || { echo "::error::exhelper 的 LC_CODE_SIGNATURE 不是最后一条 load command：$LASTCMD"; exit 1; }
+codesign --verify "$APP/exhelper_macos_arm64.dylib" || { echo "::error::exhelper 签名校验失败"; exit 1; }
+echo "exhelper_macos_arm64.dylib: signed, LC_CODE_SIGNATURE last, verified"
 
 # 8) IPA
 cd "$ROOT/build-m2"
