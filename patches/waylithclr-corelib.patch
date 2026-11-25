@@ -25,7 +25,6 @@ index 849f33fd9af..88e3faf6116 100644
  
          [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)]
 -        public override FieldInfo? GetField(string name, BindingFlags bindingAttr)
-+        [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields | DynamicallyAccessedMemberTypes.NonPublicFields)]
 +        private FieldInfo? GetFieldExact(string name, BindingFlags bindingAttr)
          {
              ArgumentNullException.ThrowIfNull(name);
