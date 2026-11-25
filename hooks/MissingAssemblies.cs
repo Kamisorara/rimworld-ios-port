@@ -41,7 +41,10 @@ namespace PortHooks
 		{
 			try
 			{
-				MethodInfo resolve = typeof(AssemblyLoadContext).GetMethod("OnAssemblyResolve", BindingFlags.NonPublic | BindingFlags.Static);
+				// v11 起有两个同名重载：托管的 (RuntimeAssembly, string) 与给原生调用的 unsafe (RuntimeAssembly*, char*, RuntimeAssembly*, Exception*)，
+				// 按名字取会 AmbiguousMatchException（0.4.31 真机日志）；按第二个参数是 string 选托管版，安卓 v10 只有一个重载时同样选中。
+				MethodInfo resolve = typeof(AssemblyLoadContext).GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
+					.FirstOrDefault(m => m.Name == "OnAssemblyResolve" && m.GetParameters().Length == 2 && m.GetParameters()[1].ParameterType == typeof(string));
 				// AppDomain.GetAssemblies only calls this, but its precompiled (ReadyToRun) code has it inlined: until the
 				// method is compiled again at the main menu, a stand-in made while the mods load was listed (measured with
 				// standInTest=1, 2026-10-28). Both are patched: the public method for every caller, this one for the

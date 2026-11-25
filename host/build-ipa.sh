@@ -299,6 +299,20 @@ cp "$ROOT/prebuilt/PortHooks.dll" "$ROOT/prebuilt/PortMobile.dll" "$APP/"
 cp "$ROOT/prebuilt/0Harmony.dll" "$APP/"
 [ -f "$ROOT/prebuilt/exhelper_macos_arm64.dylib" ] || { echo "::error::prebuilt/exhelper_macos_arm64.dylib 缺（本地跑 scripts/patch-harmony extract-exhelper）"; exit 1; }
 cp "$ROOT/prebuilt/exhelper_macos_arm64.dylib" "$APP/"
+# 0.4.32：这个件是 MonoMod CI 的 macOS 版（LC_BUILD_VERSION platform=1，minos 13.0；唯一依赖
+# /usr/lib/libSystem.B.dylib，没有 libstdc++/libc++），iOS dyld 拒载（"incompatible platform (have
+# 'macOS', need 'iOS')"，0.4.10 起日志里的 "exhelper unavailable" 就是它）。它不是可选项：MonoMod
+# 的托管 JIT 钩靠它包装原 JIT，在原生 catch(...) 里接住 JIT 期抛出的 C++ 异常写进槽位，托管钩子
+# 看到槽非空就正常返回——没有它，任何 JIT 期异常（mod 引用缺类型/缺方法）都穿过托管帧直接
+# SIGABRT（0.4.31 真机：中文人物名字 Startup.HasChinese 首次 JIT）。纯 libSystem 的 arm64 件改平台
+# 即可，签名在下面第 7 步统一重做（codesign --force 覆盖所有 *.dylib）。
+vtool -set-build-version ios 15.0 15.0 -replace \
+    -output "$APP/exhelper_macos_arm64.ios.dylib" "$APP/exhelper_macos_arm64.dylib" \
+    || { echo "::error::exhelper vtool 改平台失败"; exit 1; }
+mv "$APP/exhelper_macos_arm64.ios.dylib" "$APP/exhelper_macos_arm64.dylib"
+otool -l "$APP/exhelper_macos_arm64.dylib" | grep -A3 LC_BUILD_VERSION | grep -q "platform IOS" \
+    || { echo "::error::exhelper 改平台后仍不是 iOS："; otool -l "$APP/exhelper_macos_arm64.dylib" | grep -A3 LC_BUILD_VERSION; exit 1; }
+echo "exhelper_macos_arm64.dylib: platform -> iOS 15.0 (was macOS; MonoMod's JIT exception catcher)"
 # MonoMod 的内存分配器/别名写入/JIT vtable 交换都住在这个程序集里（patch-harmony 把
 # 0Harmony 的改写点全部 import 自它）；0Harmony.dll 对它有程序集引用，必须与 0Harmony 同在 bundle 根（TPA 平铺）。
 [ -f "$ROOT/prebuilt/Port17MonoModArena.dll" ] || { echo "::error::prebuilt/Port17MonoModArena.dll 缺（先 patch-harmony prepare，再 dotnet build scripts/monomod-arena）"; exit 1; }
