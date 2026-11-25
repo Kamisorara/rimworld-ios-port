@@ -291,6 +291,14 @@ cp "$ROOT/build-m2/setup/Port17Setup.dll" "$ROOT/build-m2/setup/Mono.Cecil.dll" 
 [ -f "$ROOT/prebuilt/PortMobile.dll" ] || { echo "::error::prebuilt/PortMobile.dll 缺（本地跑 scripts/build-portlayers.py）"; exit 1; }
 cp "$ROOT/prebuilt/PortHooks.dll" "$ROOT/prebuilt/PortMobile.dll" "$APP/"
 
+# 4.99) 随包的中文字体（0.4.35）。iOS 18 起系统没有可用的中文回退字体文件：/System/Library/Fonts/Core/PingFang.ttc
+#      被删，PingFangUI.ttc 住在私有框架里且字形是 FreeType 画不出的 hvgl 表；0.4.34 真机四个目录里 STHeiti/Songti/
+#      Arial Unicode 也一个没有。引擎的 Linux 族名分支在 iOS 上什么都找不到 → 中文全方框。Noto Sans SC（OFL，
+#      host/app/fonts/LICENSE-OFL.txt）放 bundle 根，hooks/IosFonts 以 AppContext.BaseDirectory 取它作简中第一候选。
+FONT="$ROOT/host/app/fonts/NotoSansSC-Regular.otf"
+[ -f "$FONT" ] || { echo "::error::host/app/fonts/NotoSansSC-Regular.otf 缺"; exit 1; }
+cp "$FONT" "$APP/"
+
 # 4.995) PortMobile 的 Harmony detour 依赖不是玩家的 Harmony mod：安卓在 staging 时把
 #      改写过的 0Harmony.dll 放进游戏目录，iOS 必须由 bundle 自带同一依赖。这里放
 #      prebuilt 里已经过 HarmonyCompatRewrites 的 1.7 0Harmony；玩家自己的 Harmony
@@ -408,7 +416,8 @@ for f in "$APP"/*.dylib "$APP"/libslang-glslang-*.so "$APP"/libslang-glsl-module
 done
 codesign --force --sign - --timestamp=none --entitlements "$ENT" "$APP/MoltenVK.framework"
 codesign --force --sign - --timestamp=none --entitlements "$ENT" "$APP"
-# exhelper 的签名必须是最后一条 load command（其他 dylib 的形态）且可校验——SideStore 安装时按这个形态重签。
+# exhelper 的签名必须是最后一条 load command（其他 dylib 的形态）且可校验。
+# 0.4.33 以为安装器按这个形态重签；0.4.34 真机证明不是——用户用 LiveContainer 覆盖安装，形态对了内核仍拒。校验留着当卫生检查。
 LASTCMD=$(otool -l "$APP/exhelper_macos_arm64.dylib" | grep -E '^[[:space:]]+cmd ' | tail -1)
 echo "$LASTCMD" | grep -q LC_CODE_SIGNATURE || { echo "::error::exhelper 的 LC_CODE_SIGNATURE 不是最后一条 load command：$LASTCMD"; exit 1; }
 codesign --verify "$APP/exhelper_macos_arm64.dylib" || { echo "::error::exhelper 签名校验失败"; exit 1; }
@@ -416,6 +425,8 @@ echo "exhelper_macos_arm64.dylib: signed, LC_CODE_SIGNATURE last, verified"
 
 # 8) IPA
 cd "$ROOT/build-m2"
+[ -f "Port17Host.app/NotoSansSC-Regular.otf" ] && [ "$(stat -f%z Port17Host.app/NotoSansSC-Regular.otf)" -gt 8000000 ] \
+    || { echo "::error::bundle 里的 NotoSansSC-Regular.otf 缺或大小不对"; exit 1; }
 mkdir Payload
 cp -R Port17Host.app Payload/
 zip -qry port17host-m2.ipa Payload

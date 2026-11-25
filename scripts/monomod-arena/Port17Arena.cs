@@ -115,6 +115,7 @@ namespace Port17
             Console.WriteLine("[port17] monomod shim " + fileName + " -> " + path);
             if (!File.Exists(path))
                 Console.WriteLine("[port17] monomod shim missing: " + path);
+            Describe(path);
             try
             {
                 NativeLibrary.Free(NativeLibrary.Load(path));
@@ -124,6 +125,92 @@ namespace Port17
                 Console.WriteLine("[port17] monomod shim load failed: " + e.Message);
             }
             return path;
+        }
+
+        // Which bytes are on the disk here. dyld names a refused signature by the file's LC_UUID, and MonoMod's
+        // exhelper carries 0E435D2A-… on every build, so the UUID alone cannot tell whether the installer
+        // (LiveContainer / SideStore) replaced the file; length and SHA256 can.
+        private static void Describe(string path)
+        {
+            try
+            {
+                if (!File.Exists(path))
+                    return;
+                string hash;
+                using (System.Security.Cryptography.SHA256 sha = System.Security.Cryptography.SHA256.Create())
+                using (FileStream stream = File.OpenRead(path))
+                    hash = Convert.ToHexString(sha.ComputeHash(stream));
+                Console.WriteLine("[port17] monomod file " + Path.GetFileName(path) + ": " + new FileInfo(path).Length
+                    + " bytes sha256=" + hash + " uuid=" + (UuidOf(path) ?? "none"));
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("[port17] monomod file " + path + " not described: " + e.Message);
+            }
+        }
+
+        // LC_UUID of a thin Mach-O or the first slice of a fat one, formatted as dyld prints it.
+        private static string UuidOf(string path)
+        {
+            using FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            byte[] header = new byte[32];
+            if (stream.Read(header, 0, 32) < 32)
+                return null;
+            uint magic = Be32(header, 0);
+            long slice = 0;
+            if (magic == 0xCAFEBABE || magic == 0xBEBAFECA)
+            {
+                byte[] offset = new byte[4];
+                stream.Position = 8;
+                if (stream.Read(offset, 0, 4) != 4)
+                    return null;
+                slice = magic == 0xCAFEBABE ? Be32(offset, 0) : Le32(offset, 0);
+                stream.Position = slice;
+                if (stream.Read(header, 0, 32) < 32)
+                    return null;
+            }
+            if (Le32(header, 0) != 0xFEEDFACF && Le32(header, 0) != 0xFEEDFACE)
+                return null;
+            uint commands = Le32(header, 16);
+            byte[] all = new byte[Le32(header, 20)];
+            stream.Position = slice + 32;
+            if (stream.Read(all, 0, all.Length) != all.Length)
+                return null;
+            int position = 0;
+            for (uint i = 0; i < commands; i++)
+            {
+                if (position + 8 > all.Length)
+                    break;
+                uint size = Le32(all, position + 4);
+                if (Le32(all, position) == 0x1B && position + 24 <= all.Length)
+                {
+                    var uuid = new byte[16];
+                    Array.Copy(all, position + 8, uuid, 0, 16);
+                    return Hex(uuid, 0, 4) + "-" + Hex(uuid, 4, 2) + "-" + Hex(uuid, 6, 2) + "-" + Hex(uuid, 8, 2) + "-" + Hex(uuid, 10, 6);
+                }
+                if (size == 0)
+                    break;
+                position += (int)size;
+            }
+            return null;
+        }
+
+        private static string Hex(byte[] bytes, int offset, int count)
+        {
+            var text = new System.Text.StringBuilder(count * 2);
+            for (int i = 0; i < count; i++)
+                text.Append(bytes[offset + i].ToString("X2"));
+            return text.ToString();
+        }
+
+        private static uint Be32(byte[] bytes, int offset)
+        {
+            return ((uint)bytes[offset] << 24) | ((uint)bytes[offset + 1] << 16) | ((uint)bytes[offset + 2] << 8) | bytes[offset + 3];
+        }
+
+        private static uint Le32(byte[] bytes, int offset)
+        {
+            return bytes[offset] | ((uint)bytes[offset + 1] << 8) | ((uint)bytes[offset + 2] << 16) | ((uint)bytes[offset + 3] << 24);
         }
 
         // Fast path for ISystem.PatchData: the target lives in the granted arena, so write through
