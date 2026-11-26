@@ -39,7 +39,7 @@ xcrun -sdk "$SDK" clang \
     -shared -fvisibility=default \
     -Wl,-install_name,@rpath/libglfw.dylib \
     -I "$INC" \
-    -framework UIKit -framework Foundation -framework QuartzCore -framework UniformTypeIdentifiers -lz \
+    -framework UIKit -framework Foundation -framework QuartzCore -framework UniformTypeIdentifiers -lz -liconv \
     -o "$APP/libglfw.dylib" \
     "$ROOT/host/glfw/glfw_ios.m" "$ROOT/host/app/unzip.c"
 
@@ -397,7 +397,7 @@ xcrun -sdk "$SDK" clang \
     -fobjc-arc -DPORT17_INTERP=1 \
     -I "$ROOT/host/app" -I "$INC" \
     -Wl,-rpath,@executable_path \
-    -L "$APP" -lglfw -lvulkan -lwaylithaudio -lz \
+    -L "$APP" -lglfw -lvulkan -lwaylithaudio -lz -liconv \
     -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics -framework Metal -framework CoreFoundation \
     -framework UniformTypeIdentifiers \
     -o "$APP/Port17Host" \
