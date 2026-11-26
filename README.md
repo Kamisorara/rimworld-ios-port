@@ -1,63 +1,143 @@
-# Port17-iOS：RimWorld 1.7 iOS 移植（非官方，探针阶段）
+# Port17 — RimWorld 1.7 on iOS (unofficial)
 
-**中文**
+[![Build](https://github.com/Kamisorara/rimworld-ios-port/actions/workflows/m2-host.yml/badge.svg)](https://github.com/Kamisorara/rimworld-ios-port/actions/workflows/m2-host.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> 非官方玩家项目，与 Ludeon Studios 无关，也未经其认可。本仓库不含 RimWorld 的任何代码、素材或二进制文件，安装包里也没有；运行需要玩家自己拥有的正版游戏。
+> **Unofficial fan project — not affiliated with Ludeon Studios.**
+> Port17 ships no game files and sells nothing. It runs only the files of a copy of RimWorld that **you already own on Steam**; without them there is nothing to run. See [Legal](#legal).
 
-这是 [Port17 安卓移植](../rimworld-android-port) 的姊妹项目：同一个目标（RimWorld 1.7，Waylith 引擎，.NET + Vulkan），换到 iOS 上。
+Port17 is an open-source compatibility layer that runs the Windows (Steam) build of **RimWorld 1.7** — Ludeon's Waylith engine, .NET code over a Vulkan renderer — on iPhone and iPad. No jailbreak, and no repackaged game: you copy the files over from your own Steam installation, and Port17 supplies the rest: its own .NET runtime, Vulkan on Metal, touch controls, mod support and a Steam Workshop downloader.
 
-**当前状态（2026-11-23）：M3 里程碑达成——JIT 成功，游戏全速可玩。** 真机实测：iPad M4 / iOS 27，
-全 DLC 创建世界 → 世界生成 → 进入殖民地地图，装载速度较解释器显著提升，零崩溃。解释器模式（普通
-启动，装完即玩）与 JIT 模式（StikDebug 会话拉起）同包双模：自建混合运行时（dotnet/runtime `v11.0.0`
-GA tag，`--dynamiccodecompiled true` + 静态 RyuJIT + 按需解释器 dylib）+ StikDebug 竞技场协议
-（app 发 `brk` 请求、脚本经 debugserver `_M` 代分配 128MiB RX 并逐页祝福、分离后照常执行）。
-M2（UIKit 宿主 + GLFW 垫片 iOS 后端 + MoltenVK 1.4.2 + 触摸/软键盘桥，接口契约见
-[docs/ENGINE-NATIVE-CONTRACT.md](docs/ENGINE-NATIVE-CONTRACT.md)）与设备内 setup（8 道幂等 Cecil
-补丁，安卓 SetupService 的对应物）均已收官。下一站 M4：托管层共享（安卓触控优化完全对齐）。
+**Current build: 0.4.43** (26 November 2026). The project is in active development; [docs/PLAN.md](docs/PLAN.md) is the round-by-round record.
 
-## 技术路线（与安卓版的差异）
+## Status
 
-| | 安卓版 | iOS 版 |
-|---|---|---|
-| 运行时 | 微软官方 .NET 10 CoreCLR pack（android-arm64） | **自建混合运行时**：dotnet/runtime `v11.0.0` GA tag，`-os ios -arch arm64 --dynamiccodecompiled true` + `FEATURE_INTERPRETER=1`（JIT 静态链入 + 解释器按需 dylib；微软官方 iOS 包是解释器专用构建，无 JIT） |
-| JIT | 系统允许 | StikDebug 调试器会话拉起后允许：app 发 brk 请求、脚本经 debugserver `_M` 代分配 128MiB RX 竞技场（普通启动自动回退解释器，同包双模） |
-| 图形 | 系统 Vulkan | MoltenVK（Vulkan over Metal） |
-| CoreLib 的 20 个 `WaylithClr.*` 开关模拟 | 补丁对着 10.0.12 CoreLib | **M4 重移植**到 11.0 CoreLib（随 mod 管线） |
-| 宿主 | Java NativeActivity + `host.c` | ObjC/UIKit + `host.c`（同一套 `coreclr_initialize` 拉起方式） |
-| 导入处理 | PortSetup 独立进程 | iOS 无 fork，须进程内 |
-| 分发 | APK 直装 | 未签名 IPA，玩家经 SideStore/AltStore 自签侧载 |
-| 构建 | 本地 Windows | Windows 写码，GitHub Actions 的 macOS runner 编译 |
+Tested on an iPad (M4, iOS 27).
 
-托管层（PortHooks / PortMobile / ModPrep / patch.dll 的规则）计划从安卓仓库共享源码，M4 开始。
+| Area | State |
+|---|---|
+| Game | Boots to the menu, generates new worlds, runs colony maps, saves and loads — the base game plus the DLCs you own |
+| Speed | .NET code is JIT-compiled on the device (see [How it works](#how-it-works)) |
+| Controls | Touch: tap, long-press for right-click, two-finger zoom, tap assist, inertial scrolling, edge scrolling, on-screen mouse buttons and a key wheel |
+| Language | The game's own languages; a Simplified Chinese font and an emoji fallback font are bundled so that CJK text renders |
+| Mods | Load with the game, Harmony mods included; import a mod as a `.zip` or a folder; a community load-order rule set is shipped |
+| Steam Workshop | Sign in with your Steam account (QR code or password), browse your subscriptions, download and install mods |
+| Saves | Import save files (`.rws`); back up saves and settings to a zip |
 
-## 构建
+### Not there yet
 
-完全在 GitHub Actions 上（公开仓库的 macOS runner 免费额度内）：
+- **Every launch needs a JIT session.** iOS does not let an ordinary app create executable memory, so Port17 has to be started through StikDebug (see [Install](#install)). Opened the normal way it stops with a notice and the game does not start.
+- **No Steam integration.** Achievements and the other Steam features are unavailable; Steam is used only to download Workshop mods.
+- **No file watchers.** Mods that wait for files to change are never notified.
+- **Memory.** Nothing trims memory for iOS yet, so large mod lists in long sessions can run into the system's limit.
+- **A few PC-only APIs are missing.** External programs cannot be started (links open in Safari instead); a mod that needs one of them may fail — report it with `coreclr-stderr.log`.
 
-- `interp-probe`：官方 .NET 11 ios 运行时包 + M1 探针（解释器路线的回归基线）；
-- `m2-host`：M2 宿主（UIKit + CAMetalLayer + GLFW 垫片 + libvulkan 前向层 + MoltenVK 1.4.2 按
-  sha256 缓存 + glslang 现编 SPIR-V 三角形 + M1 探针诊断件），产物 `port17host-m2.ipa`；
-- `m1-probe`：自建 CoreCLR（JIT26 分支，封存的实验性全速路线）；
-- `mac-debug`：macOS 上复现宿主层问题。
+Port17's own launcher screen is in Chinese (`导入 zip` = *Import zip*, `导出` = *Export*).
 
-手动触发或推送到 main 都会出包。产物在 Actions 的 Artifacts 里。
+## How it works
 
-## 真机测试（0.3.3，双模）
+- **Runtime.** A self-built hybrid .NET 11 runtime (`dotnet/runtime` v11.0.0): CoreCLR with the RyuJIT compiler linked in plus an interpreter. Two source patches go on top: [`patches/dualjit-arena.patch`](patches/dualjit-arena.patch) lets the JIT work from a pre-blessed arena, and [`patches/waylithclr-corelib.patch`](patches/waylithclr-corelib.patch) re-creates the `WaylithClr.*` runtime switches the engine relies on. Microsoft's own iOS runtime is interpreter-only.
+- **Executable memory.** At start-up the app raises a `brk` request. A debug session running [`probe/stikdebug/rw17-jit26.js`](probe/stikdebug/rw17-jit26.js) allocates a 128 MiB executable arena on the app's behalf, complete with a writable alias, hands over its address and detaches; from then on the runtime allocates from that arena.
+- **Graphics and audio.** Vulkan on Metal through MoltenVK. The engine's windowing and input code talks to a GLFW-API shim with a UIKit back end ([`host/glfw/`](host/glfw/)); audio goes through Core Audio.
+- **On-device set-up.** The first run patches the game's own assemblies in place with Mono.Cecil ([`setup/`](setup/)): machine type, OS detection and a short list of APIs that do not exist on iOS. No PC-side tool is needed.
+- **Managed layer.** [`hooks/`](hooks/) and [`mobile/`](mobile/) load with the game as a start-up hook: runtime shims for the engine, touch input, mod import and preparation, Harmony/MonoMod support, and small per-app fixes for iOS.
+- **Workshop.** [`workshop/`](workshop/) is a Steam Workshop downloader built on SteamKit2 that runs inside the game.
+- **Build.** The IPA is produced entirely on GitHub Actions (a macOS runner) by [`host/build-ipa.sh`](host/build-ipa.sh).
 
-1. 下载 [Release](../../releases) 里的 IPA，经 SideStore（或 AltStore）侧载——侧载自动带 `get-task-allow`；
-2. **解释器模式（默认，装完即玩）**：普通打开 app。首次会自动在设备内跑 setup（改写游戏文件，约半分钟）后自动退出，再打开即引擎。性能为解释器基线；
-3. **JIT 模式（同包，需一次会话仪式）**：
-   - 前置（一次性）：StikDebug 导入设备配对文件；App Store 装 LocalDevVPN 并开启；连 WiFi；
-   - 把 [`probe/stikdebug/rw17-jit26.js`](probe/stikdebug/rw17-jit26.js) AirDrop 到 iPad，StikDebug → Scripts 导入；
-   - StikDebug 运行 `rw17-jit26`、目标选 Port17——app 自己发 `brk #0xf00d` 请求，脚本经 debugserver `_M,rx` 分配 128MiB RX 并逐页祝福（3-4 秒），把地址经 x0 还给 app，随后应答分离；**脚本显示 detached 后窗口可关**；
-   - 日志（Files → Port17 → `port17-ui.log`）应出现：`JIT 授权检测 CS_DEBUGGED=1` → `[jit26] 竞技场拿到 …` → `[jit26] 探针 #1 → 42` / `#2 → 43` → `竞技场就绪` → `生效执行模式 = JIT`；
-   - JIT 会话内创建/加载存档，存档与解释器模式互通；
-4. 游戏资源导入：诊断界面「导入 zip」选 `port17-game.zip`（PC 上 `python scripts/pack-game-zip.py` 打包），或 Files 文件夹直放、「打开方式 → Port17」——三种口子任选，详见 [docs/GAME-IMPORT.md](docs/GAME-IMPORT.md)。
+## Install
 
-## 里程碑
+### 1. Get the app
 
-见 [docs/PLAN.md](docs/PLAN.md)。
+- **Latest build:** GitHub Actions → [M2 Host](https://github.com/Kamisorara/rimworld-ios-port/actions/workflows/m2-host.yml) → latest green run → artifact `port17host-m2-ipa`. Downloading an artifact needs a GitHub account.
+- The [Releases](https://github.com/Kamisorara/rimworld-ios-port/releases) page only carries milestone builds (currently v0.3.3), which are older than the artifacts.
 
-## 许可
+### 2. Sideload it
 
-MIT，见 [LICENSE](LICENSE)。
+Install the IPA with SideStore, AltStore, LiveContainer or any other tool that signs apps with your Apple ID. No Apple developer account is needed.
+
+### 3. Copy your game files
+
+From **your own** RimWorld installation (Steam → `steamapps/common/RimWorld`, version 1.7.x), Port17 needs `Assets.zip`, `Version.txt`, `Data/`, `Rendering/` and the game's managed assemblies. The easiest way is to put them into one zip. Zipping every `.dll` in the folder is fine; the `.exe`, `steam_api64*` and the `.vdf` / `.html` files are not needed. Include the folders of DLCs only for DLCs you own.
+
+Get the zip (or the files) onto the device by any of these:
+
+- the `导入 zip` button on Port17's screen — the system file picker; works with iCloud Drive, AirDrop and other apps' folders;
+- the Files app: *On My iPad/iPhone → Port17 → Documents*;
+- USB, with Finder;
+- *Share → Open with → Port17* on a `port17…zip` in the Files app.
+
+The first launch rewrites those game files in place for iOS (about half a minute) and then asks you to launch once more.
+
+### 4. Launch it (JIT session)
+
+iOS gives an ordinary app no executable memory, and this runtime needs it for JIT code. Every launch therefore goes through a debug session that hands Port17 an executable arena:
+
+1. **Once:** install StikDebug and import its pairing file; install a VPN app that provides JIT (for example LocalDevVPN), switch it on and stay on the same Wi-Fi network; AirDrop [`rw17-jit26.js`](probe/stikdebug/rw17-jit26.js) to the device and import it into StikDebug.
+2. **Every time:** in StikDebug run `rw17-jit26` with **Port17** as the target. Port17 waits for the arena (up to 120 seconds) and then starts the game; the script window can be closed once it reports `detached`.
+
+### 5. Mods and saves
+
+- **Mods:** import a `.zip` or a folder through Port17, or use the Workshop window on the game's Mods screen.
+- **Workshop sign-in:** by QR code or password; a Steam Guard code is asked for when Steam requires it. The sign-in is kept in the app's private storage and survives updates. Neither your password nor the sign-in token is written to any log or export.
+- **Saves:** `导出` shares a zip of your saves and settings together with the log files.
+
+## Troubleshooting
+
+Port17 keeps its logs in *Files → On My iPad/iPhone → Port17 → Documents*:
+
+| File | What it holds |
+|---|---|
+| `port17-ui.log` | Port17's launcher: install, set-up and engine start-up |
+| `coreclr-stderr.log` | Game and .NET runtime output — the last run only |
+| `engine-trace.log` | Engine timing marks |
+| `port17-status.txt` | One-line status of the last session (JIT arena, execution mode) |
+| `port17-workshop.log` | Workshop sign-in, downloads and installs |
+
+When you report a problem, attach these files. For a black screen, start with `port17-ui.log` and `coreclr-stderr.log`.
+
+## Build from source
+
+The iOS app is built in the cloud; nothing Apple-specific is needed on your machine.
+
+- **IPA:** push to `main` (changes under `host/`) or run the **M2 Host** workflow by hand; the artifact is `port17host-m2-ipa`. The other workflows build the patched runtime (**m1-probe**, also published as a release asset), the interpreter baseline (**interp-probe**) and a macOS debug build (**mac-debug**).
+- **Managed layer:** `python scripts/build-portlayers.py` compiles `hooks/` and `mobile/` into `prebuilt/` and rewrites the runtime's file-watcher stub. It needs the .NET SDK, Mono.Cecil, the Harmony assembly and a local RimWorld 1.7 installation (paths can be overridden with environment variables).
+- **Known gap:** the Workshop library is compiled against the game's assemblies with a response file that is not tracked (`prebuilt/workshop.rsp`), so a fresh clone has to reuse the committed `prebuilt/PortWorkshop.dll`.
+
+## Repository layout
+
+| Path | What it is |
+|---|---|
+| `host/` | Native iOS host: UIKit app and launcher, GLFW-API shim, Vulkan forwarder to MoltenVK, audio, stand-ins for Windows libraries, and `build-ipa.sh` |
+| `hooks/`, `mobile/` | Managed phone layer: start-up hook, runtime shims, touch input, mod support |
+| `setup/` | On-device set-up that patches the game's assemblies |
+| `workshop/` | Steam Workshop downloader |
+| `scripts/` | Build and patch tools (`build-portlayers.py`, `check-facades.py`, `patch-harmony`, `patch-platform`, `unstub-watcher`) |
+| `patches/` | CoreCLR source patches |
+| `probe/` | Runtime probes and the StikDebug launch scripts |
+| `runtime-out-hybrid/`, `prebuilt/` | Runtime pieces, managed binaries and facades copied into the IPA |
+| `docs/` | Decision log and guides (Chinese) |
+
+## Legal
+
+**You must own the game.** This repository and its installers contain no RimWorld game files: no code, data, art, audio or text from the game is stored here or distributed with Port17. The app only runs files copied from a copy of RimWorld that you have bought on Steam, and it adapts that copy on your own device. Nothing here lets anyone play without buying the game first — Port17 depends on that purchase; it does not replace it.
+
+**Why we consider this legitimate.** Port17 is a compatibility tool for owners of the game, in the same sense as a translation layer that lets an existing program run on another system. It is free and open source, it is not sold, and it redistributes nothing of RimWorld. The only source of game content is the player's own purchase.
+
+**Trademarks.** RimWorld and the RimWorld logo are trademarks of Ludeon Studios, Inc. Steam and the Steam logo are trademarks of Valve Corporation. This is an unofficial, fan-made project: it is not affiliated with, endorsed by or sponsored by Ludeon Studios or Valve. The Workshop features sign in with your own Steam account and are subject to your Steam Subscriber Agreement.
+
+If you are a rights holder and have a concern, please open an issue — it will be answered.
+
+## License
+
+Port17's own code is released under the [MIT License](LICENSE).
+
+Everything else keeps its own license: the .NET runtime and CoreCLR (MIT), MoltenVK (Apache-2.0), Harmony and MonoMod (MIT), SteamKit2 (LGPL-2.1-only), protobuf-net (Apache-2.0), QRCoder and ZstdSharp (MIT — see [workshop/LICENSES.txt](workshop/LICENSES.txt)), Noto Sans SC ([OFL](host/app/fonts/LICENSE-OFL.txt)), and the further libraries fetched or compiled by the build (`host/build-ipa.sh`, `host/fetch-*.sh`).
+
+## Documentation
+
+The project's documentation is written in Chinese.
+
+- [docs/PLAN.md](docs/PLAN.md) — decisions, every round of work, device verdicts and package records
+- [docs/GAME-IMPORT.md](docs/GAME-IMPORT.md) — game files, import and directory layout in detail
+- [docs/ENGINE-NATIVE-CONTRACT.md](docs/ENGINE-NATIVE-CONTRACT.md) — native ABI between engine and host
+- [docs/NET11-COMPARISON.md](docs/NET11-COMPARISON.md), [docs/PLAN-JIT26.md](docs/PLAN-JIT26.md), [docs/PERF-30FPS-PLAN.md](docs/PERF-30FPS-PLAN.md) — runtime study, JIT arena design, performance plan
