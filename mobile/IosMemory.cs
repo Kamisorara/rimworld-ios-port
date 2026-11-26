@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace PortMobile
 {
@@ -10,9 +11,10 @@ namespace PortMobile
 	/// pages back; none of that exists here (0.4.43: "memory not trimmed" after every load, and no process
 	/// memory in the record's snap lines). Everything iOS-specific about memory lives in this file, which
 	/// sync-mobile.py does not overwrite; the shared files (MemTrim, Recorder) carry one-line "iOS:" hooks.
-	///   - proc_pid_rusage(RUSAGE_INFO_V2).ri_phys_footprint: the number the system kills by. Anonymous dirty
+	///   - proc_pid_rusage(RUSAGE_INFO_V0).ri_phys_footprint: the number the system kills by. Anonymous dirty
 	///     pages, compressed pages, IOKit/GPU mappings and page tables count; clean file pages do not. The host
-	///     (host/app/memory.m) reads the same pair every 10 s into port17-status.txt and counts memory warnings.
+	///     (host/app/memory.m) reads the same number, through the v2 structure, every 10 s into
+	///     port17-status.txt and counts memory warnings.
 	///   - os_proc_available_memory(): what this process may still take.
 	///   - malloc_zone_pressure_relief(NULL, 0): libmalloc's counterpart of M_PURGE_ALL, every zone, fully.
 	/// </summary>
@@ -24,16 +26,22 @@ namespace PortMobile
 		[DllImport("libc")] private static extern ulong os_proc_available_memory();
 		[DllImport("libc")] private static extern IntPtr malloc_zone_pressure_relief(IntPtr zone, UIntPtr goal);
 
-		private const int RUSAGE_INFO_V2 = 2;
-		// struct rusage_info_v2 is 96 bytes: the uuid, then ri_phys_footprint as the eighth uint64_t.
-		private const int FootprintOffset = 72;
-		private const int RusageInfoSize = 96;
+		// ri_phys_footprint has been in the structure since its first version, so the smallest flavor is asked for.
+		// The kernel sizes what it copies from the flavor alone and never learns how long the caller's array is
+		// (libc's own wrapper picks the length the same way). The array is therefore far longer than any flavor's
+		// structure (v0 = 96, v2 = 160 bytes), so that nothing here depends on the size table being complete.
+		private const int RUSAGE_INFO_V0 = 0;
+		private const int FootprintOffset = 72; // after the 16-byte uuid and seven uint64_t
+		private const int RusageInfoSize = 512;
+
+		private static int probed;
 
 		/// <summary>The footprint in bytes; throws when the system will not tell (the callers decide what that means).</summary>
 		public static long FootprintBytes()
 		{
+			SayWhatResolved();
 			byte[] info = new byte[RusageInfoSize];
-			if (proc_pid_rusage(getpid(), RUSAGE_INFO_V2, info) != 0)
+			if (proc_pid_rusage(getpid(), RUSAGE_INFO_V0, info) != 0)
 			{
 				throw new InvalidOperationException("proc_pid_rusage failed");
 			}
@@ -42,6 +50,7 @@ namespace PortMobile
 
 		public static long HeadroomBytes()
 		{
+			SayWhatResolved();
 			return (long)os_proc_available_memory();
 		}
 
@@ -61,6 +70,7 @@ namespace PortMobile
 		/// <summary>What the Android layer asks mallopt(M_PURGE_ALL) for. A failure is logged, not thrown: the trim goes on.</summary>
 		public static void PressureRelief()
 		{
+			SayWhatResolved();
 			try
 			{
 				malloc_zone_pressure_relief(IntPtr.Zero, UIntPtr.Zero);
@@ -76,11 +86,47 @@ namespace PortMobile
 		{
 			try
 			{
-				return string.Format(CultureInfo.InvariantCulture, "footprint {0} MB, headroom {1} MB", FootprintBytes() >> 20, HeadroomBytes() >> 20);
+				long footprintMb = FootprintBytes() >> 20;
+				try
+				{
+					return string.Format(CultureInfo.InvariantCulture, "footprint {0} MB, headroom {1} MB", footprintMb, HeadroomBytes() >> 20);
+				}
+				catch (Exception e)
+				{
+					return string.Format(CultureInfo.InvariantCulture, "footprint {0} MB, headroom ? ({1})", footprintMb, e.Message);
+				}
 			}
 			catch (Exception e)
 			{
 				return "footprint ? (" + e.Message + ")";
+			}
+		}
+
+		// Once a process, before the first reading: which of the four entry points the name "libc" really gave us.
+		// 0.4.43 could not tell a symbol the platform does not export from a handle that sees too little; this line can.
+		// The pressure relief is really run here, once, early: harmless, and the trim asks for the same after every load.
+		private static void SayWhatResolved()
+		{
+			if (Interlocked.Exchange(ref probed, 1) != 0)
+			{
+				return;
+			}
+			Console.WriteLine("[mobile] iOS: libSystem through \"libc\": getpid " + Outcome(() => getpid())
+				+ ", proc_pid_rusage " + Outcome(() => FootprintBytes())
+				+ ", os_proc_available_memory " + Outcome(() => HeadroomBytes())
+				+ ", malloc_zone_pressure_relief " + Outcome(() => malloc_zone_pressure_relief(IntPtr.Zero, UIntPtr.Zero).ToInt64()));
+		}
+
+		private static string Outcome(Func<long> call)
+		{
+			try
+			{
+				call();
+				return "resolved";
+			}
+			catch (Exception e)
+			{
+				return "MISSING (" + e.GetType().Name + ": " + e.Message + ")";
 			}
 		}
 	}

@@ -1,14 +1,15 @@
 #include "memory.h"
 
 #include <dispatch/dispatch.h>
-// proc_pid_rusage is exported by libSystem on iOS, but libproc.h is macOS-only and is not
-// shipped in the iPhoneOS SDK; declare it with the Darwin signature (rusage_info_t is `void *`).
-extern int proc_pid_rusage(int pid, int flavor, rusage_info_t buffer);
+#include <sys/resource.h> // rusage_info_t, RUSAGE_INFO_V2, struct rusage_info_v2: before the declaration below
 #include <os/proc.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/resource.h>
 #include <unistd.h>
+
+// proc_pid_rusage is exported by libSystem on iOS, but libproc.h (where macOS declares it) is not
+// shipped in the iPhoneOS SDK; declare it with the Darwin signature (rusage_info_t is `void *`).
+extern int proc_pid_rusage(int pid, int flavor, rusage_info_t buffer);
 
 #import <UIKit/UIKit.h>
 
@@ -16,7 +17,8 @@ extern int proc_pid_rusage(int pid, int flavor, rusage_info_t buffer);
 #include "launcher.h"  // append_log（任意线程：落 Documents/port17-ui.log 并上屏）
 #include "status.h"    // port17_status_set（自带锁，整文件原子替换）
 
-// g_peak 只在定时器队列上碰；g_warnings 只在主线程（UIKit 发通知的线程）上碰。
+// g_peak 定时器队列上每拍碰，起止时主线程也各记一拍（只取最大值，谁后到结果都一样）；
+// g_warnings 只在主线程（UIKit 发通知的线程）上碰。
 static char g_home[600];
 static dispatch_source_t g_timer = nil;
 static id g_warningObserver = nil;
@@ -65,6 +67,9 @@ void port17_memory_start(const char *home)
     char v[16];
     snprintf(v, sizeof v, "%d", g_warnings);
     port17_status_set(g_home, "mem_warnings", v);
+    // 状态文件跨启动保留：上一场的峰值先归零，再当场记一拍，被杀得再早账本里也是这一场的数。
+    port17_status_set(g_home, "mem_peak_mb", "0");
+    tick();
     // UIKit 自己发的通知，不看 delegate 是谁的（引擎的 UIApplicationMain 带着它自己的 delegate）。
     // queue nil = 在发通知的主线程上同步执行。
     g_warningObserver = [[NSNotificationCenter defaultCenter]

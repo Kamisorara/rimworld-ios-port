@@ -10,7 +10,7 @@
 
 Port17 is an open-source compatibility layer that runs the Windows (Steam) build of **RimWorld 1.7** — Ludeon's Waylith engine, .NET code over a Vulkan renderer — on iPhone and iPad. No jailbreak, and no repackaged game: you copy the files over from your own Steam installation, and Port17 supplies the rest: its own .NET runtime, Vulkan on Metal, touch controls, mod support and a Steam Workshop downloader.
 
-**Current build: 0.4.44** (26 November 2026). The project is in active development; [docs/PLAN.md](docs/PLAN.md) is the round-by-round record.
+**Current build: 0.4.45** (26 November 2026). The project is in active development; [docs/PLAN.md](docs/PLAN.md) is the round-by-round record.
 
 ## Status
 
@@ -31,7 +31,7 @@ Tested on an iPad (M4, iOS 27).
 - **Every launch needs a JIT session.** iOS does not let an ordinary app create executable memory, so Port17 has to be started through StikDebug (see [Install](#install)). Opened the normal way it stops with a notice and the game does not start.
 - **No Steam integration.** Achievements and the other Steam features are unavailable; Steam is used only to download Workshop mods.
 - **No file watchers.** Mods that wait for files to change are never notified.
-- **Memory.** iOS kills the app outright when it passes its memory limit, and nothing is tuned for that yet. Since 0.4.44 the app keeps a memory ledger (see `port17-status.txt`) and the Android trimmer runs on iOS too, but what to release and when is still undecided, so long sessions with large mod lists are untested.
+- **Memory.** iOS kills the app outright when it passes its memory limit, and nothing is tuned for that yet. Since 0.4.45 the app keeps a memory ledger (see `port17-status.txt`) and the Android trimmer runs on iOS too, but what to release and when is still undecided, so long sessions with large mod lists are untested.
 - **A few PC-only APIs are missing.** External programs cannot be started (links open in Safari instead); a mod that needs one of them may fail — report it with `coreclr-stderr.log`.
 
 Port17's own launcher screen is in Chinese (`导入 zip` = *Import zip*, `导出` = *Export*).
@@ -92,7 +92,7 @@ Port17 keeps its logs in *Files → On My iPad/iPhone → Port17 → Documents*:
 | `port17-ui.log` | Port17's launcher: install, set-up and engine start-up |
 | `coreclr-stderr.log` | Game and .NET runtime output — the last run only |
 | `engine-trace.log` | Engine timing marks, plus one line per memory warning and the session's memory peak |
-| `port17-status.txt` | One-line status of the last session: JIT arena, execution mode, and since 0.4.44 the memory footprint, the allowance left and its peak (`mem_*`) |
+| `port17-status.txt` | One-line status of the last session: JIT arena, execution mode, and since 0.4.45 the memory footprint, the allowance left and its peak (`mem_*`) |
 | `port17-workshop.log` | Workshop sign-in, downloads and installs |
 
 When you report a problem, attach these files. For a black screen, start with `port17-ui.log` and `coreclr-stderr.log`.
