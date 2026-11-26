@@ -429,6 +429,18 @@ cp "$RT_DIR"/*.dll "$APP/"
 [ -f "$ROOT/prebuilt/mscorlib.dll" ] && cp "$ROOT/prebuilt/mscorlib.dll" "$APP/mscorlib.dll"
 cp "$ROOT/build-m2/hello/Hello.dll" "$APP/"
 
+# 6.06) System.dll / System.Data.dll 同 6.05 是 ReferenceAssembly：collect 对不自建的库
+#     一律抓引用程序集（0.4.41 包内 System.dll 38,912 / System.Data.dll 13,312 字节，
+#     scripts/check-facades.py 判定）。mod 绑到 `System, Version=4.0.0.0` 就 BadImageFormat
+#     Exception「Reference assemblies cannot be loaded for execution」（0.4.41 真机：带中文名
+#     mod 开新世界，人物生成与选理念预设页连续报错）。官方 ios runtime pack 的同名可执行
+#     facade（与包内 mscorlib 同源）入仓 prebuilt/，这里原位覆盖。
+for facade in System System.Data; do
+	[ -f "$ROOT/prebuilt/$facade.dll" ] && cp "$ROOT/prebuilt/$facade.dll" "$APP/$facade.dll"
+done
+#     自检：.app 根与 workshop/ 里再出现引用程序集就让构建红掉，而不是又一个真机回合。
+python3 "$ROOT/scripts/check-facades.py" "$APP" "$APP/workshop"
+
 # 6.5) 出包自检：install_name 必须是 @rpath（默认值是构建机绝对路径，设备上 dyld 拒载而 CI 全绿）；
 #      所有自建 dylib 的依赖行里出现构建机路径的，自动 -change 成 @rpath/<basename>（同目录即能解析），
 #      改不动的直接失败，不让坏包出门。

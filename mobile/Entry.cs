@@ -94,6 +94,7 @@ namespace PortMobile
 			MultiplayerFiles.Start(harmony);
 			VideoUrls.Start(harmony);
 			OpenUrl.Start(harmony);
+			WorkshopLoader.Start(harmony);
 			UpdateNotice.Start(harmony);
 			Screenshots.Start(harmony);
 			AndroidVideo.Start(harmony);

@@ -976,8 +976,8 @@ API int glfwAndroidPickFiles(int folder)
         sheet.delegate = picker;
         sheet.allowsMultipleSelection = !wantsFolder;
         UIViewController* root = pick_root_controller();
-        log_line("mod picker: %s, root %@, staging %s", wantsFolder ? "folder" : "zip/save files",
-                 root ? NSStringFromClass(root.class) : @"(none)", stagingPath);
+        log_line("mod picker: %s, root %s, staging %s", wantsFolder ? "folder" : "zip/save files",
+                 root ? [NSStringFromClass(root.class) UTF8String] : "(none)", stagingPath);
         if (!root)
         {
             [sheet release];

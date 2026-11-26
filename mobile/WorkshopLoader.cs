@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Reflection;
 using System.Runtime.Loader;
+using HarmonyLib;
 using Verse;
 
 namespace PortMobile
@@ -219,6 +220,89 @@ namespace PortMobile
 				Console.WriteLine("[mobile] workshop: could not open for a link: " + inner);
 				return false;
 			}
+		}
+
+		/// <summary>
+		/// SteamKit2 stamps its job ids with Process.StartTime, read once when SteamClient is built (its constructor:
+		/// GetCurrentProcess().StartTime). CoreCLR has no way to read it on iOS and StartTimeCore throws
+		/// PlatformNotSupportedException, so the Workshop window could not open at all (0.4.41 on the device, twice
+		/// in one run). The value only tells SteamKit2's jobs apart, so the moment PortMobile started stands in for it.
+		/// StartTime and StartTimeCore (internal static, what the getter falls to) get a prefix each, and
+		/// GetCurrentProcess a postfix that caches the time in the Process it hands out, which is what a copy of
+		/// the getter inlined into a caller reads first. iOS only: Android reads the real one from /proc.
+		/// </summary>
+		internal static void Start(Harmony harmony)
+		{
+			if (!OperatingSystem.IsIOS())
+			{
+				return;
+			}
+			try
+			{
+				harmony.Patch(AccessTools.PropertyGetter(typeof(System.Diagnostics.Process), nameof(System.Diagnostics.Process.StartTime)), prefix: new HarmonyMethod(typeof(WorkshopLoader), nameof(BeforeStartTime)));
+				Console.WriteLine("[mobile] workshop: Process.StartTime answers the moment PortMobile started");
+			}
+			catch (Exception e)
+			{
+				Console.WriteLine("[mobile] workshop: Process.StartTime left as it is: " + e.Message);
+			}
+			try
+			{
+				harmony.Patch(AccessTools.Method(typeof(System.Diagnostics.Process), "get_" + nameof(System.Diagnostics.Process.StartTime) + "Core"), prefix: new HarmonyMethod(typeof(WorkshopLoader), nameof(BeforeStartTime)));
+				Console.WriteLine("[mobile] workshop: Process.StartTimeCore answers the moment PortMobile started");
+			}
+			catch (Exception e)
+			{
+				Console.WriteLine("[mobile] workshop: Process.StartTimeCore left as it is: " + e.Message);
+			}
+			try
+			{
+				harmony.Patch(AccessTools.Method(typeof(System.Diagnostics.Process), nameof(System.Diagnostics.Process.GetCurrentProcess), Type.EmptyTypes), postfix: new HarmonyMethod(typeof(WorkshopLoader), nameof(AfterGetCurrentProcess)));
+				Console.WriteLine("[mobile] workshop: GetCurrentProcess hands out its start time cached");
+			}
+			catch (Exception e)
+			{
+				Console.WriteLine("[mobile] workshop: GetCurrentProcess left as it is: " + e.Message);
+			}
+		}
+
+		/// <summary>Prefix of Process.StartTime and of Process.StartTimeCore: when PortMobile started; the original does not run.</summary>
+		public static bool BeforeStartTime(ref DateTime __result)
+		{
+			__result = Started();
+			return false;
+		}
+
+		/// <summary>
+		/// Postfix of Process.GetCurrentProcess: the Process it hands out has its start time cached, as the runtime's own
+		/// has it after the first read. Only a guard for a copy of the getter inlined before the prefix was in place.
+		/// </summary>
+		public static void AfterGetCurrentProcess(System.Diagnostics.Process __result)
+		{
+			try
+			{
+				AccessTools.Field(typeof(System.Diagnostics.Process), "_startTime")?.SetValue(__result, Started());
+			}
+			catch (Exception)
+			{
+				// The prefix of the getter is what does the work; nothing to do here.
+			}
+		}
+
+		private static DateTime? started;
+
+		/// <summary>
+		/// When PortMobile started, as Process.StartTime would tell it: now, less the ticks counted since the startup
+		/// hook took its first breath (PortPlatform.StartedAtTick). .NET's is the local time, so is this one.
+		/// </summary>
+		internal static DateTime Started()
+		{
+			if (!started.HasValue)
+			{
+				long tick = PortHooks.PortPlatform.StartedAtTick;
+				started = tick > 0 ? DateTime.Now - TimeSpan.FromMilliseconds(Environment.TickCount64 - tick) : DateTime.Now;
+			}
+			return started.Value;
 		}
 	}
 }
