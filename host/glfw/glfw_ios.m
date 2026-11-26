@@ -693,8 +693,11 @@ static void pick_write_state(int state, int files, long long bytes, NSString* me
                      message ? message : @""] dataUsingEncoding:NSUTF8StringEncoding];
     BOOL ok = fwrite(text.bytes, 1, text.length, out) == text.length;
     ok = fclose(out) == 0 && ok;
+    // moveItemAtPath does not replace an existing file: the first state would stay PICK_CHOOSING forever.
+    NSString* stateFile = [NSString stringWithUTF8String:statePath];
+    [[NSFileManager defaultManager] removeItemAtPath:stateFile error:NULL];
     if (!ok || [[NSFileManager defaultManager] moveItemAtPath:[NSString stringWithUTF8String:tempPath]
-                                                        toPath:[NSString stringWithUTF8String:statePath]
+                                                        toPath:stateFile
                                                         error:NULL] == NO)
         unlink(tempPath);
 }
@@ -836,7 +839,7 @@ static UIViewController* pick_root_controller(void)
             else if ([lower hasSuffix:@".zip"])
             {
                 NSString* stem = [name substringToIndex:name.length - 4];
-                if (stem.length == 0) stem = @"zip";
+                if (stem.length == 0 || [stem isEqualToString:@"."] || [stem isEqualToString:@".."]) stem = @"zip";
                 target = [root stringByAppendingPathComponent:pick_target_name(root, stem, used)];
                 if (port17_unzip(url.path.UTF8String, target.UTF8String) == 0)
                 {

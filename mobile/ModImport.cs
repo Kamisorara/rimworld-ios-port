@@ -69,8 +69,28 @@ namespace PortMobile
 			return message;
 		}
 
-		// files/ModImport and files/ModImport.state, next to the game folder (the activity writes both).
-		private static string FilesDir => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
+		// files/ModImport and files/ModImport.state, next to the game folder (the activity writes both). On iOS the
+		// picker writes HOME/Documents/ModImport; the game may be one wrapper deep (Documents/game/<one>) or under
+		// another name in Documents, so walk up to Documents instead of taking BaseDirectory/..
+		private static string FilesDir
+		{
+			get
+			{
+				if (OperatingSystem.IsIOS())
+				{
+					string dir = Path.GetFullPath(AppContext.BaseDirectory);
+					for (int i = 0; i < 4 && !string.IsNullOrEmpty(dir); i++)
+					{
+						if (string.Equals(Path.GetFileName(dir), "Documents", StringComparison.OrdinalIgnoreCase))
+						{
+							return dir;
+						}
+						dir = Path.GetDirectoryName(dir);
+					}
+				}
+				return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
+			}
+		}
 		internal static string Staging => Path.Combine(FilesDir, "ModImport");
 		private static string StateFile => Path.Combine(FilesDir, "ModImport.state");
 
