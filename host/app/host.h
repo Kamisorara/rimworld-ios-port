@@ -24,6 +24,10 @@ int run_engine(const char *bundle_dir, const char *home);
 // Documents/<其它名>/RimWorld.dll）也认（唯一候选才认）。0 = out 里是找到的目录。
 int port17_find_game(const char *home, char *out, size_t cap);
 
+// 硬打点（engine.c）：时间戳 + 一行字直写 <home>/Documents/engine-trace.log（open/append/write/close，
+// 绕开一切缓冲与回调链；任意线程）。
+void trace_mark(const char *home, const char *what);
+
 // 三角形渲染循环的停止开关（引擎与三角形共用一个 CAMetalLayer 和 GLFW 垫片的单窗口槽，
 // 引擎启动前必须让三角形收尾）：置停止位并等循环退出（有超时，从没跑过则立刻返回）。
 void triangle_stop(void);

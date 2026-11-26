@@ -31,7 +31,7 @@ Tested on an iPad (M4, iOS 27).
 - **Every launch needs a JIT session.** iOS does not let an ordinary app create executable memory, so Port17 has to be started through StikDebug (see [Install](#install)). Opened the normal way it stops with a notice and the game does not start.
 - **No Steam integration.** Achievements and the other Steam features are unavailable; Steam is used only to download Workshop mods.
 - **No file watchers.** Mods that wait for files to change are never notified.
-- **Memory.** Nothing trims memory for iOS yet, so large mod lists in long sessions can run into the system's limit.
+- **Memory.** iOS kills the app outright when it passes its memory limit, and nothing is tuned for that yet. Since 0.4.44 the app keeps a memory ledger (see `port17-status.txt`) and the Android trimmer runs on iOS too, but what to release and when is still undecided, so long sessions with large mod lists are untested.
 - **A few PC-only APIs are missing.** External programs cannot be started (links open in Safari instead); a mod that needs one of them may fail — report it with `coreclr-stderr.log`.
 
 Port17's own launcher screen is in Chinese (`导入 zip` = *Import zip*, `导出` = *Export*).
@@ -91,8 +91,8 @@ Port17 keeps its logs in *Files → On My iPad/iPhone → Port17 → Documents*:
 |---|---|
 | `port17-ui.log` | Port17's launcher: install, set-up and engine start-up |
 | `coreclr-stderr.log` | Game and .NET runtime output — the last run only |
-| `engine-trace.log` | Engine timing marks |
-| `port17-status.txt` | One-line status of the last session (JIT arena, execution mode) |
+| `engine-trace.log` | Engine timing marks, plus one line per memory warning and the session's memory peak |
+| `port17-status.txt` | One-line status of the last session: JIT arena, execution mode, and since 0.4.44 the memory footprint, the allowance left and its peak (`mem_*`) |
 | `port17-workshop.log` | Workshop sign-in, downloads and installs |
 
 When you report a problem, attach these files. For a black screen, start with `port17-ui.log` and `coreclr-stderr.log`.
@@ -102,8 +102,7 @@ When you report a problem, attach these files. For a black screen, start with `p
 The iOS app is built in the cloud; nothing Apple-specific is needed on your machine.
 
 - **IPA:** push to `main` (changes under `host/`) or run the **M2 Host** workflow by hand; the artifact is `port17host-m2-ipa`. The other workflows build the patched runtime (**m1-probe**, also published as a release asset), the interpreter baseline (**interp-probe**) and a macOS debug build (**mac-debug**).
-- **Managed layer:** `python scripts/build-portlayers.py` compiles `hooks/` and `mobile/` into `prebuilt/` and rewrites the runtime's file-watcher stub. It needs the .NET SDK, Mono.Cecil, the Harmony assembly and a local RimWorld 1.7 installation (paths can be overridden with environment variables).
-- **Known gap:** the Workshop library is compiled against the game's assemblies with a response file that is not tracked (`prebuilt/workshop.rsp`), so a fresh clone has to reuse the committed `prebuilt/PortWorkshop.dll`.
+- **Managed layer:** `python scripts/build-portlayers.py` compiles `hooks/`, `mobile/` and `workshop/` into `prebuilt/` and rewrites the runtime's file-watcher stub. It needs the .NET SDK, Mono.Cecil, the Harmony assembly, a local RimWorld 1.7 installation and network access on the first run to fetch the Workshop's NuGet dependencies (same pinned versions and package hashes as `host/build-ipa.sh`; paths can be overridden with environment variables, `WORKSHOP_PKG` for the package cache). The result is byte-identical to the committed DLLs.
 
 ## Repository layout
 

@@ -9,6 +9,7 @@
 // framework assemblies never make it into the TPA list (the name dedup of Android's add_assemblies).
 #include "host.h"
 #include "jit26.h"
+#include "memory.h"
 #include "status.h"
 
 #include <dlfcn.h>
@@ -163,7 +164,7 @@ static int file_exists(const char *path)
 
 // 硬打点：时间戳 + 一行字直写 <home>/Documents/engine-trace.log（open/append/write/close，
 // 不经 stdio 不经回调——悖论排查看的就是它）。
-static void trace_mark(const char *home, const char *what)
+void trace_mark(const char *home, const char *what)
 {
     char path[512];
     snprintf(path, sizeof path, "%s/Documents/engine-trace.log", home);
@@ -715,7 +716,11 @@ int run_engine(const char *bundle_dir, const char *home)
     // 硬打点（直写文件，绕开一切缓冲与回调链）：六跑日志出现"execute 未返回但诊断 UI
     // 却起来了"的悖论——这些行钉死 execute 的进出时刻。
     trace_mark(home, "execute 进入（主线程交给托管 Main）");
+    // 0.4.44：jetsam 账本从此记起——每 10 s 一次 phys_footprint / 剩余额度 / 峰值进 port17-status.txt，
+    // 内存告警进两份日志；execute 返回后收官（memory.m）。
+    port17_memory_start(home);
     hr = execute(host, domain, argc, (char **)argv, entry, &exitCode);
+    port17_memory_stop(home);
     trace_mark(home, "execute 返回");
     if (hr != 0)
     {

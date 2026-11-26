@@ -36,6 +36,8 @@ namespace PortMobile
 	/// memory (352 mods, 2 GB of the game swapped out): the collections after a load took 11 s, twice, with the map on
 	/// the screen and nothing answering; on a phone that had it all in memory, 1.8 s for the same heap.
 	/// mobile.txt: trimAfterLoad=0 switches all of it off.
+	/// iOS (0.4.44): /proc and mallopt do not exist. "resident" in the summary is the footprint jetsam counts, the
+	/// allocator is asked through malloc_zone_pressure_relief, and the pack pages are left alone (IosMemory.cs).
 	/// </summary>
 	internal static class MemTrim
 	{
@@ -141,6 +143,7 @@ namespace PortMobile
 		{
 			try
 			{
+				if (OperatingSystem.IsIOS()) return key == "VmRSS:" ? IosMemory.FootprintKb() : 0; // iOS: no /proc and no swap; the footprint stands in for VmRSS
 				foreach (string line in File.ReadLines("/proc/self/status"))
 				{
 					if (line.StartsWith(key, StringComparison.Ordinal))
@@ -183,9 +186,9 @@ namespace PortMobile
 				{
 					collection = "no collection: " + (swapped >> 10) + " MiB of the process is in swap (the collector's heap " + (before.HeapSizeBytes >> 20) + " MiB, committed " + (before.TotalCommittedBytes >> 20) + ")";
 				}
-				mallopt(M_PURGE_ALL, 0);
+				if (OperatingSystem.IsIOS()) IosMemory.PressureRelief(); else mallopt(M_PURGE_ALL, 0); // iOS: no mallopt
 				long textures = ColdTextures.AfterLoad();
-				long packBytes = LetGoOfPackPages();
+				long packBytes = OperatingSystem.IsIOS() ? 0 : LetGoOfPackPages(); // iOS: no /proc/self/maps, and clean pack pages are not in the footprint
 				long residentAfter = StatusKb("VmRSS:");
 				Console.WriteLine("[mobile] after " + after + ": " + collection + ", " + pooled + " pooled arrays let go" + (xmlNodes > 0 ? ", the defs' XML released (" + xmlNodes + " nodes were held)" : "") + "; " + (packBytes >> 20) + " MiB of asset pack mappings let go"
 					+ (textures > 0 ? ", " + textures + " MiB of textures that were never drawn" : "") + "; resident " + (residentBefore >> 10) + " -> " + (residentAfter >> 10) + " MiB; " + watch.Elapsed.TotalMilliseconds.ToString("0", CultureInfo.InvariantCulture) + " ms in all");

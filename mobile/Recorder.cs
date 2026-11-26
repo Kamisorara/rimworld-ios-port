@@ -551,7 +551,8 @@ namespace PortMobile
 
 		private static string ProcessMemory()
 		{
-			string rss = "", anon = "", fileBacked = "", swap = "";
+			if (OperatingSystem.IsIOS()) return IosMemory.Snap(); // iOS: no /proc; what matters here is jetsam's footprint and the allowance left
+		string rss = "", anon = "", fileBacked = "", swap = "";
 			foreach (string l in File.ReadAllLines("/proc/self/status"))
 			{
 				if (l.StartsWith("VmRSS:", StringComparison.Ordinal)) rss = Kb(l);

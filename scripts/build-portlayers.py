@@ -1,5 +1,5 @@
-# M4 本地构建：PortHooks.dll（完整启动钩）与 PortMobile.dll（触控层），安卓 hooks/build.sh
-# 与 mobile/build.sh 的 iOS 版。产物进 prebuilt/（入仓，CI 的 build-ipa.sh 拷进 .app）。
+# 本地构建：PortHooks.dll（完整启动钩）、PortMobile.dll（触控层）与 PortWorkshop.dll（创意工坊），
+# 安卓 hooks/build.sh 与 mobile/build.sh 的 iOS 版。产物进 prebuilt/（入仓，CI 的 build-ipa.sh 拷进 .app）。
 #
 # 为什么本地构建：两者都要引用游戏程序集（编译期符号，运行期不用），CI 无游戏文件（红线）。
 # 为什么不用 SDK csproj：安卓版用 csc rsp 的逐字节确定性（-deterministic+），同版本游戏
@@ -10,6 +10,8 @@
 #   HARMONY_DLL   创意工坊 brrainz.harmony 的 1.7 0Harmony.dll
 #   RT_DIR        自建混合运行时（runtime-out-hybrid，fetch-hybrid-runtime.sh 或本地解包）
 #   CECIL_DLL     Mono.Cecil（nuget 缓存 0.11.5）
+#   WORKSHOP_PKG  工坊 NuGet 编译引用的存放目录（默认 build/workshop-pkg；缺的按 build-ipa.sh
+#                 同一份版本与 nupkg 哈希从 nuget.org 取）
 # 用法：python scripts/build-portlayers.py
 import os
 import subprocess
@@ -149,6 +151,73 @@ csc(rsp)
 for f in ("PortHooks.dll", "PortMobile.dll"):
     p = os.path.join(out, f)
     print(f, os.path.getsize(p), "bytes")
+
+# ---- PortWorkshop.dll：创意工坊下载器（workshop/ 五个源文件，0.4.38 起）----
+# 编译引用要游戏本体（Assembly-CSharp / UnityStubs：工坊窗口是游戏的 Window 子类）和刚编出的
+# PortMobile，所以排在它之后。NuGet 依赖与 host/build-ipa.sh 4.991 钉同一份版本和 nupkg 哈希，
+# 从 nuget.org 平面容器取进 build/workshop-pkg/（WORKSHOP_PKG 可覆盖），只抽编译要用的那一个 dll；
+# 运行期进包的另几个（ZstdSharp 等）仍由 build-ipa.sh 取。此前 prebuilt/workshop.rsp 是手写的一次性
+# 文件，指向带时间戳的临时目录，又随 .gitignore 的 prebuilt/*.rsp 一起不入库——换机器重编不了
+# PortWorkshop.dll（0.4.43 开放风险）。源文件顺序照旧手写 rsp 的（不是排序）：顺序决定 TypeDef
+# 行序，换序就不是逐字节同一个二进制；workshop/ 增删文件时下面的一致性检查会拦下来。
+WORKSHOP_PKG = os.environ.get("WORKSHOP_PKG", os.path.join(IOS, "build", "workshop-pkg"))
+WORKSHOP_REFS_RT = ["System.Runtime", "System.Console", "System.Collections", "System.Linq", "System.Threading",
+    "System.Private.CoreLib", "System.Net.Http", "System.Net.Primitives", "System.IO.Compression",
+    "System.IO.Compression.ZipFile", "System.Security.Cryptography", "System.Text.RegularExpressions",
+    "System.Runtime.InteropServices", "System.Memory", "System.Private.Uri"]
+WORKSHOP_GAME_REFS = ["Assembly-CSharp", "UnityStubs"]
+WORKSHOP_SRCS = ["Downloads.cs", "Session.cs", "Updates.cs", "WorkshopWindow.cs", "WorkshopLog.cs"]
+# (包 id, 版本, nupkg SHA256, nupkg 内路径)——与 build-ipa.sh fetch_workshop_dll 的同一份
+WORKSHOP_NUGET = [
+    ("steamkit2", "3.4.0", "cd90b5ac507c4eba3ee3439b62b8a5dab17d687dc51dfc81202b69f6c8643153", "lib/net10.0/SteamKit2.dll"),
+    ("protobuf-net", "3.2.56", "2a3c111f21b07e54038d56ae753f8d8d19df1a11dbe02a427e7f611d58b123e1", "lib/net8.0/protobuf-net.dll"),
+    ("protobuf-net.core", "3.2.56", "355bcbade0afbef9d2fecd2cc8be7f2f7991a577acc0fec4ef50ba58ff5fd837", "lib/net8.0/protobuf-net.Core.dll"),
+    ("qrcoder", "1.8.1", "d3fe5c80c742b6a2ef8a31734c06600e2d674806a97f36f4af97b0d2871de309", "lib/net6.0/QRCoder.dll"),
+]
+
+
+def nuget_dll(pkg_id, version, want, path):
+    """nupkg 不在 WORKSHOP_PKG 就下载；哈希对上才抽出 path，返回抽出的 dll 路径。"""
+    import hashlib
+    import urllib.request
+    import zipfile
+    os.makedirs(WORKSHOP_PKG, exist_ok=True)
+    pkg = os.path.join(WORKSHOP_PKG, f"{pkg_id}.{version}.nupkg")
+    if not os.path.isfile(pkg):
+        url = f"https://api.nuget.org/v3-flatcontainer/{pkg_id}/{version}/{pkg_id}.{version}.nupkg"
+        print(f"取 {url}")
+        with urllib.request.urlopen(url, timeout=120) as r, open(pkg + ".part", "wb") as f:
+            f.write(r.read())
+        os.replace(pkg + ".part", pkg)
+    with open(pkg, "rb") as f:
+        if hashlib.sha256(f.read()).hexdigest() != want:
+            sys.exit(f"{pkg} 的 SHA256 与 build-ipa.sh 钉的不一致，删掉重取")
+    dll = os.path.join(WORKSHOP_PKG, os.path.basename(path))
+    with zipfile.ZipFile(pkg) as z, open(dll, "wb") as f:
+        f.write(z.read(path))
+    return dll
+
+
+if set(sources("workshop")) != {os.path.join(IOS, "workshop", s) for s in WORKSHOP_SRCS}:
+    sys.exit(f"workshop/ 的源文件变了：WORKSHOP_SRCS {WORKSHOP_SRCS} 要同步改（顺序决定二进制）")
+rsp = os.path.join(out, "workshop.rsp")
+with open(rsp, "w", newline="\n") as f:
+    w = f.write
+    w("-nologo -target:library -optimize+ -nullable:disable -langversion:latest -nostdlib+ -noconfig "
+      "-deterministic+\n")
+    w(f'-out:"{os.path.join(out, "PortWorkshop.dll")}"\n')
+    for name in WORKSHOP_REFS_RT:
+        w(f'-r:"{os.path.join(RT, name + ".dll")}"\n')
+    for name in WORKSHOP_GAME_REFS:
+        w(f'-r:"{os.path.join(GAME, name + ".dll")}"\n')
+    w(f'-r:"{os.path.join(out, "PortMobile.dll")}"\n')
+    for pkg_id, version, want, path in WORKSHOP_NUGET:
+        w(f'-r:"{nuget_dll(pkg_id, version, want, path)}"\n')
+    for s in WORKSHOP_SRCS:
+        w(f'"{os.path.join(IOS, "workshop", s)}"\n')
+print(f"PortWorkshop: {len(WORKSHOP_SRCS)} 个源文件")
+csc(rsp)
+print("PortWorkshop.dll", os.path.getsize(os.path.join(out, "PortWorkshop.dll")), "bytes")
 
 # ---- System.IO.FileSystem.Watcher.dll：iOS 运行时里的这个存根每个成员都抛 ----
 # PlatformNotSupportedException，CameraPlus 这类 mod 在根 Start() 里 new 一个 FileSystemWatcher
