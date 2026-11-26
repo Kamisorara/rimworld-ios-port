@@ -10,7 +10,7 @@
 
 Port17 is an open-source compatibility layer that runs the Windows (Steam) build of **RimWorld 1.7** — Ludeon's Waylith engine, .NET code over a Vulkan renderer — on iPhone and iPad. No jailbreak, and no repackaged game: you copy the files over from your own Steam installation, and Port17 supplies the rest: its own .NET runtime, Vulkan on Metal, touch controls, mod support and a Steam Workshop downloader.
 
-**Current build: 0.4.46** (27 November 2026). The project is in active development; [docs/PLAN.md](docs/PLAN.md) is the round-by-round record.
+**Current build: 0.4.47** (27 November 2026). The project is in active development; [docs/PLAN.md](docs/PLAN.md) is the round-by-round record.
 
 ## Status
 
@@ -31,7 +31,7 @@ Tested on an iPad (M4, iOS 27).
 - **Every launch needs a JIT session.** iOS does not let an ordinary app create executable memory, so Port17 has to be started through StikDebug (see [Install](#install)). Opened the normal way it stops with a notice and the game does not start.
 - **No Steam integration.** Achievements and the other Steam features are unavailable; Steam is used only to download Workshop mods.
 - **No file watchers.** Mods that wait for files to change are never notified.
-- **Memory.** iOS kills the app outright when it passes its memory limit. Since 0.4.45 the app keeps a memory ledger (see `port17-status.txt`) and the trimmer runs on iOS; since 0.4.46 it also trims on its own when the allowance left runs low. Long sessions with large mod lists are still untested.
+- **Memory.** iOS kills the app outright when it passes its memory limit. Since 0.4.45 the app keeps a memory ledger (see `port17-status.txt`) and the trimmer runs on iOS; since 0.4.46 it also trims on its own when the allowance left runs low (`mobile.txt`: `trimIosHeadroom`); since 0.4.47 a second lane walks the footprint down before that floor is ever reached on smaller (8 GB) devices (`trimIosGrowthMb`, active only under `trimIosDamperCeiling`). Long sessions with large mod lists are still untested.
 - **A few PC-only APIs are missing.** External programs cannot be started (links open in Safari instead); a mod that needs one of them may fail — report it with `coreclr-stderr.log`.
 
 Port17's own launcher screen is in Chinese (`导入 zip` = *Import zip*, `导出` = *Export*).

@@ -81,19 +81,31 @@ namespace PortMobile
 			}
 		}
 
-		// M5 ② (0.4.46): the headroom-driven trim. iOS has no swap, jetsam kills at the footprint, and the system's
-		// own memory warnings grow out of the same allowance (os_proc_available_memory), so the managed side just
-		// watches that number: every WatchEvery'th frame it is checked, and when it runs under the mobile.txt
-		// trimIosHeadroom (2048 MB by default, 0 = watch off) and the last pressure trim is CooldownMs old, the same
-		// trim runs that a load ends with (MemTrim.Now). The cooldown keeps a stubborn heap (everything live) from
-		// being walked every five seconds; frames in the middle of a load are skipped.
+		// M5 ② (0.4.46, extended 0.4.47): the self-driven trim. iOS has no swap, jetsam kills at the footprint, and
+		// the system's own memory warnings grow out of the same allowance (os_proc_available_memory), so the managed
+		// side just watches that number: every WatchEvery'th frame both readings are taken, and a trim (the same one
+		// a load ends with, MemTrim.Now) runs when either lane fires.
+		//   - the floor: the allowance runs under the mobile.txt trimIosHeadroom (2048 MB by default, 0 = lane off).
+		//     This is the jetsam line itself; on a 12 GB device the allowance never gets near it.
+		//   - the damper: the allowance runs under trimIosDamperCeiling (4096 MB by default, 0 = lane off) AND the
+		//     footprint has grown trimIosGrowthMb (1024 MB by default, 0 = lane off) since the last trim AND the last
+		//     trim is at least trimIosIdleSeconds (300 s by default) old. A slower lane for the 8 GB end, whose
+		//     allowance (~5-6 GB) a heavy mod set can walk down over a long session; it trims while there is still
+		//     room instead of waiting for the floor. The ceiling keeps it silent on a 12 GB device (~9 GB left), so
+		//     nothing new fires mid-game there.
+		// The cooldown keeps a stubborn heap (everything live) from being walked every five seconds; frames in the
+		// middle of a load are skipped.
 		private const int WatchEvery = 300; // about 5 s at 60 fps
 		private const long CooldownMs = 90 * 1000;
 		private static int watchFrames;
-		private static int headroomMb = -1; // -1 = settings not read yet; 0 = stood down (a reading failed once)
+		private static int headroomMb = -1; // -1 = settings not read yet; a lane's 0 = that lane off
+		private static int growthMb = -1;
+		private static int damperCeilingMb = -1;
+		private static int idleSeconds = -1;
 		private static long lastTrimTicks = -CooldownMs;
+		private static long trimBaselineMb = -1; // the footprint the last trim left behind; -1 = not seen yet
 
-		/// <summary>Once a frame, from MemTrim.OnFrame (iOS only): trim on our own when the allowance runs low.</summary>
+		/// <summary>Once a frame, from MemTrim.OnFrame (iOS only): trim on our own when the allowance runs low, or when the footprint keeps growing on a small device.</summary>
 		public static void OnFrame()
 		{
 			if (++watchFrames < WatchEvery)
@@ -106,24 +118,46 @@ namespace PortMobile
 				if (headroomMb < 0)
 				{
 					headroomMb = Settings.Get("trimIosHeadroom", 2048);
+					growthMb = Settings.Get("trimIosGrowthMb", 1024);
+					damperCeilingMb = Settings.Get("trimIosDamperCeiling", 4096);
+					idleSeconds = Settings.Get("trimIosIdleSeconds", 300);
 				}
-				if (headroomMb <= 0 || Verse.LongEventHandler.AnyEventNowOrWaiting)
+				if (Verse.LongEventHandler.AnyEventNowOrWaiting)
 				{
 					return;
 				}
+				long nowTicks = Environment.TickCount64;
 				long leftMb = HeadroomBytes() >> 20;
-				if (leftMb >= headroomMb || Environment.TickCount64 - lastTrimTicks < CooldownMs)
+				long footprintMb = FootprintBytes() >> 20;
+				if (trimBaselineMb < 0 || footprintMb < trimBaselineMb)
 				{
+					// a start, load-end or menu trim elsewhere in MemTrim shrank it behind our back: re-baseline
+					trimBaselineMb = footprintMb;
+				}
+				if (headroomMb > 0 && leftMb < headroomMb && nowTicks - lastTrimTicks >= CooldownMs)
+				{
+					Trim(nowTicks, "low headroom (" + leftMb + " MB of the allowance left)");
 					return;
 				}
-				lastTrimTicks = Environment.TickCount64;
-				MemTrim.Now("low headroom (" + leftMb + " MB of the allowance left)");
+				if (damperCeilingMb > 0 && growthMb > 0 && leftMb < damperCeilingMb
+					&& footprintMb - trimBaselineMb >= growthMb
+					&& nowTicks - lastTrimTicks >= idleSeconds * 1000L)
+				{
+					Trim(nowTicks, "footprint grew " + (footprintMb - trimBaselineMb) + " MB since the last trim (" + leftMb + " MB of the allowance left)");
+				}
 			}
 			catch (Exception e)
 			{
 				headroomMb = 0; // the reading broke: the watch stands down, one log line instead of one every five seconds
 				Console.WriteLine("[mobile] iOS: the headroom watch stood down: " + e.Message);
 			}
+		}
+
+		private static void Trim(long nowTicks, string reason)
+		{
+			lastTrimTicks = nowTicks;
+			trimBaselineMb = -1; // re-baselined at the next watch beat, after the trim has done its work
+			MemTrim.Now(reason);
 		}
 
 		/// <summary>For the record's snap line, next to heap and gpu: "footprint 1234 MB, headroom 5123 MB".</summary>
