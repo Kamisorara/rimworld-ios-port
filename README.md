@@ -3,6 +3,8 @@
 [![Build](https://github.com/Kamisorara/rimworld-ios-port/actions/workflows/m2-host.yml/badge.svg)](https://github.com/Kamisorara/rimworld-ios-port/actions/workflows/m2-host.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+**English** | [简体中文](README.zh-CN.md)
+
 > **Unofficial fan project — not affiliated with Ludeon Studios.**
 > Port17 ships no game files and sells nothing. It runs only the files of a copy of RimWorld that **you already own on Steam**; without them there is nothing to run. See [Legal](#legal).
 
@@ -18,7 +20,7 @@ Tested on an iPad (M4, iOS 27).
 |---|---|
 | Game | Boots to the menu, generates new worlds, runs colony maps, saves and loads — the base game plus the DLCs you own |
 | Speed | .NET code is JIT-compiled on the device (see [How it works](#how-it-works)) |
-| Controls | Touch: tap, long-press for right-click, two-finger zoom, tap assist, inertial scrolling, edge scrolling, on-screen mouse buttons and a key wheel |
+| Controls | Touch: tap, double tap, long-press for right-click, two-finger zoom, tap assist, inertial scrolling, on-screen left/right mouse buttons and a key wheel (a ring of keyboard keys) |
 | Language | The game's own languages; a Simplified Chinese font and an emoji fallback font are bundled so that CJK text renders |
 | Mods | Load with the game, Harmony mods included; import a mod as a `.zip` or a folder; a community load-order rule set is shipped |
 | Steam Workshop | Sign in with your Steam account (QR code or password), browse your subscriptions, download and install mods |
