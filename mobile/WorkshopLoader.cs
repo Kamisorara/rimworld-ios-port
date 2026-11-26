@@ -44,7 +44,11 @@ namespace PortMobile
 				{
 					if (entry == null)
 					{
-						string folder = Path.Combine(AppContext.BaseDirectory, "workshop");
+						// The iOS loader's AppContext.BaseDirectory is the game folder, but the Workshop ships in the
+						// .app bundle, beside PortHooks. Android keeps the staged game-folder layout.
+						string folder = OperatingSystem.IsIOS()
+							? Path.Combine(Path.GetDirectoryName(typeof(PortHooks.HostFiles).Assembly.Location), "workshop")
+							: Path.Combine(AppContext.BaseDirectory, "workshop");
 						var context = new Context(folder);
 						Assembly assembly = context.LoadFromAssemblyPath(Path.Combine(folder, "PortWorkshop.dll"));
 						entry = assembly.GetType("PortWorkshop.Entry", true);
@@ -63,6 +67,12 @@ namespace PortMobile
 		{
 			try
 			{
+				if (OperatingSystem.IsIOS())
+				{
+					// Session.PrivateDir, read without loading PortWorkshop and its dependencies.
+					string files = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
+					return File.Exists(Path.Combine(files, "steam", "login"));
+				}
 				string package = File.ReadAllText("/proc/self/cmdline").Split('\0')[0].Trim();
 				return File.Exists(Path.Combine("/data/data", package, "files", "steam", "login"));
 			}

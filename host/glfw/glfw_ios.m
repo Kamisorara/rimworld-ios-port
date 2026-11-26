@@ -779,6 +779,7 @@ static UIViewController* pick_root_controller(void)
     (void)controller;
     self.active = NO;
     pick_write_state(PICK_CANCELLED, 0, 0, @"");
+    [g_picker release];
     g_picker = nil;
 }
 
@@ -860,6 +861,7 @@ static UIViewController* pick_root_controller(void)
         [self setPhase:PICK_FAILED message:failure];
     else
         [self setPhase:PICK_DONE message:leftOut];
+    [self release];
     g_picker = nil;
 }
 @end
@@ -867,13 +869,20 @@ static UIViewController* pick_root_controller(void)
 // 1 means the sheet was handed to UIKit; the copy progress is ModImport.state, exactly as on Android.
 API int glfwAndroidPickFiles(int folder)
 {
-    if (!g_view || (g_picker && g_picker.active)) return 0;
-    pick_reset_staging();
-    pick_write_state(PICK_CHOOSING, 0, 0, @"");
-    PickCoordinator* picker = [[PickCoordinator alloc] initWithFolder:folder != 0];
-    g_picker = picker;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        @autoreleasepool {
+    @autoreleasepool {
+        if (!g_view) return 0;
+        if (g_picker)
+        {
+            if (g_picker.active) return 0;
+            [g_picker release];
+            g_picker = nil;
+        }
+        pick_reset_staging();
+        pick_write_state(PICK_CHOOSING, 0, 0, @"");
+        PickCoordinator* picker = [[PickCoordinator alloc] initWithFolder:folder != 0];
+        g_picker = picker;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @autoreleasepool {
         UIDocumentPickerViewController* sheet = nil;
         if (picker.wantsFolder)
             sheet = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:
@@ -887,6 +896,7 @@ API int glfwAndroidPickFiles(int folder)
         UIViewController* root = pick_root_controller();
         if (!root)
         {
+                [g_picker release];
             g_picker = nil;
             pick_write_state(PICK_FAILED, 0, 0, @"no presented view controller");
             return;
@@ -894,7 +904,8 @@ API int glfwAndroidPickFiles(int folder)
         [root presentViewController:sheet animated:YES completion:nil];
         log_line("mod picker: %s", picker.wantsFolder ? "folder" : "zip/save files");
         }
-    });
+            });
+        }
     return 1;
 }
 

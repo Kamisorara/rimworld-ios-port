@@ -1,0 +1,29 @@
+The Workshop downloader carries these unmodified libraries in workshop/:
+
+SteamKit2 3.4.0
+https://www.nuget.org/packages/SteamKit2/3.4.0
+https://github.com/SteamRE/SteamKit/tree/3.4.0
+License: LGPL-2.1-only
+
+protobuf-net 3.2.56
+https://www.nuget.org/packages/protobuf-net/3.2.56
+https://github.com/protobuf-net/protobuf-net/tree/v3.2.56
+License: Apache-2.0
+
+protobuf-net.Core 3.2.56
+https://www.nuget.org/packages/protobuf-net.Core/3.2.56
+https://github.com/protobuf-net/protobuf-net/tree/v3.2.56
+License: Apache-2.0
+
+ZstdSharp.Port 0.8.7
+https://www.nuget.org/packages/ZstdSharp.Port/0.8.7
+https://github.com/oleg-st/ZstdSharp
+License: MIT
+
+QRCoder 1.8.1
+https://www.nuget.org/packages/QRCoder/1.8.1
+https://github.com/Shane32/QRCoder/tree/v1.8.1
+License: MIT
+
+The PortWorkshop sources are the iOS port's own files. Steam account, password and
+refresh-token handling remain subject to the user's Steam agreement.

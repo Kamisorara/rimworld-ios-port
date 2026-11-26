@@ -315,6 +315,30 @@ node "$ROOT/host/modrules/build.js"
 [ -s "$ROOT/host/modrules/ModRules.txt" ] || { echo "::error::ModRules.txt 未生成"; exit 1; }
 cp "$ROOT/host/modrules/ModRules.txt" "$APP/"
 
+# 4.991) Steam Workshop downloader: PortWorkshop is built locally against the game (prebuilt, like
+# PortMobile); its pinned NuGet dependencies are extracted into workshop/ for the private ALC.
+WORKSHOP="$APP/workshop"
+mkdir -p "$WORKSHOP"
+[ -f "$ROOT/prebuilt/PortWorkshop.dll" ] || { echo "::error::prebuilt/PortWorkshop.dll 缺（本地编 workshop/）"; exit 1; }
+cp "$ROOT/prebuilt/PortWorkshop.dll" "$ROOT/workshop/LICENSES.txt" "$WORKSHOP/"
+fetch_workshop_dll() {  # <package id> <version> <sha256> <path in nupkg> <output dll>
+    local id="$1" version="$2" want="$3" path="$4" out="$WORKSHOP/$5"
+    local pkg="$ROOT/build-m2/workshop-pkg/$id.$version.nupkg"
+    mkdir -p "$(dirname "$pkg")"
+    curl -fsSL --retry 3 "https://api.nuget.org/v3-flatcontainer/$id/$version/$id.$version.nupkg" -o "$pkg"
+    echo "$want  $pkg" | shasum -a 256 -c -
+    unzip -p "$pkg" "$path" > "$out"
+    [ -s "$out" ] || { echo "::error::workshop 依赖 $out 没提取到"; exit 1; }
+}
+fetch_workshop_dll steamkit2 3.4.0 cd90b5ac507c4eba3ee3439b62b8a5dab17d687dc51dfc81202b69f6c8643153 "lib/net10.0/SteamKit2.dll" SteamKit2.dll
+fetch_workshop_dll protobuf-net 3.2.56 2a3c111f21b07e54038d56ae753f8d8d19df1a11dbe02a427e7f611d58b123e1 "lib/net8.0/protobuf-net.dll" protobuf-net.dll
+fetch_workshop_dll protobuf-net.core 3.2.56 355bcbade0afbef9d2fecd2cc8be7f2f7991a577acc0fec4ef50ba58ff5fd837 "lib/net8.0/protobuf-net.Core.dll" protobuf-net.Core.dll
+fetch_workshop_dll zstdsharp.port 0.8.7 5acb834d93afdd382213c355fd35db29130706c64a81607c88374a2abf4ebc0a "lib/net8.0/ZstdSharp.dll" ZstdSharp.dll
+fetch_workshop_dll qrcoder 1.8.1 d3fe5c80c742b6a2ef8a31734c06600e2d674806a97f36f4af97b0d2871de309 "lib/net6.0/QRCoder.dll" QRCoder.dll
+for f in SteamKit2.dll protobuf-net.dll protobuf-net.Core.dll ZstdSharp.dll QRCoder.dll PortWorkshop.dll; do
+    [ -s "$WORKSHOP/$f" ] || { echo "::error::workshop/$f 缺"; exit 1; }
+done
+
 # 4.995) PortMobile 的 Harmony detour 依赖不是玩家的 Harmony mod：安卓在 staging 时把
 #      改写过的 0Harmony.dll 放进游戏目录，iOS 必须由 bundle 自带同一依赖。这里放
 #      prebuilt 里已经过 HarmonyCompatRewrites 的 1.7 0Harmony；玩家自己的 Harmony
