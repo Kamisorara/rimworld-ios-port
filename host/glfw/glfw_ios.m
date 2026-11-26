@@ -1012,10 +1012,11 @@ API int glfwAndroidOpenUrl(const char* url)
                                         [NSCharacterSet URLQueryAllowedCharacterSet]]];
         if (!ns) return;
         UIApplication* app = [UIApplication sharedApplication];
-        // openURL:options:completionHandler: 回 BOOL（"问了没有"）且异步。不用 canOpenURL 把关：它读
-        // LSApplicationQueriesSchemes 白名单，没列的 http(s) 也可能答 NO；问没问才是这边的语义。
-        if ([app openURL:ns options:@{} completionHandler:nil])
-            ok = 1;
+        // openURL:options:completionHandler: 返回 void（回 BOOL 的是已弃用的 openURL:），异步。
+        // 不用 canOpenURL 把关：它读 LSApplicationQueriesSchemes 白名单，没列的 http(s) 也可能答 NO；
+        // 这里只报"交给系统了没有"。
+        [app openURL:ns options:@{} completionHandler:nil];
+        ok = 1;
     });
     return ok;
 }
