@@ -973,8 +973,11 @@ API int glfwAndroidPickFiles(int folder)
         sheet.delegate = picker;
         sheet.allowsMultipleSelection = !wantsFolder;
         UIViewController* root = pick_root_controller();
+        // clang: a block cannot refer to a declaration with an array type (the stack buffer pick_paths
+        // filled); copy the pointer first.
+        const char* stagingPath = staging;
         log_line("mod picker: %s, root %@, staging %s", wantsFolder ? "folder" : "zip/save files",
-                 root ? NSStringFromClass(root.class) : @"(none)", staging);
+                 root ? NSStringFromClass(root.class) : @"(none)", stagingPath);
         if (!root)
         {
             [sheet release];
@@ -1010,8 +1013,7 @@ API int glfwAndroidOpenUrl(const char* url)
         if (!ns) return;
         // openURL:options:completionHandler: 回 BOOL（"问了没有"）且异步。不用 canOpenURL 把关：它读
         // LSApplicationQueriesSchemes 白名单，没列的 http(s) 也可能答 NO；问没问才是这边的语义。
-        if ([UIApplication.sharedApplication openURL:ns options:@{UIApplicationOpenExternalURLOptionKey : @YES}
-                                  completionHandler:nil])
+        if ([UIApplication.sharedApplication openURL:ns options:@{} completionHandler:nil])
             ok = 1;
     });
     return ok;
