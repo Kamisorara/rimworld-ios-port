@@ -107,6 +107,7 @@ namespace PortWorkshop
 		public override void PostClose()
 		{
 			base.PostClose();
+			WorkshopLog.Write("window closed" + (Downloads.Busy ? " (a download goes on)" : ""));
 			if (!Downloads.Busy)
 			{
 				Session.Stop();

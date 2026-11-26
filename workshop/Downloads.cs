@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -71,7 +72,7 @@ namespace PortWorkshop
 
 		private static void Log(string text)
 		{
-			Console.WriteLine("[workshop] " + text);
+			WorkshopLog.Write(text);
 		}
 
 		public static List<Item> Snapshot()
@@ -362,6 +363,7 @@ namespace PortWorkshop
 			{
 				return;
 			}
+			Log(chosen.Count + " chosen for download: " + string.Join(", ", chosen.Select(i => i.Id.ToString())));
 			Run(Texts.Say("下载中……", "Downloading..."), async () =>
 			{
 				lock (outcomes)
@@ -385,6 +387,7 @@ namespace PortWorkshop
 					done++;
 				}
 				int ok = chosen.Count(i => i.State == ItemState.Done);
+				Log(ok + " of " + chosen.Count + " installed");
 				Status = Texts.Say($"完成：{ok} 个装好了" + (ok < chosen.Count ? $"，{chosen.Count - ok} 个失败" : "") + "。", $"Finished: {ok} installed" + (ok < chosen.Count ? $", {chosen.Count - ok} failed" : "") + ".");
 				// The main menu's update notice no longer names what is installed anew now.
 				Updates.Refresh(ModsFolder);
@@ -411,6 +414,8 @@ namespace PortWorkshop
 		private static async Task Download(Item item)
 		{
 			item.State = ItemState.Downloading;
+			long begin = Environment.TickCount64;
+			Log("downloading " + item.Id + " " + item.Title + (item.Manifest != 0 ? " from the depot (manifest " + item.Manifest + ")" : " from " + item.FileUrl));
 			string stage = Path.Combine(StageRoot, item.Id.ToString());
 			if (Directory.Exists(stage))
 			{
@@ -447,7 +452,7 @@ namespace PortWorkshop
 				item.State = ItemState.Done;
 				item.Error = problems;
 				item.Selected = false;
-				Log("installed " + item.Id + " " + item.Title + (problems.Length > 0 ? " (" + problems + ")" : ""));
+				Log("installed " + item.Id + " " + item.Title + " in " + ((Environment.TickCount64 - begin) / 1000.0).ToString("0.0", CultureInfo.InvariantCulture) + " s" + (problems.Length > 0 ? " (" + problems + ")" : ""));
 			}
 			finally
 			{

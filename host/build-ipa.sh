@@ -441,6 +441,14 @@ done
 #     自检：.app 根与 workshop/ 里再出现引用程序集就让构建红掉，而不是又一个真机回合。
 python3 "$ROOT/scripts/check-facades.py" "$APP" "$APP/workshop"
 
+# 6.07) System.IO.FileSystem.Watcher.dll：iOS 运行时的这个存根每个成员都抛 PlatformNotSupported
+#     Exception；CameraPlus 在根 Start() 里 new 一个 FileSystemWatcher 就把开局拦下（0.4.41/0.4.42
+#     真机）。scripts/build-portlayers.py 末步用 scripts/unstub-watcher 把存根改写成“从不报告
+#     变化”的实现，入仓 prebuilt/，这里原位覆盖。缺了就红：没有它，手机上同一个 mod 集照旧开局报错。
+[ -f "$ROOT/prebuilt/System.IO.FileSystem.Watcher.dll" ] \
+	|| { echo "::error::prebuilt/System.IO.FileSystem.Watcher.dll 缺（本地跑 python scripts/build-portlayers.py）"; exit 1; }
+cp "$ROOT/prebuilt/System.IO.FileSystem.Watcher.dll" "$APP/System.IO.FileSystem.Watcher.dll"
+
 # 6.5) 出包自检：install_name 必须是 @rpath（默认值是构建机绝对路径，设备上 dyld 拒载而 CI 全绿）；
 #      所有自建 dylib 的依赖行里出现构建机路径的，自动 -change 成 @rpath/<basename>（同目录即能解析），
 #      改不动的直接失败，不让坏包出门。

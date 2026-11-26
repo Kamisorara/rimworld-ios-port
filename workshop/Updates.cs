@@ -46,7 +46,7 @@ namespace PortWorkshop
 
 		private static void Log(string text)
 		{
-			Console.WriteLine("[workshop] " + text);
+			WorkshopLog.Write(text);
 		}
 
 		/// <summary>The mods the notice names now (Entry.OpenUpdates).</summary>

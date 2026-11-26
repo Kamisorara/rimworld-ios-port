@@ -149,3 +149,20 @@ csc(rsp)
 for f in ("PortHooks.dll", "PortMobile.dll"):
     p = os.path.join(out, f)
     print(f, os.path.getsize(p), "bytes")
+
+# ---- System.IO.FileSystem.Watcher.dll：iOS 运行时里的这个存根每个成员都抛 ----
+# PlatformNotSupportedException，CameraPlus 这类 mod 在根 Start() 里 new 一个 FileSystemWatcher
+# 就把开局拦下（0.4.41/0.4.42 真机）。scripts/unstub-watcher 用 Cecil 把存根的 61 个方法体
+# 改写成“从不报告变化”的实现，输出进 prebuilt/，build-ipa.sh 6.06 盖进包里。不走 Harmony：
+# 补丁是原生 detour，mod 里被 JIT 内联的存根单行 throw 会绕开它。
+stub = os.path.join(RT, "System.IO.FileSystem.Watcher.dll")
+watcher = os.path.join(out, "System.IO.FileSystem.Watcher.dll")
+tool = os.path.join(IOS, "scripts", "unstub-watcher")
+if os.path.isfile(stub):
+    for args in (["unstub", stub, watcher], ["smoke", watcher]):
+        rc = subprocess.run(["dotnet", "run", "-c", "Release", "--verbosity", "quiet", "--project", tool, "--"] + args).returncode
+        if rc != 0:
+            sys.exit(f"unstub-watcher {args[0]} 失败")
+    print("System.IO.FileSystem.Watcher.dll", os.path.getsize(watcher), "bytes")
+else:
+    print("System.IO.FileSystem.Watcher.dll: 运行时目录里没有这个存根，跳过（手机上它仍全抛）")

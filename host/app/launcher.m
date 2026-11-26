@@ -1137,6 +1137,11 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
                 [home stringByAppendingPathComponent:@"Documents/port17-ui.log"]];
             if ([NSFileManager.defaultManager fileExistsAtPath:logURL.path])
                 [items addObject:logURL];
+            // 0.4.43：创意工坊的流水（登录、下载的结果）一并带走；stderr 那份只留最后一次运行。
+            NSURL *workshopURL = [NSURL fileURLWithPath:
+                [home stringByAppendingPathComponent:@"Documents/port17-workshop.log"]];
+            if ([NSFileManager.defaultManager fileExistsAtPath:workshopURL.path])
+                [items addObject:workshopURL];
             if (items.count == 0) {
                 boot_log(@"导出：日志和 AppData 都不在——没有可导出的");
                 return;

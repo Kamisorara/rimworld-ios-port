@@ -89,7 +89,7 @@ namespace PortWorkshop
 			}
 		}
 
-		private static string IosHome()
+		internal static string IosHome()
 		{
 			// The game folder is <HOME>/Documents/game, possibly one wrapper deep, or <HOME>/Documents/<name>.
 			// Walking up to Documents and taking its parent keeps the private folder in the app's home even when
@@ -170,7 +170,7 @@ namespace PortWorkshop
 
 		private static void Log(string text)
 		{
-			Console.WriteLine("[workshop] " + text);
+			WorkshopLog.Write(text);
 		}
 
 		/// <summary>An identity for this installation, made once: what Steam sees as this machine.</summary>
@@ -212,6 +212,7 @@ namespace PortWorkshop
 		public static void Start()
 		{
 			wanted = true;
+			Log("window opened; a sign-in is remembered: " + (TryReadLogin(out _, out _) ? "yes" : "no"));
 			Connect();
 			// Connected by the update check, which found no sign-in to use and asks for none: the window offers one.
 			if (connected && State == SessionState.SignedOut && authCancel == null)
@@ -300,6 +301,7 @@ namespace PortWorkshop
 			}
 			if (TryReadLogin(out string account, out string token))
 			{
+				Log("signing in with the remembered sign-in");
 				LogOn(account, token);
 			}
 			else
@@ -565,12 +567,14 @@ namespace PortWorkshop
 
 		private static void Signed(AuthPollResult result)
 		{
+			Log("signing in with the sign-in just made (QR code or password)");
 			WriteLogin(result.AccountName, result.RefreshToken);
 			LogOn(result.AccountName, result.RefreshToken);
 		}
 
 		public static void SignOut()
 		{
+			Log("signed out; the remembered sign-in is deleted");
 			DeleteLogin();
 			Account = "";
 			if (connected)
@@ -645,6 +649,7 @@ namespace PortWorkshop
 			try
 			{
 				File.WriteAllLines(LoginFile, new[] { account, token });
+				Log("the sign-in is remembered");
 			}
 			catch (Exception e)
 			{
