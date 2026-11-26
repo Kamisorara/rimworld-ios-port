@@ -22,6 +22,7 @@ extern int proc_pid_rusage(int pid, int flavor, rusage_info_t buffer);
 static char g_home[600];
 static dispatch_source_t g_timer = nil;
 static id g_warningObserver = nil;
+static id g_backgroundObserver = nil;
 static unsigned long long g_peak;
 static int g_warnings;
 
@@ -94,6 +95,22 @@ void port17_memory_start(const char *home)
                         port17_status_set(g_home, "mem_warnings", v);
                     }
                 }];
+    // 进后台：系统随时可能挂起甚至杀掉进程，账本当场记一拍，引擎轨迹里留一笔"什么时候进的背景"。
+    g_backgroundObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:UIApplicationDidEnterBackgroundNotification
+                    object:nil queue:nil
+                usingBlock:^(NSNotification *_) {
+                    tick();
+                    unsigned long long footprint = port17_memory_footprint();
+                    long long available = port17_memory_available();
+                    if (g_home[0] != '\0')
+                    {
+                        char mark[200];
+                        snprintf(mark, sizeof mark, "entered background, footprint %llu MB, available %lld MB",
+                                 footprint >> 20, available >> 20);
+                        trace_mark(g_home, mark);
+                    }
+                }];
     g_timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
                                      dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
     dispatch_source_set_timer(g_timer, DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC, NSEC_PER_SEC);
@@ -112,6 +129,11 @@ void port17_memory_stop(const char *home)
     {
         [[NSNotificationCenter defaultCenter] removeObserver:g_warningObserver];
         g_warningObserver = nil;
+    }
+    if (g_backgroundObserver != nil)
+    {
+        [[NSNotificationCenter defaultCenter] removeObserver:g_backgroundObserver];
+        g_backgroundObserver = nil;
     }
     tick();
     char mark[160];

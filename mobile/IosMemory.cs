@@ -81,6 +81,51 @@ namespace PortMobile
 			}
 		}
 
+		// M5 ② (0.4.46): the headroom-driven trim. iOS has no swap, jetsam kills at the footprint, and the system's
+		// own memory warnings grow out of the same allowance (os_proc_available_memory), so the managed side just
+		// watches that number: every WatchEvery'th frame it is checked, and when it runs under the mobile.txt
+		// trimIosHeadroom (2048 MB by default, 0 = watch off) and the last pressure trim is CooldownMs old, the same
+		// trim runs that a load ends with (MemTrim.Now). The cooldown keeps a stubborn heap (everything live) from
+		// being walked every five seconds; frames in the middle of a load are skipped.
+		private const int WatchEvery = 300; // about 5 s at 60 fps
+		private const long CooldownMs = 90 * 1000;
+		private static int watchFrames;
+		private static int headroomMb = -1; // -1 = settings not read yet; 0 = stood down (a reading failed once)
+		private static long lastTrimTicks = -CooldownMs;
+
+		/// <summary>Once a frame, from MemTrim.OnFrame (iOS only): trim on our own when the allowance runs low.</summary>
+		public static void OnFrame()
+		{
+			if (++watchFrames < WatchEvery)
+			{
+				return;
+			}
+			watchFrames = 0;
+			try
+			{
+				if (headroomMb < 0)
+				{
+					headroomMb = Settings.Get("trimIosHeadroom", 2048);
+				}
+				if (headroomMb <= 0 || Verse.LongEventHandler.AnyEventNowOrWaiting)
+				{
+					return;
+				}
+				long leftMb = HeadroomBytes() >> 20;
+				if (leftMb >= headroomMb || Environment.TickCount64 - lastTrimTicks < CooldownMs)
+				{
+					return;
+				}
+				lastTrimTicks = Environment.TickCount64;
+				MemTrim.Now("low headroom (" + leftMb + " MB of the allowance left)");
+			}
+			catch (Exception e)
+			{
+				headroomMb = 0; // the reading broke: the watch stands down, one log line instead of one every five seconds
+				Console.WriteLine("[mobile] iOS: the headroom watch stood down: " + e.Message);
+			}
+		}
+
 		/// <summary>For the record's snap line, next to heap and gpu: "footprint 1234 MB, headroom 5123 MB".</summary>
 		public static string Snap()
 		{

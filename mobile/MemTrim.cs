@@ -114,6 +114,7 @@ namespace PortMobile
 		/// <summary>Once a frame (the interface's postfix).</summary>
 		public static void OnFrame()
 		{
+			if (OperatingSystem.IsIOS()) IosMemory.OnFrame(); // iOS: the trim is also driven by the allowance jetsam leaves us
 			if (loaded != null && !LongEventHandler.AnyEventNowOrWaiting && ++framesAfterLoad >= trimFrames)
 			{
 				string after = loaded;
