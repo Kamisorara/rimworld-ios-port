@@ -677,8 +677,8 @@ enum { PICK_CHOOSING = 1, PICK_COPYING, PICK_DONE, PICK_FAILED, PICK_CANCELLED }
 
 static void pick_paths(char* staging, size_t stagingSize, char* state, size_t stateSize)
 {
-    snprintf(staging, stagingSize, "%s/Documents/ModImport", NSHomeDirectory());
-    snprintf(state, stateSize, "%s/Documents/ModImport.state", NSHomeDirectory());
+    snprintf(staging, stagingSize, "%s/Documents/ModImport", NSHomeDirectory().UTF8String);
+    snprintf(state, stateSize, "%s/Documents/ModImport.state", NSHomeDirectory().UTF8String);
 }
 
 static void pick_write_state(int state, int files, long long bytes, NSString* message)
@@ -692,7 +692,9 @@ static void pick_write_state(int state, int files, long long bytes, NSString* me
                      message ? message : @""] dataUsingEncoding:NSUTF8StringEncoding];
     BOOL ok = fwrite(text.bytes, 1, text.length, out) == text.length;
     ok = fclose(out) == 0 && ok;
-    if (!ok || [[NSFileManager defaultManager] moveItemAtPath:tempPath toPath:statePath error:NULL] == NO)
+    if (!ok || [[NSFileManager defaultManager] moveItemAtPath:[NSString stringWithUTF8String:tempPath]
+                                                        toPath:[NSString stringWithUTF8String:statePath]
+                                                        error:NULL] == NO)
         unlink(tempPath);
 }
 
@@ -710,21 +712,22 @@ static void pick_reset_staging(void)
     char staging[1024], state[1024];
     pick_paths(staging, sizeof staging, state, sizeof state);
     NSFileManager* files = NSFileManager.defaultManager;
-    [files removeItemAtPath:staging error:NULL];
-    [files removeItemAtPath:state error:NULL];
-    [files createDirectoryAtPath:staging withIntermediateDirectories:YES attributes:nil error:NULL];
+    [files removeItemAtPath:[NSString stringWithUTF8String:staging] error:NULL];
+    [files removeItemAtPath:[NSString stringWithUTF8String:state] error:NULL];
+    [files createDirectoryAtPath:[NSString stringWithUTF8String:staging]
+         withIntermediateDirectories:YES attributes:nil error:NULL];
 }
 
 static long long pick_tree_bytes(NSString* root, int* files)
 {
     NSDirectoryEnumerator<NSURL*>* items = [NSFileManager.defaultManager
         enumeratorAtURL:[NSURL fileURLWithPath:root]
-        includingPropertiesForKeys:@[NSFileSizeKey] options:0 errorHandler:^BOOL(NSURL*, NSError*) { return YES; }];
+        includingPropertiesForKeys:@[NSURLFileSizeKey] options:0 errorHandler:^BOOL(NSURL*, NSError*) { return YES; }];
     long long bytes = 0;
     for (NSURL* item in items)
     {
         NSNumber* size = nil;
-        if ([item getResourceValue:&size forKey:NSFileSizeKey error:NULL] && size)
+        if ([item getResourceValue:&size forKey:NSURLFileSizeKey error:NULL] && size)
         {
             bytes += size.longLongValue;
             if (files) (*files)++;
@@ -873,9 +876,11 @@ API int glfwAndroidPickFiles(int folder)
         @autoreleasepool {
         UIDocumentPickerViewController* sheet = nil;
         if (picker.wantsFolder)
-            sheet = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTType.folder]];
+            sheet = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:
+                     @[[UTType typeWithIdentifier:@"public.folder"]]];
         else
-            sheet = [[UIDocumentPickerViewController alloc] initForImportingContentTypes:@[UTType.zip, UTType.data]
+            sheet = [[UIDocumentPickerViewController alloc] initForImportingContentTypes:
+                     @[[UTType typeWithIdentifier:@"public.zip-archive"], [UTType typeWithIdentifier:@"public.data"]]
                                                                                  asCopy:YES];
         sheet.delegate = picker;
         sheet.allowsMultipleSelection = !picker.wantsFolder;
