@@ -38,6 +38,7 @@ namespace PortMobile
 	internal static class ModImport
 	{
 		[DllImport("glfw")] private static extern int glfwAndroidPickFiles(int folder);
+		[DllImport("glfw")] private static extern int glfwAndroidFilesDir(byte[] path, int size);
 		[DllImport("glfw")] private static extern int glfwAndroidRestart();
 		[DllImport("glfw")] private static extern void glfwAndroidPrepareExit();
 
@@ -66,30 +67,86 @@ namespace PortMobile
 			{
 				return message + Say("\n\n手机存储空间不够了，清出一些空间再导入。", "\n\nThe phone's storage is full: free some space and import again.");
 			}
+			if (message.IndexOf("did not come up", StringComparison.OrdinalIgnoreCase) >= 0 ||
+				message.IndexOf("no presented view controller", StringComparison.OrdinalIgnoreCase) >= 0)
+			{
+				return Say("系统文件选择界面没弹出来。回到游戏画面重试一次；还不行，就用“文件”app 把 mod 文件夹或 .zip 拷进游戏的 Mods 文件夹。\n\n（", "The system's file chooser did not come up. Go back to the game and try once more; if it stays away, use the Files app to copy the mod folder or .zip into the game's Mods folder.\n\n (") + message + ")";
+			}
 			return message;
 		}
 
 		// files/ModImport and files/ModImport.state, next to the game folder (the activity writes both). On iOS the
 		// picker writes HOME/Documents/ModImport; the game may be one wrapper deep (Documents/game/<one>) or under
 		// another name in Documents, so walk up to Documents instead of taking BaseDirectory/..
-		private static string FilesDir
+		// iOS asks the shim first (glfwAndroidFilesDir is the very folder its picker writes to): a guess that
+		// disagrees with the picker is a window that waits on a state file nobody writes. Then the old walk-up
+		// (the game may be one wrapper deep: Documents/game/<one>, or under another name in Documents), then the
+		// home's Documents. Cached: the path cannot change while the game runs.
+		private static string filesDir;
+		internal static string FilesDir
 		{
 			get
 			{
-				if (OperatingSystem.IsIOS())
+				if (filesDir != null)
 				{
-					string dir = Path.GetFullPath(AppContext.BaseDirectory);
-					for (int i = 0; i < 4 && !string.IsNullOrEmpty(dir); i++)
-					{
-						if (string.Equals(Path.GetFileName(dir), "Documents", StringComparison.OrdinalIgnoreCase))
-						{
-							return dir;
-						}
-						dir = Path.GetDirectoryName(dir);
-					}
+					return filesDir;
 				}
-				return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
+				string found = OperatingSystem.IsIOS() ? DocumentsFromShim() ?? WalkUpToDocuments() : null;
+				if (found == null && OperatingSystem.IsIOS())
+				{
+					found = FirstThatExists(Path.Combine(Environment.GetEnvironmentVariable("HOME") ?? "", "Documents"),
+						Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Documents"));
+				}
+				filesDir = found ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
+				return filesDir;
 			}
+		}
+
+		private static string DocumentsFromShim()
+		{
+			try
+			{
+				var buffer = new byte[1024];
+				int length = glfwAndroidFilesDir(buffer, buffer.Length);
+				if (length <= 0 || length >= buffer.Length || buffer[length] != 0)
+				{
+					return null;
+				}
+				string dir = System.Text.Encoding.UTF8.GetString(buffer, 0, length);
+				return Directory.Exists(dir) ? dir : null;
+			}
+			catch (Exception e)
+			{
+				// A shim without the export (EntryPointNotFound) or one that could not answer.
+				Console.WriteLine("[mobile] mod import: glfwAndroidFilesDir unavailable, walking up instead: " + e.Message);
+				return null;
+			}
+		}
+
+		private static string WalkUpToDocuments()
+		{
+			string dir = Path.GetFullPath(AppContext.BaseDirectory);
+			for (int i = 0; i < 6 && !string.IsNullOrEmpty(dir); i++)
+			{
+				if (string.Equals(Path.GetFileName(dir), "Documents", StringComparison.OrdinalIgnoreCase))
+				{
+					return dir;
+				}
+				dir = Path.GetDirectoryName(dir);
+			}
+			return null;
+		}
+
+		private static string FirstThatExists(params string[] candidates)
+		{
+			foreach (string candidate in candidates)
+			{
+				if (!string.IsNullOrEmpty(candidate) && Directory.Exists(candidate))
+				{
+					return candidate;
+				}
+			}
+			return null;
 		}
 		internal static string Staging => Path.Combine(FilesDir, "ModImport");
 		private static string StateFile => Path.Combine(FilesDir, "ModImport.state");
@@ -496,9 +553,10 @@ namespace PortMobile
 			CleanUp();
 			Directory.CreateDirectory(Staging);
 			File.Delete(StateFile);
+			Console.WriteLine("[mobile] mod import: staging " + Staging + ", state " + StateFile);
 			if (glfwAndroidPickFiles(folder ? 1 : 0) == 0)
 			{
-				throw new InvalidOperationException(Say("活动没有响应", "the activity did not answer"));
+				throw new InvalidOperationException(Say("上一次导入还没结束，等它完成后再试", "the previous import is still running; wait for it to finish first"));
 			}
 		}
 
@@ -615,12 +673,21 @@ namespace PortMobile
 				{
 					line = Say("请在系统的文件选择界面里选择……", "Choose in the system's file chooser...");
 				}
-				Widgets.Label(inRect, line);
+				// A way out when no chooser is on the screen and the state never changes (a sheet UIKit did not put up,
+				// a file still coming down from iCloud): a copy that is running goes on unseen and is cleared by the
+				// next import. A sheet that is up covers the button, as it should.
+				Widgets.Label(new Rect(inRect.x, inRect.y, inRect.width, inRect.height - 34f), line);
 				Text.Anchor = TextAnchor.UpperLeft;
+				if (outcome == null && Widgets.ButtonText(new Rect(inRect.xMax - 110f, inRect.yMax - 32f, 110f, 32f), Say("取消", "Cancel")))
+				{
+					Console.WriteLine("[mobile] mod import: cancelled while " + state);
+					finished = true;
+					Close(false);
+				}
 			}
 
-			private void Poll()
-			{
+		private void Poll()
+		{
 				if (finished)
 				{
 					return;

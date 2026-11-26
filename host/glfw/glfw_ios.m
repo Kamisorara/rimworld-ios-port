@@ -2,11 +2,12 @@
 // shim (rimworld-android-port host/glfw/glfw_android.c) gives the engine, on top of UIKit and a CAMetalLayer.
 // The engine's Brutal.Glfw binds it by name ("glfw" -> libglfw.dylib).
 //
-// Threads: the main thread (UIKit) receives touches, key presses and application events through the
-// glfwIos* entry points and turns them into a queue of small records. The engine thread calls
-// glfwPollEvents / glfwWaitEventsTimeout, which drain that queue and invoke the GLFW callbacks there, so
-// every callback runs on the thread that polls, as with real GLFW. The window is the host view's
-// CAMetalLayer; the Vulkan surface comes from VK_EXT_metal_surface (vkCreateMetalSurfaceEXT).
+// Threads: the launcher's diagnostic path (v2 big-thread model) calls the glfwIos* entry points from the
+// main thread and polls the queue on a second thread, as with real GLFW. The formal path does neither:
+// the engine runs on the process main thread with its own IOS platform (its UIApplicationMain, its own
+// window and CAMetalLayer — glfwIosAttach is never called, g_view stays NULL), and a frame is a run-loop
+// callout. The managed layer's glfwAndroid* exports are called from inside those frames, i.e. from the
+// main thread: anything that needs UIKit runs inline there (on_main_sync), never dispatch_sync on it.
 //
 // Touch is reported as a mouse: the first finger is the left button and moves the cursor; a second finger
 // down is a right click at its position (the engine's PC input). Raw finger events are recorded for the
@@ -674,12 +675,31 @@ API int glfwAndroidInputDevices(char* out, int size)
 // UIDocumentPicker sheet: .zip/.rws files are opened in place (several at once; the security scope is held
 // while the file is read, so no copy is made before the zip is unpacked), one folder is opened with security
 // scope and copied. zips are unpacked here so the shared C# importer keeps seeing folders.
+//
+// The sheet is presented from whatever view controller is on top (the engine's own on the formal path);
+// nothing here needs g_view. When UIKit does not put the sheet up, the state file says so after a second,
+// so the managed progress window never waits on a chooser that is not there.
 enum { PICK_CHOOSING = 1, PICK_COPYING, PICK_DONE, PICK_FAILED, PICK_CANCELLED };
+
+// Run on the main thread. The caller usually is the main thread already (a frame); dispatch_sync onto it
+// from there would wait on a run loop that is blocked by the caller itself.
+static void on_main_sync(void (^block)(void))
+{
+    if (pthread_main_np()) { block(); return; }
+    dispatch_sync(dispatch_get_main_queue(), block);
+}
+
+static void pick_documents(char* out, size_t size)
+{
+    snprintf(out, size, "%s/Documents", NSHomeDirectory().UTF8String);
+}
 
 static void pick_paths(char* staging, size_t stagingSize, char* state, size_t stateSize)
 {
-    snprintf(staging, stagingSize, "%s/Documents/ModImport", NSHomeDirectory().UTF8String);
-    snprintf(state, stateSize, "%s/Documents/ModImport.state", NSHomeDirectory().UTF8String);
+    char documents[900];
+    pick_documents(documents, sizeof documents);
+    snprintf(staging, stagingSize, "%s/ModImport", documents);
+    snprintf(state, stateSize, "%s/ModImport.state", documents);
 }
 
 static void pick_write_state(int state, int files, long long bytes, NSString* message)
@@ -773,6 +793,8 @@ static UIViewController* pick_root_controller(void)
 @property (nonatomic) int files;
 @property (nonatomic) long long bytes;
 @property (nonatomic) BOOL active;
+// Set the moment either delegate callback arrives (before the copy starts): the presentation check reads it.
+@property (nonatomic) BOOL answered;
 @end
 
 @implementation PickCoordinator
@@ -785,6 +807,7 @@ static UIViewController* pick_root_controller(void)
 - (void)documentPicker:(UIDocumentPickerViewController*)controller didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls
 {
     (void)controller;
+    self.answered = YES;
     [self setPhase:PICK_COPYING message:@""];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         @autoreleasepool { [self importURLs:urls]; }
@@ -794,6 +817,7 @@ static UIViewController* pick_root_controller(void)
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController*)controller
 {
     (void)controller;
+    self.answered = YES;
     self.active = NO;
     pick_write_state(PICK_CANCELLED, 0, 0, @"");
     [g_picker release];
@@ -886,11 +910,42 @@ static UIViewController* pick_root_controller(void)
 }
 @end
 
+// presentViewController's completion is not called when UIKit refuses (a transition already in flight, a
+// detached controller); the sheet is then simply not there and the state would stay PICK_CHOOSING. A
+// second later a sheet that is nobody's presented controller and has not been answered ends the pick.
+static void pick_check_presented(PickCoordinator* picker, UIDocumentPickerViewController* sheet)
+{
+    if (!picker || !sheet) return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+            if (g_picker != picker || !picker.active || picker.answered || sheet.presentingViewController)
+                return;
+            picker.active = NO;
+            pick_write_state(PICK_FAILED, 0, 0, @"the system's file picker did not come up");
+            [g_picker release];
+            g_picker = nil;
+            log_line("mod picker: UIKit did not present the sheet");
+        }
+    });
+}
+
+// The folder the managed importer reads (ModImport/SaveImport): the same Documents pick_paths writes to.
+API int glfwAndroidFilesDir(char* out, int size)
+{
+    if (!out || size <= 0) return 0;
+    char documents[1024];
+    pick_documents(documents, sizeof documents);
+    size_t length = strlen(documents);
+    if (length >= (size_t)size) return 0;
+    memcpy(out, documents, length + 1);
+    return (int)length;
+}
+
 // 1 means the sheet was handed to UIKit; the copy progress is ModImport.state, exactly as on Android.
+// 0 only when a previous pick is still copying (managed ModImport says so).
 API int glfwAndroidPickFiles(int folder)
 {
     @autoreleasepool {
-        if (!g_view) return 0;
         if (g_picker)
         {
             if (g_picker.active) return 0;
@@ -901,10 +956,13 @@ API int glfwAndroidPickFiles(int folder)
         pick_write_state(PICK_CHOOSING, 0, 0, @"");
         PickCoordinator* picker = [[PickCoordinator alloc] initWithFolder:folder != 0];
         g_picker = picker;
+        char staging[1024], state[1024];
+        pick_paths(staging, sizeof staging, state, sizeof state);
+        BOOL wantsFolder = picker.wantsFolder;
         dispatch_async(dispatch_get_main_queue(), ^{
             @autoreleasepool {
         UIDocumentPickerViewController* sheet = nil;
-        if (picker.wantsFolder)
+        if (wantsFolder)
             sheet = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:
                      @[[UTType typeWithIdentifier:@"public.folder"]]];
         else
@@ -913,23 +971,25 @@ API int glfwAndroidPickFiles(int folder)
             sheet = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:
                      @[[UTType typeWithIdentifier:@"public.zip-archive"], [UTType typeWithIdentifier:@"public.data"]]];
         sheet.delegate = picker;
-        sheet.allowsMultipleSelection = !picker.wantsFolder;
+        sheet.allowsMultipleSelection = !wantsFolder;
         UIViewController* root = pick_root_controller();
+        log_line("mod picker: %s, root %@, staging %s", wantsFolder ? "folder" : "zip/save files",
+                 root ? NSStringFromClass(root.class) : @"(none)", staging);
         if (!root)
         {
-                [sheet release];
-                [g_picker release];
+            [sheet release];
+            [g_picker release];
             g_picker = nil;
             pick_write_state(PICK_FAILED, 0, 0, @"no presented view controller");
             return;
         }
         [root presentViewController:sheet animated:YES completion:nil];
+        pick_check_presented(picker, sheet);
         // UIKit keeps the presented controller; under MRC the alloc is released here.
         [sheet release];
-        log_line("mod picker: %s", picker.wantsFolder ? "folder" : "zip/save files");
         }
-            });
-        }
+        });
+    }
     return 1;
 }
 
@@ -940,16 +1000,19 @@ API int glfwAndroidOpenUrl(const char* url)
     NSString* s = [NSString stringWithUTF8String:url];
     if (![s hasPrefix:@"http://"] && ![s hasPrefix:@"https://"]) return 0;
     __block int ok = 0;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    on_main_sync(^{
+        // A link built by the game can carry characters URL URLWithString: refuses (spaces, unescaped
+        // Chinese): percent-encoded once, it is a URL.
         NSURL* ns = [NSURL URLWithString:s];
-        UIApplication* app = UIApplication.sharedApplication;
-        // openURL:options:completionHandler: 回 void 且异步——"有没有 app 接"由 canOpenURL 答，
-        // 打开本身在 completion 落定（Android 语义就是"问了没有"，不是"打开了没有"）。
-        if ([app canOpenURL:ns])
-        {
-            [app openURL:ns options:@{} completionHandler:nil];
+        if (!ns)
+            ns = [NSURL URLWithString:[s stringByAddingPercentEncodingWithAllowedCharacters:
+                                        [NSCharacterSet URLQueryAllowedCharacterSet]]];
+        if (!ns) return;
+        // openURL:options:completionHandler: 回 BOOL（"问了没有"）且异步。不用 canOpenURL 把关：它读
+        // LSApplicationQueriesSchemes 白名单，没列的 http(s) 也可能答 NO；问没问才是这边的语义。
+        if ([UIApplication.sharedApplication openURL:ns options:@{UIApplicationOpenExternalURLOptionKey : @YES}
+                                  completionHandler:nil])
             ok = 1;
-        }
     });
     return ok;
 }
@@ -1402,9 +1465,9 @@ API int glfwUpdateGamepadMappings(const char* s) { (void)s; return GLFW_TRUE; }
 API const char* glfwGetGamepadName(int jid) { (void)jid; return NULL; }
 API int glfwGetGamepadState(int jid, GLFWgamepadstate* state) { (void)jid; (void)state; return GLFW_FALSE; }
 
-// Clipboard: UIPasteboard (the general one), read and written on the main thread — dispatch_sync is
-// safe here: the main thread never waits on the engine thread that polls. The last text is kept for the
-// pointer glfwGetClipboardString returns, as the Android shim does.
+// Clipboard: UIPasteboard (the general one), read and written on the main thread — inline when the caller
+// is the main thread (a frame on the formal path), otherwise dispatched there. The last text is kept for
+// the pointer glfwGetClipboardString returns, as the Android shim does.
 API void glfwSetClipboardString(GLFWwindow* w, const char* s)
 {
     (void)w;
@@ -1419,7 +1482,7 @@ API const char* glfwGetClipboardString(GLFWwindow* w)
 {
     (void)w;
     __block NSString* fresh = nil;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    on_main_sync(^{
         fresh = UIPasteboard.generalPasteboard.string;
     });
     if (fresh != nil)

@@ -69,6 +69,8 @@ void glfwAndroidInjectChar(unsigned int codepoint, int mods);
 float glfwAndroidGetDensity(void);
 void glfwAndroidViewSize(int* width, int* height);
 int  glfwAndroidCutout(char* out, int size);
+// Documents under the app's home, UTF-8 with a terminator; returns its length, 0 when it does not fit.
+int  glfwAndroidFilesDir(char* out, int size);
 void glfwAndroidShowKeyboard(int show);
 void glfwAndroidKeyboardForced(int forced);
 void glfwAndroidLastDevices(int* mouse, int* key);

@@ -67,8 +67,11 @@ namespace PortMobile
 			{
 				ChooseExport();
 			}
-			TooltipHandler.TipRegion(export, ModImport.Say("把存档复制到手机的 Download/RimWorld 文件夹（文件管理器的“下载”里），可以拷到电脑上，或者在聊天软件里发给别人。",
-				"Copy saves into the phone's Download/RimWorld folder (Downloads in a file manager), to take them to a PC or send them to someone."));
+			TooltipHandler.TipRegion(export, OperatingSystem.IsIOS()
+				? ModImport.Say("把存档复制到“文件”app 里 Port17 的 Export/RimWorld 文件夹（我的 iPhone → Port17），可以拷到电脑上，或者在聊天软件里发给别人。",
+					"Copy saves into Port17's Export/RimWorld folder in the Files app (On My iPhone → Port17), to take them to a PC or send them to someone.")
+				: ModImport.Say("把存档复制到手机的 Download/RimWorld 文件夹（文件管理器的“下载”里），可以拷到电脑上，或者在聊天软件里发给别人。",
+					"Copy saves into the phone's Download/RimWorld folder (Downloads in a file manager), to take them to a PC or send them to someone."));
 		}
 
 		/// <summary>
@@ -76,7 +79,15 @@ namespace PortMobile
 		/// open in its file manager: a save, or all of them in one .zip (what "导入存档…" takes), is copied into
 		/// Download/RimWorld, which an app may create files in by path; the media store is told (Downloads, a PC by cable).
 		/// </summary>
-		private const string ExportFolder = "/storage/emulated/0/Download/RimWorld";
+		// iOS has no shared Download folder: the app's own Documents (Files app → On My iPhone → Port17), which a
+		// PC reaches over a cable or through iCloud Drive, and the Files app's share sheet reaches from the phone.
+		private static string ExportFolder => OperatingSystem.IsIOS()
+			? Path.Combine(ModImport.FilesDir, "Export", "RimWorld")
+			: "/storage/emulated/0/Download/RimWorld";
+
+		private static string ExportTitle => OperatingSystem.IsIOS()
+			? ModImport.Say("导出到“文件”app 的 Export/RimWorld", "Export to Export/RimWorld in the Files app")
+			: ModImport.Say("导出到手机的 Download/RimWorld", "Export to the phone's Download/RimWorld");
 
 		private static void ChooseExport()
 		{
@@ -104,7 +115,7 @@ namespace PortMobile
 			{
 				options.Add(new FloatMenuOption(Path.GetFileNameWithoutExtension(save.Name) + "   " + save.LastWriteTime.ToString("yyyy-MM-dd HH:mm"), () => Find.WindowStack.Add(new Exporting(new List<FileInfo> { save }, false))));
 			}
-			Find.WindowStack.Add(new FloatMenu(options, ModImport.Say("导出到手机的 Download/RimWorld", "Export to the phone's Download/RimWorld")));
+			Find.WindowStack.Add(new FloatMenu(options, ExportTitle));
 		}
 
 		/// <summary>Off the main thread: the copies (or the .zip) in Download/RimWorld; returns the files made.</summary>
@@ -224,8 +235,15 @@ namespace PortMobile
 					return;
 				}
 				string names = string.Join("\n", made.Select(f => "  " + Path.GetFileName(f)));
+				if (OperatingSystem.IsIOS())
+				{
+					Find.WindowStack.Add(new Dialog_MessageBox(ModImport.Say(
+						"已导出到“文件”app 里 Port17 的 Export/RimWorld 文件夹：\n\n" + names + "\n\n打开“文件”app → 我的 iPhone → Port17 → Export → RimWorld 就能找到；长按文件可以共享（发给别人，或存到 iCloud）；电脑上用数据线（Finder）或 iCloud Drive 拿到它。\n\n电脑上把 .rws 放进 C:\\Users\\你的用户名\\AppData\\LocalLow\\Ludeon Studios\\RimWorld by Ludeon Studios\\Saves 就能读（.zip 要先解压）；另一台手机用“导入存档…”选它（.zip 也可以）。",
+						"Exported into Port17's Export/RimWorld folder in the Files app:\n\n" + names + "\n\nFiles app → On My iPhone → Port17 → Export → RimWorld; touch and hold a file to share it (to someone, or to iCloud Drive); a PC takes it over a cable (Finder) or from iCloud Drive.\n\nOn a PC, put the .rws files into C:\\Users\\<you>\\AppData\\LocalLow\\Ludeon Studios\\RimWorld by Ludeon Studios\\Saves (unpack a .zip first); another phone takes them (or the .zip) with \"Import saves...\".")));
+					return;
+				}
 				Find.WindowStack.Add(new Dialog_MessageBox(ModImport.Say(
-					"已导出到手机的 Download/RimWorld 文件夹：\n\n" + names + "\n\n在文件管理器的“下载”（Download）里能找到；用数据线连电脑时在“内部存储\\Download\\RimWorld”。发给别人：在聊天软件里发送文件时从“下载”里选。\n\n电脑上把 .rws 放进 C:\\Users\\你的用户名\\AppData\\LocalLow\\Ludeon Studios\\RimWorld by Ludeon Studios\\Saves 就能读（.zip 要先解压）；另一台手机用“导入存档…”选它（.zip 也可以）。",
+				"已导出到手机的 Download/RimWorld 文件夹：\n\n" + names + "\n\n在文件管理器的“下载”（Download）里能找到；用数据线连电脑时在“内部存储\\Download\\RimWorld”。发给别人：在聊天软件里发送文件时从“下载”里选。\n\n电脑上把 .rws 放进 C:\\Users\\你的用户名\\AppData\\LocalLow\\Ludeon Studios\\RimWorld by Ludeon Studios\\Saves 就能读（.zip 要先解压）；另一台手机用“导入存档…”选它（.zip 也可以）。",
 					"Exported into the phone's Download/RimWorld folder:\n\n" + names + "\n\nA file manager shows it under Downloads; over a cable a PC finds it in Internal storage\\Download\\RimWorld. To send it to someone, pick it from Downloads in the chat app.\n\nOn a PC, put the .rws files into C:\\Users\\<you>\\AppData\\LocalLow\\Ludeon Studios\\RimWorld by Ludeon Studios\\Saves (unpack a .zip first); another phone takes them (or the .zip) with \"Import saves...\".")));
 			}
 		}
@@ -408,10 +426,17 @@ namespace PortMobile
 				}
 				Text.Font = GameFont.Small;
 				Text.Anchor = TextAnchor.MiddleCenter;
-				Widgets.Label(inRect, state == Copying
+				Widgets.Label(new Rect(inRect.x, inRect.y, inRect.width, inRect.height - 34f), state == Copying
 					? ModImport.Say($"正在复制：{files} 个文件，{bytes / 1048576f:F1} MB", $"Copying: {files} files, {bytes / 1048576f:F1} MB")
 					: ModImport.Say("请在系统的文件选择界面里选择存档……", "Choose the saves in the system's file chooser..."));
 				Text.Anchor = TextAnchor.UpperLeft;
+				// The way out when no chooser is on the screen and the state never changes (as ModImport.Progress).
+				if (Widgets.ButtonText(new Rect(inRect.xMax - 110f, inRect.yMax - 32f, 110f, 32f), ModImport.Say("取消", "Cancel")))
+				{
+					Console.WriteLine("[mobile] save import: cancelled while " + state);
+					finished = true;
+					Close(false);
+				}
 			}
 
 			private void Poll()

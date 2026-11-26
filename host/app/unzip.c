@@ -6,6 +6,7 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <dirent.h>
+#include <iconv.h>
 #include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -21,10 +22,118 @@
 static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
 
+// ---- entry names ----
+// Bit 11 of an entry's flags says its name is UTF-8. Without it, a zipper on a Chinese Windows writes the
+// name in the system's code page (GBK), and Explorer or WinRAR may add Info-ZIP's Unicode Path field
+// (0x7075: version, CRC-32 of the raw name, the name in UTF-8), whose CRC makes it certain. APFS takes
+// UTF-8 only: raw GBK bytes fail on their way to the disk, and with them the whole archive. So a name
+// that is valid UTF-8 stays as it is, and the rest is read as GB18030 (GBK and more).
+static int utf8_valid(const uint8_t *p, size_t n)
+{
+    size_t i = 0;
+    while (i < n)
+    {
+        uint32_t c = p[i++];
+        int extra;
+        uint32_t lowest;
+        if (c < 0x80)
+            continue;
+        if (c >= 0xC2 && c <= 0xDF) { extra = 1; lowest = 0x80; c &= 0x1F; }
+        else if (c >= 0xE0 && c <= 0xEF) { extra = 2; lowest = 0x800; c &= 0x0F; }
+        else if (c >= 0xF0 && c <= 0xF4) { extra = 3; lowest = 0x10000; c &= 0x07; }
+        else
+            return 0;
+        if (i + (size_t)extra > n)
+            return 0;
+        for (int k = 0; k < extra; k++)
+        {
+            if ((p[i] & 0xC0) != 0x80)
+                return 0;
+            c = (c << 6) | (p[i] & 0x3F);
+            i++;
+        }
+        if (c < lowest || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF))
+            return 0;
+    }
+    return 1;
+}
+
+// A name as it is, when it fits: -1 when it does not (a cut path is another file's) or holds a NUL.
+static int name_copy(const uint8_t *from, size_t len, char *out, size_t outSize)
+{
+    while (len > 0 && from[len - 1] == '\0')
+        len--; // the Unicode Path field may end with a NUL
+    if (len == 0 || len >= outSize || memchr(from, '\0', len) != NULL)
+        return -1;
+    memcpy(out, from, len);
+    out[len] = '\0';
+    return 0;
+}
+
+static int name_from_unicode_field(const uint8_t *extra, size_t extraLen, const uint8_t *raw, size_t rawLen,
+                                   char *out, size_t outSize)
+{
+    uint32_t crc = (uint32_t)crc32(0L, raw, (uInt)rawLen);
+    size_t at = 0;
+    while (at + 4 <= extraLen)
+    {
+        uint16_t id = rd16(extra + at), size = rd16(extra + at + 2);
+        if (at + 4 + size > extraLen)
+            break;
+        const uint8_t *field = extra + at + 4;
+        if (id == 0x7075 && size >= 5 && field[0] == 1 && rd32(field + 1) == crc)
+            return name_copy(field + 5, (size_t)size - 5, out, outSize);
+        at += 4 + (size_t)size;
+    }
+    return -1;
+}
+
+static int name_from_gb(const uint8_t *from, size_t len, char *out, size_t outSize)
+{
+    static const char *const pages[] = { "GB18030", "GBK", "CP936", "EUC-CN" };
+    for (size_t i = 0; i < sizeof pages / sizeof pages[0]; i++)
+    {
+        iconv_t cd = iconv_open("UTF-8", pages[i]);
+        if (cd == (iconv_t)-1)
+            continue;
+        char *in = (char *)from;
+        size_t left = len, room = outSize - 1;
+        char *to = out;
+        size_t rc = iconv(cd, &in, &left, &to, &room);
+        int done = rc != (size_t)-1 && left == 0;
+        iconv_close(cd);
+        if (!done)
+            return -1;
+        *to = '\0';
+        return utf8_valid((const uint8_t *)out, (size_t)(to - out)) ? 0 : -1;
+    }
+    return -1;
+}
+
+// The name the disk takes: 0, or -1 (too long, or bytes no rule here reads).
+static int decode_name(const uint8_t *raw, size_t rawLen, uint16_t flags, const uint8_t *extra, size_t extraLen,
+                       char *out, size_t outSize)
+{
+    int plain = 1;
+    for (size_t i = 0; i < rawLen; i++)
+        if (raw[i] >= 0x80 || raw[i] == 0)
+        {
+            plain = 0;
+            break;
+        }
+    if (plain || (flags & 0x0800) != 0)
+        return name_copy(raw, rawLen, out, outSize);
+    if (name_from_unicode_field(extra, extraLen, raw, rawLen, out, outSize) == 0)
+        return 0;
+    if (utf8_valid(raw, rawLen))
+        return name_copy(raw, rawLen, out, outSize);
+    return name_from_gb(raw, rawLen, out, outSize);
+}
+
 // mkdir -p. The path given is a directory's path (callers cut file names off first).
 static int mkdir_p(const char *path)
 {
-    char buf[1100];
+    char buf[2048];
     snprintf(buf, sizeof buf, "%s", path);
     size_t n = strlen(buf);
     if (n == 0 || n >= sizeof buf)
@@ -69,7 +178,7 @@ static int make_parent(const char *path)
     const char *slash = strrchr(path, '/');
     if (slash == NULL)
         return 0;
-    char parent[1100];
+    char parent[2048];
     size_t n = (size_t)(slash - path);
     if (n >= sizeof parent)
         return -1;
@@ -89,8 +198,10 @@ static int unpack_entry(FILE *zip, uint32_t lho, const char *name, uint16_t meth
     uint16_t fnLen = rd16(lfh + 26), exLen = rd16(lfh + 28);
     long dataStart = (long)lho + 30 + fnLen + exLen;
 
-    char full[1100];
-    snprintf(full, sizeof full, "%s/%s", destDir, name);
+    char full[2048];
+    int joined = snprintf(full, sizeof full, "%s/%s", destDir, name);
+    if (joined < 0 || (size_t)joined >= sizeof full)
+        return -1;
     size_t nlen = strlen(name);
     if (nlen > 0 && name[nlen - 1] == '/')
         return mkdir_p(full); // a directory entry
@@ -250,15 +361,18 @@ int port17_unzip(const char *zipPath, const char *destDir)
         uint16_t exLen = rd16(cd + at + 30);
         uint16_t cmLen = rd16(cd + at + 32);
         uint32_t lho = rd32(cd + at + 42);
-        if (at + 46 + (uint32_t)fnLen > cdSize || lho >= (uint32_t)fileSize)
+        if (at + 46 + (uint32_t)fnLen + exLen + cmLen > cdSize || lho >= (uint32_t)fileSize)
         {
             rc = -7;
             break;
         }
-        char name[1024];
-        size_t nn = fnLen < sizeof name - 1 ? fnLen : sizeof name - 1;
-        memcpy(name, cd + at + 46, nn);
-        name[nn] = '\0';
+        const uint8_t *raw = cd + at + 46;
+        char name[3072];
+        if (decode_name(raw, fnLen, rd16(cd + at + 8), raw + fnLen, exLen, name, sizeof name) != 0)
+        {
+            rc = -8;
+            break;
+        }
         if (!name_is_safe(name))
         {
             rc = -8;

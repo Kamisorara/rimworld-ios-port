@@ -114,8 +114,9 @@ CONTROL 0x2, ALT 0x4, SUPER 0x8, CAPS_LOCK 0x10, NUM_LOCK 0x20。窗口属性/�
 | `glfwAndroidKeyboardForced(int)` | iOS 恒直上软键盘（无 IME 策略差异），记录即返回 |
 | `glfwAndroidLastDevices(int*, int*)` | 外接鼠标/键盘设备 id；iOS 暂 -1（外接键盘经 UIKey 识别后可补） |
 | `glfwAndroidInputDevices(char*, int)` | iOS 暂回 ""（无 addInputDeviceListener 等价物；GameController API 留后） |
-| `glfwAndroidOpenUrl(const char*)` | UIApplication.openURL |
-| `glfwAndroidPickFiles` | `UIDocumentPickerViewController`：zip/.rws 用 import-as-copy（可多选），文件夹用 security-scoped opening；zip 复用 `host/app/unzip.c` 解到 `Documents/ModImport`，状态文件与安卓同协议 |
+| `glfwAndroidOpenUrl(const char*)` | UIApplication.openURL（不再先问 canOpenURL；URL 解析失败时百分号编码重试）。在主线程调用时内联执行，否则 dispatch_sync 到主队列 |
+| `glfwAndroidFilesDir(char*, int)` | 返回 `NSHomeDirectory()/Documents` 的 UTF-8 路径（即 `ModImport`/`ModImport.state` 所在目录），返回长度；缓冲区不够或参数无效返回 0。托管 `ModImport.FilesDir` 以它为准，避免两边各猜一个 Documents |
+| `glfwAndroidPickFiles` | `UIDocumentPickerViewController`：zip/.rws 用 import-as-copy（可多选），文件夹用 security-scoped opening；zip 复用 `host/app/unzip.c` 解到 `Documents/ModImport`，状态文件与安卓同协议。**不依赖 `glfwIosAttach`**（正式引擎路从不调用它，`g_view` 恒为 NULL）；从场景 key window 的 rootViewController（引擎的 WaylithViewController）弹出；1 秒后 sheet 仍未挂上且无回调 → 写 `PICK_FAILED "the system's file picker did not come up"`；上一次选择仍活动时返回 0 |
 | `glfwAndroidOpenFolder / ScanMedia / ProxyFor` | M2 桩（返回 0/""），按需再议 |
 | `glfwAndroidPerfHint / PerfHintConfig / PerfReport / SetFrameRate` | iOS 无 APerformanceHint 等价；SetFrameRate 可用 CADisplayLink/`CAMetalLayer.preferredFramesPerSecond`… M2 桩 |
 | `glfwAndroidDisplayRate()` | `UIScreen.maximumFramesPerSecond` |
@@ -124,7 +125,8 @@ CONTROL 0x2, ALT 0x4, SUPER 0x8, CAPS_LOCK 0x10, NUM_LOCK 0x20。窗口属性/�
 ### 2.4 宿主接线（iOS 版：main.m ↔ glfw_ios.c）
 
 - `glfwIosAttach(CAMetalLayer*, UIView*)`：app 启动时主线程调用（对应安卓 `glfwAndroidAttach(app)`）。
-  视图须 `multipleTouchEnabled = YES`
+  视图须 `multipleTouchEnabled = YES`。**仅启动器的诊断线程模型（`launcher.m`）调用**；正式引擎路（IOS 后端 + 主线程直接跑引擎）不调用它，垫片里 `g_view`/`g_layer` 保持 NULL，`glfwAndroid*` 导出不得以此为前提。
+- 线程规则：正式引擎路的游戏帧跑在进程主线程（run-loop 回调），`glfwAndroid*` 里需要 UIKit 的代码统一走 `on_main_sync`：`pthread_main_np()` 为真时直接执行，否则 `dispatch_sync` 到主队列——主线程对自己 `dispatch_sync` 主队列会死锁。
 - `glfwIosTouch(int type, int id, float x, float y)`：视图 touches* 逐指上报（UIKit 点坐标 →
   垫片内部换算 drawable 像素；对应安卓 on_input_event 的 record_touch + 鼠标模拟）
 - `glfwIosKey(int glfwKey, int action, int mods)` / `glfwIosTextCommit(const uint32_t*, int)`：

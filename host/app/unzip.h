@@ -5,8 +5,11 @@
 // The unpacker is a small reader of the zip's central directory (stored and deflate entries,
 // which is everything PC zips contain; zip64 is not needed under 4 GB). Deflate decompression
 // is the system libz's raw inflate. Paths are made safe (no absolute, no ".."): a zip is data
-// from outside. The install is atomic enough for its purpose: a staging directory is renamed
-// into place only after the launcher's dll is seen in it.
+// from outside. Entry names are read as written (bit 11) or, for a zipper on a Chinese Windows
+// that wrote them in GBK, turned into UTF-8; a name that cannot be read fails the whole archive
+// instead of being cut. The install is atomic enough for its purpose: a staging directory is
+// renamed into place only after the launcher's dll is seen in it. scripts/unzip-test/run.py
+// runs the reader on a Windows host against zips written for these cases.
 #ifndef PORT17_UNZIP_H
 #define PORT17_UNZIP_H
 
