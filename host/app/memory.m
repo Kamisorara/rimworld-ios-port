@@ -1,7 +1,9 @@
 #include "memory.h"
 
 #include <dispatch/dispatch.h>
-#include <libproc.h>  // proc_pid_rusage
+// proc_pid_rusage is exported by libSystem on iOS, but libproc.h is macOS-only and is not
+// shipped in the iPhoneOS SDK; declare it with the Darwin signature (rusage_info_t is `void *`).
+extern int proc_pid_rusage(int pid, int flavor, rusage_info_t buffer);
 #include <os/proc.h>
 #include <stdio.h>
 #include <string.h>
