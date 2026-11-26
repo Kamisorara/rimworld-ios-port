@@ -60,8 +60,9 @@ namespace PortMobile
 
 		/// <summary>
 		/// Whether a Steam sign-in is remembered: PortWorkshop's Session keeps the token Steam gave in the app's private
-		/// files (/data/data/(package)/files/steam/login), and only with it can the update check sign in by itself. Looked
-		/// at here, so that the Workshop stays unloaded for a player who never signed in.
+		/// files (Android: /data/data/(package)/files/steam/login; iOS: Library/Application Support/Port17/steam/login),
+		/// and only with it can the update check sign in by itself. Looked at here, so that the Workshop stays unloaded
+		/// for a player who never signed in.
 		/// </summary>
 		private static bool SignInRemembered()
 		{
@@ -70,6 +71,13 @@ namespace PortMobile
 				if (OperatingSystem.IsIOS())
 				{
 					// Session.PrivateDir, read without loading PortWorkshop and its dependencies.
+					string home = IosHome();
+					if (!string.IsNullOrEmpty(home) && home != "/" &&
+						File.Exists(Path.Combine(home, "Library", "Application Support", "Port17", "steam", "login")))
+					{
+						return true;
+					}
+					// 0.4.38's location, before the token moved out of Documents; Session moves it on first use.
 					string files = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
 					return File.Exists(Path.Combine(files, "steam", "login"));
 				}
@@ -80,6 +88,29 @@ namespace PortMobile
 			{
 				return false;
 			}
+		}
+
+		// Session.IosHome: the game folder is <HOME>/Documents/game, possibly one wrapper deep, or
+		// <HOME>/Documents/<name>; Documents' parent is the app's home even when HOME is not set to it.
+		private static string IosHome()
+		{
+			string dir = Path.GetFullPath(AppContext.BaseDirectory);
+			for (int i = 0; i < 4 && !string.IsNullOrEmpty(dir); i++)
+			{
+				if (string.Equals(Path.GetFileName(dir), "Documents", StringComparison.OrdinalIgnoreCase))
+				{
+					return Path.GetDirectoryName(dir);
+				}
+				dir = Path.GetDirectoryName(dir);
+			}
+			string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+			if (string.IsNullOrEmpty(home) || home == "/")
+			{
+				home = Environment.GetEnvironmentVariable("HOME");
+			}
+			return !string.IsNullOrEmpty(home) && home != "/"
+				? home
+				: Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", ".."));
 		}
 
 		/// <summary>

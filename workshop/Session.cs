@@ -71,14 +71,98 @@ namespace PortWorkshop
 		{
 			get
 			{
-				// iOS has no /data/data: the game folder lives under HOME/Documents, which is the app's writable
-				// container (including under LiveContainer's relocated HOME). Android keeps its original path.
-				string root = OperatingSystem.IsIOS()
-					? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."))
-					: Path.Combine("/data/data", File.ReadAllText("/proc/self/cmdline").Split('\0')[0].Trim(), "files");
-				string dir = Path.Combine(root, "steam");
+				string dir;
+				if (OperatingSystem.IsIOS())
+				{
+					// UIFileSharingEnabled shows Documents in Files/Finder, so a renewable Steam sign-in must not be
+					// kept there. Library/Application Support is private to the app (under LiveContainer's relocated
+					// HOME as well); 0.4.38's Documents/steam copy is moved here once.
+					dir = Path.Combine(IosHome(), "Library", "Application Support", "Port17", "steam");
+					MoveLegacyPrivateDir(dir);
+				}
+				else
+				{
+					dir = Path.Combine("/data/data", File.ReadAllText("/proc/self/cmdline").Split('\0')[0].Trim(), "files", "steam");
+				}
 				Directory.CreateDirectory(dir);
 				return dir;
+			}
+		}
+
+		private static string IosHome()
+		{
+			// The game folder is <HOME>/Documents/game, possibly one wrapper deep, or <HOME>/Documents/<name>.
+			// Walking up to Documents and taking its parent keeps the private folder in the app's home even when
+			// HOME is not set to it (LiveContainer relocates the whole container).
+			string dir = Path.GetFullPath(AppContext.BaseDirectory);
+			for (int i = 0; i < 4 && !string.IsNullOrEmpty(dir); i++)
+			{
+				if (string.Equals(Path.GetFileName(dir), "Documents", StringComparison.OrdinalIgnoreCase))
+				{
+					return Path.GetDirectoryName(dir);
+				}
+				dir = Path.GetDirectoryName(dir);
+			}
+			string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+			if (string.IsNullOrEmpty(home) || home == "/")
+			{
+				home = Environment.GetEnvironmentVariable("HOME");
+			}
+			return !string.IsNullOrEmpty(home) && home != "/"
+				? home
+				: Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", ".."));
+		}
+
+		private static int legacyMoved;
+
+		/// <summary>
+		/// 0.4.38 kept the remembered sign-in in Documents/steam, which the Files app shows. A login file found there
+		/// is moved to the private folder once, so the upgrade does not sign the player out and the visible copy does
+		/// not stay behind. Only the private folder is used from then on; a move that fails is logged and left alone.
+		/// </summary>
+		private static void MoveLegacyPrivateDir(string dir)
+		{
+			if (Interlocked.CompareExchange(ref legacyMoved, 1, 0) != 0)
+			{
+				return;
+			}
+			try
+			{
+				string legacy = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "steam"));
+				if (string.Equals(legacy, dir, StringComparison.Ordinal) || !File.Exists(Path.Combine(legacy, "login")))
+				{
+					return;
+				}
+				if (File.Exists(Path.Combine(dir, "login")))
+				{
+					// A sign-in is already kept privately; the visible old copy is not left behind.
+					try { File.Delete(Path.Combine(legacy, "login")); } catch { }
+					try { Directory.Delete(legacy, false); } catch { }
+					Log("the old sign-in copy in Documents/steam was removed");
+					return;
+				}
+				Directory.CreateDirectory(Path.GetDirectoryName(dir));
+				if (!Directory.Exists(dir))
+				{
+					Directory.Move(legacy, dir);
+				}
+				else
+				{
+					foreach (string entry in Directory.GetFileSystemEntries(legacy))
+					{
+						string to = Path.Combine(dir, Path.GetFileName(entry));
+						if (!File.Exists(to) && !Directory.Exists(to))
+						{
+							Directory.Move(entry, to);
+						}
+					}
+					try { Directory.Delete(legacy, false); } catch { }
+				}
+				Log("the remembered sign-in was moved from Documents/steam to Library/Application Support/Port17/steam");
+			}
+			catch (Exception e)
+			{
+				Log("the remembered sign-in could not be moved out of Documents: " + e.Message);
 			}
 		}
 

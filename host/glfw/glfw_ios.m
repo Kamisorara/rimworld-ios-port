@@ -671,8 +671,9 @@ API int glfwAndroidInputDevices(char* out, int size)
 
 // ---- the Files app chooser (ModImport/SaveImport) ----
 // Android hands the chooser to MainActivity and it copies into files/ModImport. iOS's counterpart is a
-// UIDocumentPicker sheet: .zip/.rws files are imported as copies (several at once), one folder is opened
-// with security scope and copied. zips are unpacked here so the shared C# importer keeps seeing folders.
+// UIDocumentPicker sheet: .zip/.rws files are opened in place (several at once; the security scope is held
+// while the file is read, so no copy is made before the zip is unpacked), one folder is opened with security
+// scope and copied. zips are unpacked here so the shared C# importer keeps seeing folders.
 enum { PICK_CHOOSING = 1, PICK_COPYING, PICK_DONE, PICK_FAILED, PICK_CANCELLED };
 
 static void pick_paths(char* staging, size_t stagingSize, char* state, size_t stateSize)
@@ -705,6 +706,19 @@ static NSString* pick_safe_name(NSString* name)
         componentsJoinedByString:@"_"];
     clean = [clean stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
     return clean.length == 0 || [clean isEqualToString:@"."] || [clean isEqualToString:@".."] ? @"item" : clean;
+}
+
+// Two chosen items can share a name (a.zip from two folders): the second would unpack into the first one's
+// folder. The staging is emptied before the picker, so an existing name is from this batch; the next free
+// number keeps the two apart.
+static NSString* pick_target_name(NSString* root, NSString* name, NSMutableSet* used)
+{
+    NSString* candidate = name;
+    for (int n = 2; [used containsObject:candidate] ||
+                    [[NSFileManager defaultManager] fileExistsAtPath:[root stringByAppendingPathComponent:candidate]]; n++)
+        candidate = [NSString stringWithFormat:@"%@ (%d)", name, n];
+    [used addObject:candidate];
+    return candidate;
 }
 
 static void pick_reset_staging(void)
@@ -795,6 +809,7 @@ static UIViewController* pick_root_controller(void)
     NSString* root = [NSString stringWithUTF8String:staging];
     NSMutableString* leftOut = [NSMutableString string];
     NSString* failure = nil;
+    NSMutableSet* used = [NSMutableSet set];
 
     for (NSURL* url in urls)
     {
@@ -806,7 +821,7 @@ static UIViewController* pick_root_controller(void)
             NSString* target = nil;
             if (self.wantsFolder)
             {
-                target = [root stringByAppendingPathComponent:name];
+                target = [root stringByAppendingPathComponent:pick_target_name(root, name, used)];
                 [[NSFileManager defaultManager] removeItemAtPath:target error:NULL];
                 NSError* error = nil;
                 if ([[NSFileManager defaultManager] copyItemAtPath:url.path toPath:target error:&error])
@@ -820,7 +835,9 @@ static UIViewController* pick_root_controller(void)
             }
             else if ([lower hasSuffix:@".zip"])
             {
-                target = [root stringByAppendingPathComponent:[name substringToIndex:name.length - 4]];
+                NSString* stem = [name substringToIndex:name.length - 4];
+                if (stem.length == 0) stem = @"zip";
+                target = [root stringByAppendingPathComponent:pick_target_name(root, stem, used)];
                 if (port17_unzip(url.path.UTF8String, target.UTF8String) == 0)
                 {
                     int added = 0;
@@ -831,7 +848,7 @@ static UIViewController* pick_root_controller(void)
             }
             else if ([lower hasSuffix:@".rws"])
             {
-                target = [root stringByAppendingPathComponent:name];
+                target = [root stringByAppendingPathComponent:pick_target_name(root, name, used)];
                 if ([[NSFileManager defaultManager] copyItemAtPath:url.path toPath:target error:nil])
                 {
                     self.files += 1;
@@ -888,20 +905,24 @@ API int glfwAndroidPickFiles(int folder)
             sheet = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:
                      @[[UTType typeWithIdentifier:@"public.folder"]]];
         else
-            sheet = [[UIDocumentPickerViewController alloc] initForImportingContentTypes:
-                     @[[UTType typeWithIdentifier:@"public.zip-archive"], [UTType typeWithIdentifier:@"public.data"]]
-                                                                                 asCopy:YES];
+            // Opening, not importing as a copy: the zip is read in place while the security scope is held, so a
+            // large mod archive does not take a second copy of itself in the app's temporary storage first.
+            sheet = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:
+                     @[[UTType typeWithIdentifier:@"public.zip-archive"], [UTType typeWithIdentifier:@"public.data"]]];
         sheet.delegate = picker;
         sheet.allowsMultipleSelection = !picker.wantsFolder;
         UIViewController* root = pick_root_controller();
         if (!root)
         {
+                [sheet release];
                 [g_picker release];
             g_picker = nil;
             pick_write_state(PICK_FAILED, 0, 0, @"no presented view controller");
             return;
         }
         [root presentViewController:sheet animated:YES completion:nil];
+        // UIKit keeps the presented controller; under MRC the alloc is released here.
+        [sheet release];
         log_line("mod picker: %s", picker.wantsFolder ? "folder" : "zip/save files");
         }
             });
