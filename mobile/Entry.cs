@@ -132,12 +132,19 @@ namespace PortMobile
 			{
 				var inv = System.Globalization.CultureInfo.InvariantCulture;
 				// /proc/self/stat: after the name in parentheses, the 12th and 13th fields are the user and system time in 1/100 s.
-				string stat = System.IO.File.ReadAllText("/proc/self/stat");
-				string[] fields = stat.Substring(stat.LastIndexOf(')') + 2).Split(' ');
-				TimeSpan cpu = TimeSpan.FromSeconds((long.Parse(fields[11]) + long.Parse(fields[12])) / 100.0);
+				// iOS has no /proc: there the processor time is left out (0.4.46 and before, this line then said only
+				// "DirectoryNotFoundException" and every useful number behind it was lost with it).
+				TimeSpan? cpu = null;
+				if (!OperatingSystem.IsIOS())
+				{
+					string stat = System.IO.File.ReadAllText("/proc/self/stat");
+					string[] fields = stat.Substring(stat.LastIndexOf(')') + 2).Split(' ');
+					cpu = TimeSpan.FromSeconds((long.Parse(fields[11]) + long.Parse(fields[12])) / 100.0);
+				}
 				return "compiling " + System.Runtime.JitInfo.GetCompilationTime().TotalSeconds.ToString("F1", inv) + " s (" + System.Runtime.JitInfo.GetCompilationTime(true).TotalSeconds.ToString("F1", inv) + " s of it on this thread) for " + System.Runtime.JitInfo.GetCompiledMethodCount() + " methods (" + (System.Runtime.JitInfo.GetCompiledILBytes() / 1048576.0).ToString("F1", inv) + " MB of IL)"
 					+ ", collector pauses " + GC.GetTotalPauseDuration().TotalSeconds.ToString("F1", inv) + " s in " + GC.CollectionCount(0) + "/" + GC.CollectionCount(1) + "/" + GC.CollectionCount(2) + " collections of " + (GC.GetTotalAllocatedBytes() / 1073741824.0).ToString("F1", inv) + " GB allocated"
-					+ ", processor time " + cpu.TotalSeconds.ToString("F1", inv) + " s, " + AppDomain.CurrentDomain.GetAssemblies().Length + " assemblies";
+					+ (cpu.HasValue ? ", processor time " + cpu.Value.TotalSeconds.ToString("F1", inv) + " s" : "")
+					+ ", " + AppDomain.CurrentDomain.GetAssemblies().Length + " assemblies";
 			}
 			catch (Exception e)
 			{
