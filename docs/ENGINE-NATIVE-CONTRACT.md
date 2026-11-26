@@ -115,7 +115,8 @@ CONTROL 0x2, ALT 0x4, SUPER 0x8, CAPS_LOCK 0x10, NUM_LOCK 0x20。窗口属性/�
 | `glfwAndroidLastDevices(int*, int*)` | 外接鼠标/键盘设备 id；iOS 暂 -1（外接键盘经 UIKey 识别后可补） |
 | `glfwAndroidInputDevices(char*, int)` | iOS 暂回 ""（无 addInputDeviceListener 等价物；GameController API 留后） |
 | `glfwAndroidOpenUrl(const char*)` | UIApplication.openURL |
-| `glfwAndroidOpenFolder / ScanMedia / ProxyFor / PickFiles / Restart` | M2 桩（返回 0/""），M5 导入流程时再议 |
+| `glfwAndroidPickFiles` | `UIDocumentPickerViewController`：zip/.rws 用 import-as-copy（可多选），文件夹用 security-scoped opening；zip 复用 `host/app/unzip.c` 解到 `Documents/ModImport`，状态文件与安卓同协议 |
+| `glfwAndroidOpenFolder / ScanMedia / ProxyFor` | M2 桩（返回 0/""），按需再议 |
 | `glfwAndroidPerfHint / PerfHintConfig / PerfReport / SetFrameRate` | iOS 无 APerformanceHint 等价；SetFrameRate 可用 CADisplayLink/`CAMetalLayer.preferredFramesPerSecond`… M2 桩 |
 | `glfwAndroidDisplayRate()` | `UIScreen.maximumFramesPerSecond` |
 | `glfwAndroidPrepareExit()` | atexit(_exit) 同款（iOS 无 finishGame 对应物） |

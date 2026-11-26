@@ -19,6 +19,7 @@
 // drawable to the layer's bounds — the compositor does the upscaling, no swapchain interposition needed).
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <dlfcn.h>
 #define API __attribute__((visibility("default"))) // 导出面宏（文件头：事件 sink 块在前面就用）
 #include <errno.h>
@@ -35,6 +36,14 @@
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 #include "glfw_ios.h"
+#include "../app/unzip.h"
+
+// unzip.c's progress callback is the host's old single-string entry; this shim has no overlay.
+static void log_line(const char* fmt, ...);
+void host_log(const char* msg)
+{
+    if (msg) log_line("%s", msg);
+}
 
 // The shim's own logging: routed into the host's log overlay/Documents file by glfwIosSetLogSink
 // (installed before anything else); fprintf(stderr) as the fallback (the host redirects stderr to a file).
@@ -201,6 +210,10 @@ static int g_focused = 1;
 static float g_density = 3.0f;       // nativeScale; the Android shim's density is the same dp measure
 static int g_refreshRate = 60;
 static int g_windowVisible = 1;      // false while in the background (the layer stays, but no drawable comes)
+
+// The coordinator stays alive while the system's sheet is up and the copy runs on a worker queue.
+@class PickCoordinator;
+static PickCoordinator* g_picker;
 
 // The size the engine is told (under g_lock): the render size when one is set, else the window's.
 static int engine_width_locked(void) { return g_renderWidth > 0 ? g_renderWidth : g_width; }
@@ -654,6 +667,230 @@ API int glfwAndroidInputDevices(char* out, int size)
 {
     if (out && size > 0) out[0] = 0;
     return 0;
+}
+
+// ---- the Files app chooser (ModImport/SaveImport) ----
+// Android hands the chooser to MainActivity and it copies into files/ModImport. iOS's counterpart is a
+// UIDocumentPicker sheet: .zip/.rws files are imported as copies (several at once), one folder is opened
+// with security scope and copied. zips are unpacked here so the shared C# importer keeps seeing folders.
+enum { PICK_CHOOSING = 1, PICK_COPYING, PICK_DONE, PICK_FAILED, PICK_CANCELLED };
+
+static void pick_paths(char* staging, size_t stagingSize, char* state, size_t stateSize)
+{
+    snprintf(staging, stagingSize, "%s/Documents/ModImport", NSHomeDirectory());
+    snprintf(state, stateSize, "%s/Documents/ModImport.state", NSHomeDirectory());
+}
+
+static void pick_write_state(int state, int files, long long bytes, NSString* message)
+{
+    char staging[1024], statePath[1024], tempPath[1080];
+    pick_paths(staging, sizeof staging, statePath, sizeof statePath);
+    snprintf(tempPath, sizeof tempPath, "%s.tmp", statePath);
+    FILE* out = fopen(tempPath, "wb");
+    if (!out) return;
+    NSData* text = [[NSString stringWithFormat:@"%d %d %lld\n%@", state, files, bytes,
+                     message ? message : @""] dataUsingEncoding:NSUTF8StringEncoding];
+    BOOL ok = fwrite(text.bytes, 1, text.length, out) == text.length;
+    ok = fclose(out) == 0 && ok;
+    if (!ok || [[NSFileManager defaultManager] moveItemAtPath:tempPath toPath:statePath error:NULL] == NO)
+        unlink(tempPath);
+}
+
+static NSString* pick_safe_name(NSString* name)
+{
+    NSString* clean = [[name componentsSeparatedByCharactersInSet:
+        [NSCharacterSet characterSetWithCharactersInString:@"/\\:*?\"<>|"]]
+        componentsJoinedByString:@"_"];
+    clean = [clean stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    return clean.length == 0 || [clean isEqualToString:@"."] || [clean isEqualToString:@".."] ? @"item" : clean;
+}
+
+static void pick_reset_staging(void)
+{
+    char staging[1024], state[1024];
+    pick_paths(staging, sizeof staging, state, sizeof state);
+    NSFileManager* files = NSFileManager.defaultManager;
+    [files removeItemAtPath:staging error:NULL];
+    [files removeItemAtPath:state error:NULL];
+    [files createDirectoryAtPath:staging withIntermediateDirectories:YES attributes:nil error:NULL];
+}
+
+static long long pick_tree_bytes(NSString* root, int* files)
+{
+    NSDirectoryEnumerator<NSURL*>* items = [NSFileManager.defaultManager
+        enumeratorAtURL:[NSURL fileURLWithPath:root]
+        includingPropertiesForKeys:@[NSFileSizeKey] options:0 errorHandler:^BOOL(NSURL*, NSError*) { return YES; }];
+    long long bytes = 0;
+    for (NSURL* item in items)
+    {
+        NSNumber* size = nil;
+        if ([item getResourceValue:&size forKey:NSFileSizeKey error:NULL] && size)
+        {
+            bytes += size.longLongValue;
+            if (files) (*files)++;
+        }
+    }
+    return bytes;
+}
+
+static UIViewController* pick_root_controller(void)
+{
+    UIViewController* root = nil;
+    for (UIScene* scene in UIApplication.sharedApplication.connectedScenes)
+    {
+        if (![scene isKindOfClass:[UIWindowScene class]] ||
+            scene.activationState != UISceneActivationStateForegroundActive) continue;
+        for (UIWindow* window in ((UIWindowScene*)scene).windows)
+            if (window.isKeyWindow) root = window.rootViewController;
+    }
+    if (!root) root = UIApplication.sharedApplication.keyWindow.rootViewController;
+    while (root.presentedViewController) root = root.presentedViewController;
+    return root;
+}
+
+@interface PickCoordinator : NSObject <UIDocumentPickerDelegate>
+@property (nonatomic, readonly) BOOL wantsFolder;
+@property (nonatomic) int files;
+@property (nonatomic) long long bytes;
+@property (nonatomic) BOOL active;
+@end
+
+@implementation PickCoordinator
+- (instancetype)initWithFolder:(BOOL)folder
+{
+    if ((self = [super init])) { _wantsFolder = folder; _active = YES; }
+    return self;
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController*)controller didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls
+{
+    (void)controller;
+    [self setPhase:PICK_COPYING message:@""];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        @autoreleasepool { [self importURLs:urls]; }
+    });
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController*)controller
+{
+    (void)controller;
+    self.active = NO;
+    pick_write_state(PICK_CANCELLED, 0, 0, @"");
+    g_picker = nil;
+}
+
+- (void)setPhase:(int)state message:(NSString*)message
+{
+    pick_write_state(state, self.files, self.bytes, message);
+}
+
+- (void)importURLs:(NSArray<NSURL*>*)urls
+{
+    char staging[1024], state[1024];
+    pick_paths(staging, sizeof staging, state, sizeof state);
+    NSString* root = [NSString stringWithUTF8String:staging];
+    NSMutableString* leftOut = [NSMutableString string];
+    NSString* failure = nil;
+
+    for (NSURL* url in urls)
+    {
+        BOOL accessed = [url startAccessingSecurityScopedResource];
+        @try
+        {
+            NSString* name = pick_safe_name(url.lastPathComponent);
+            NSString* lower = name.lowercaseString;
+            NSString* target = nil;
+            if (self.wantsFolder)
+            {
+                target = [root stringByAppendingPathComponent:name];
+                [[NSFileManager defaultManager] removeItemAtPath:target error:NULL];
+                NSError* error = nil;
+                if ([[NSFileManager defaultManager] copyItemAtPath:url.path toPath:target error:&error])
+                {
+                    self.files = 0;
+                    int added = 0;
+                    self.bytes = pick_tree_bytes(target, &added);
+                    self.files = added;
+                }
+                else failure = [NSString stringWithFormat:@"%@: %@", name, error.localizedDescription ?: @"copy failed"];
+            }
+            else if ([lower hasSuffix:@".zip"])
+            {
+                target = [root stringByAppendingPathComponent:[name substringToIndex:name.length - 4]];
+                if (port17_unzip(url.path.UTF8String, target.UTF8String) == 0)
+                {
+                    int added = 0;
+                    self.bytes += pick_tree_bytes(target, &added);
+                    self.files += added;
+                }
+                else failure = [NSString stringWithFormat:@"%@: the zip could not be unpacked", name];
+            }
+            else if ([lower hasSuffix:@".rws"])
+            {
+                target = [root stringByAppendingPathComponent:name];
+                if ([[NSFileManager defaultManager] copyItemAtPath:url.path toPath:target error:nil])
+                {
+                    self.files += 1;
+                    NSDictionary* attrs = [[NSFileManager defaultManager] attributesOfItemAtPath:target error:nil];
+                    self.bytes += attrs[NSFileSize] ? [attrs[NSFileSize] longLongValue] : 0;
+                }
+                else failure = [NSString stringWithFormat:@"%@: copy failed", name];
+            }
+            else
+            {
+                [leftOut appendFormat:@"%@\n", name];
+            }
+        }
+        @catch (NSException* exception)
+        {
+            failure = [NSString stringWithFormat:@"%@: %@", url.lastPathComponent, exception.reason];
+        }
+        @finally
+        {
+            if (accessed) [url stopAccessingSecurityScopedResource];
+        }
+        if (failure) break;
+    }
+
+    self.active = NO;
+    if (failure)
+        [self setPhase:PICK_FAILED message:failure];
+    else
+        [self setPhase:PICK_DONE message:leftOut];
+    g_picker = nil;
+}
+@end
+
+// 1 means the sheet was handed to UIKit; the copy progress is ModImport.state, exactly as on Android.
+API int glfwAndroidPickFiles(int folder)
+{
+    if (!g_view || (g_picker && g_picker.active)) return 0;
+    pick_reset_staging();
+    pick_write_state(PICK_CHOOSING, 0, 0, @"");
+    PickCoordinator* picker = [[PickCoordinator alloc] initWithFolder:folder != 0];
+    g_picker = picker;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @autoreleasepool {
+        UIDocumentPickerViewController* sheet = nil;
+        if (picker.wantsFolder)
+            sheet = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTType.folder]];
+        else
+            sheet = [[UIDocumentPickerViewController alloc] initForImportingContentTypes:@[UTType.zip, UTType.data]
+                                                                                 asCopy:YES];
+        sheet.delegate = picker;
+        sheet.allowsMultipleSelection = !picker.wantsFolder;
+        UIViewController* root = pick_root_controller();
+        if (!root)
+        {
+            g_picker = nil;
+            pick_write_state(PICK_FAILED, 0, 0, @"no presented view controller");
+            return;
+        }
+        [root presentViewController:sheet animated:YES completion:nil];
+        log_line("mod picker: %s", picker.wantsFolder ? "folder" : "zip/save files");
+        }
+    });
+    return 1;
 }
 
 // A link opened in the phone's app for it (mobile/OpenUrl.cs): 1 when an app was asked.

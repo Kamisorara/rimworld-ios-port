@@ -39,9 +39,9 @@ xcrun -sdk "$SDK" clang \
     -shared -fvisibility=default \
     -Wl,-install_name,@rpath/libglfw.dylib \
     -I "$INC" \
-    -framework UIKit -framework Foundation -framework QuartzCore \
+    -framework UIKit -framework Foundation -framework QuartzCore -framework UniformTypeIdentifiers -lz \
     -o "$APP/libglfw.dylib" \
-    "$ROOT/host/glfw/glfw_ios.m"
+    "$ROOT/host/glfw/glfw_ios.m" "$ROOT/host/app/unzip.c"
 
 # MonoMod's CoreBaseRuntime opens a clrjit library and calls getJit. Our hybrid
 # runtime links the JIT into libcoreclr.dylib, so this shim resolves the static
@@ -298,6 +298,22 @@ cp "$ROOT/prebuilt/PortHooks.dll" "$ROOT/prebuilt/PortMobile.dll" "$APP/"
 FONT="$ROOT/host/app/fonts/NotoSansSC-Regular.otf"
 [ -f "$FONT" ] || { echo "::error::host/app/fonts/NotoSansSC-Regular.otf 缺"; exit 1; }
 cp "$FONT" "$APP/"
+
+# The outline emoji font after all engine fallbacks (AndroidFonts.TryAddEmoji). Same pinned Google Fonts
+# file the Android build uses; OFL text already ships beside the Chinese font.
+EMOJI="$APP/NotoEmoji.ttf"
+curl -fsSL --retry 3 \
+    "https://raw.githubusercontent.com/google/fonts/b979dba422e445492b0eb9951ac52ee0b4d648c3/ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf" \
+    -o "$EMOJI"
+echo "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551  $EMOJI" | shasum -a 256 -c -
+cp "$ROOT/host/app/fonts/LICENSE-OFL.txt" "$APP/NotoEmoji-OFL.txt"
+
+# RimSort's community load order rules (ModSort refreshes later, but a shipped copy makes the first mod
+# page useful offline too). The converter is the Android repository's, copied unchanged.
+command -v node >/dev/null || { echo "::error::node 缺（host/modrules/build.js 需要）"; exit 1; }
+node "$ROOT/host/modrules/build.js"
+[ -s "$ROOT/host/modrules/ModRules.txt" ] || { echo "::error::ModRules.txt 未生成"; exit 1; }
+cp "$ROOT/host/modrules/ModRules.txt" "$APP/"
 
 # 4.995) PortMobile 的 Harmony detour 依赖不是玩家的 Harmony mod：安卓在 staging 时把
 #      改写过的 0Harmony.dll 放进游戏目录，iOS 必须由 bundle 自带同一依赖。这里放

@@ -127,7 +127,7 @@ namespace PortHooks
 			emojiPatched = true;
 			try
 			{
-				string path = Path.Combine(AppContext.BaseDirectory, "NotoEmoji.ttf");
+				string path = PortHooks.HostFiles.Resolve("NotoEmoji.ttf");
 				MethodInfo resolve = assembly.GetType("RimWorldWaylith.Imgui.FontFallbacks")?.GetMethod("Resolve", BindingFlags.Public | BindingFlags.Static);
 				Type source = resolve != null && resolve.ReturnType.IsGenericType ? resolve.ReturnType.GetGenericArguments()[0] : null;
 				ConstructorInfo make = source?.GetConstructor(new[] { typeof(string), typeof(uint), typeof(uint[]) });

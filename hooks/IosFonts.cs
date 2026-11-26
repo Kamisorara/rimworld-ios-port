@@ -172,17 +172,7 @@ namespace PortHooks
 					return;
 				}
 				indexed = true;
-				// The host sets APP_CONTEXT_BASE_DIRECTORY to Documents/game. PortHooks itself lives in the .app root
-				// (TPA), next to the file build-ipa.sh copied there.
-				string assemblyDir = Path.GetDirectoryName(typeof(IosFonts).Assembly.Location);
-				if (!string.IsNullOrEmpty(assemblyDir))
-				{
-					bundled = Path.Combine(assemblyDir, BundledFile);
-				}
-				if (bundled == null || !File.Exists(bundled))
-				{
-					bundled = Path.Combine(AppContext.BaseDirectory, BundledFile);
-				}
+				bundled = HostFiles.Resolve(BundledFile);
 				if (!File.Exists(bundled))
 				{
 					Console.WriteLine("[port17] fonts: iOS bundled Noto Sans SC missing at " + bundled);

@@ -20,6 +20,8 @@ game-stage-relaxed/
 setup-test/
 prebuilt/*.rsp
 prebuilt/BuiltFor.cs
+host/modrules/communityRules.json
+host/modrules/ModRules.txt
 
 # Local agent instructions must stay machine-local
 AGENTS.md

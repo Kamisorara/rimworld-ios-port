@@ -42,6 +42,9 @@ namespace PortMobile
 		// Frameworks that go right after the official content (RimSort's second tier), besides what the rules tag "top".
 		private static readonly string[] Frameworks = { "unlimitedhugs.hugslib", "oskarpotocki.vanillafactionsexpanded.core", "imranfish.xmlextensions", "sindre0830.universum" };
 
+		// The Android staging keeps ModRules.txt in the game folder. On iOS it ships in the .app root, next to
+		// PortHooks; a downloaded copy in Config always competes by its database timestamp.
+
 		private sealed class Rule
 		{
 			public readonly List<string> After = new List<string>(), Before = new List<string>(), Incompatible = new List<string>();
@@ -411,7 +414,10 @@ namespace PortMobile
 
 		// ──────────────────── The rules file ────────────────────
 
-		private static string ShippedPath => Path.Combine(AppContext.BaseDirectory, "ModRules.txt");
+		private static string ShippedPath
+		{
+			get { return PortHooks.HostFiles.Resolve("ModRules.txt"); }
+		}
 		private static string ConfigFolder => Path.GetDirectoryName(GenFilePaths.ModsConfigFilePath);
 		private static string DownloadedPath => Path.Combine(ConfigFolder, "ModRules.txt");
 		private static string CheckedPath => Path.Combine(ConfigFolder, "ModRules.checked");

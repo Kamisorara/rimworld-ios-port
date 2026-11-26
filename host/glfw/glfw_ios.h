@@ -73,6 +73,7 @@ void glfwAndroidShowKeyboard(int show);
 void glfwAndroidKeyboardForced(int forced);
 void glfwAndroidLastDevices(int* mouse, int* key);
 int  glfwAndroidInputDevices(char* out, int size);
+int  glfwAndroidPickFiles(int folder);
 int  glfwAndroidOpenUrl(const char* url);
 int  glfwAndroidOpenFolder(const char* path);
 int  glfwAndroidScanMedia(const char* path);
