@@ -10,7 +10,7 @@
 
 Port17 is an open-source compatibility layer that runs the Windows (Steam) build of **RimWorld 1.7** — Ludeon's Waylith engine, .NET code over a Vulkan renderer — on iPhone and iPad. No jailbreak, and no repackaged game: you copy the files over from your own Steam installation, and Port17 supplies the rest: its own .NET runtime, Vulkan on Metal, touch controls, mod support and a Steam Workshop downloader.
 
-**Current build: 0.4.43** (26 November 2026). The project is in active development; [docs/PLAN.md](docs/PLAN.md) is the round-by-round record.
+**Current build: 0.4.44** (26 November 2026). The project is in active development; [docs/PLAN.md](docs/PLAN.md) is the round-by-round record.
 
 ## Status
 

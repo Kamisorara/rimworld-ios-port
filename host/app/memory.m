@@ -1,6 +1,7 @@
 #include "memory.h"
 
 #include <dispatch/dispatch.h>
+#include <libproc.h>  // proc_pid_rusage
 #include <os/proc.h>
 #include <stdio.h>
 #include <string.h>

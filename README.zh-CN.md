@@ -10,7 +10,7 @@
 
 Port17 是一个开源兼容层，让 **RimWorld 1.7** 的 Windows（Steam）版本——Ludeon 的 Waylith 引擎，即跑在 Vulkan 渲染器上的 .NET 代码——在 iPhone 和 iPad 上运行。无需越狱，也没有重新打包的游戏：你把自己 Steam 安装目录里的文件拷过来，其余由 Port17 提供：自带的 .NET 运行时、Metal 之上的 Vulkan、触控操作、模组支持，以及一个 Steam 创意工坊下载器。
 
-**当前版本：0.4.43**（2026 年 11 月 26 日）。项目仍在积极开发中；[docs/PLAN.md](docs/PLAN.md) 是逐轮的工作记录。
+**当前版本：0.4.44**（2026 年 11 月 26 日）。项目仍在积极开发中；[docs/PLAN.md](docs/PLAN.md) 是逐轮的工作记录。
 
 ## 现状
 
@@ -31,7 +31,7 @@ Port17 是一个开源兼容层，让 **RimWorld 1.7** 的 Windows（Steam）版
 - **每次启动都需要 JIT 会话。** iOS 不允许普通应用创建可执行内存，所以 Port17 必须经 StikDebug 拉起（见[安装](#安装)）。按普通方式打开时，它会停在一则提示上，游戏不会启动。
 - **没有 Steam 集成。** 成就等 Steam 功能不可用；Steam 只用来下载创意工坊模组。
 - **没有文件监视。** 等待文件变化的模组不会收到通知。
-- **内存。** 还没有针对 iOS 的内存回收，模组多、会话长时可能撞上系统上限。
+- **内存。** iOS 超出内存上限时会直接杀掉应用，目前还没有针对这一点的调校。自 0.4.44 起应用会记一份内存账本（见 `port17-status.txt`），安卓那套回收也会在 iOS 上跑，但什么时候释放什么还没定，模组多、会话长的场景尚未实测。
 - **少数 PC 专有 API 缺失。** 不能启动外部程序（链接改为在 Safari 中打开）；依赖它们的模组可能出错——请附上 `coreclr-stderr.log` 反馈。
 
 ## 工作原理
@@ -89,8 +89,8 @@ Port17 把日志放在 *文件 → 我的 iPad/iPhone → Port17 → Documents*�
 |---|---|
 | `port17-ui.log` | Port17 启动器：安装、初始化和引擎启动 |
 | `coreclr-stderr.log` | 游戏和 .NET 运行时的输出——只保留最近一次运行 |
-| `engine-trace.log` | 引擎的计时标记 |
-| `port17-status.txt` | 上一次会话的单行状态（JIT 竞技场、执行模式） |
+| `engine-trace.log` | 引擎的计时标记，另有每次内存告警一行和本次会话的内存峰值 |
+| `port17-status.txt` | 上一次会话的单行状态：JIT 竞技场、执行模式，自 0.4.44 起还有内存占用、剩余额度和峰值（`mem_*`） |
 | `port17-workshop.log` | 创意工坊的登录、下载和安装 |
 
 反馈问题时请附上这些文件。遇到黑屏，先看 `port17-ui.log` 和 `coreclr-stderr.log`。
@@ -100,8 +100,8 @@ Port17 把日志放在 *文件 → 我的 iPad/iPhone → Port17 → Documents*�
 iOS 应用在云端构建；你的电脑上不需要任何 Apple 相关的东西。
 
 - **IPA：** 推送到 `main`（`host/` 下的改动）或手动运行 **M2 Host** 工作流；产物是 `port17host-m2-ipa`。其他工作流构建打过补丁的运行时（**m1-probe**，同时发布为 Release 资产）、解释器基线（**interp-probe**）和 macOS 调试构建（**mac-debug**）。
-- **托管层：** `python scripts/build-portlayers.py` 把 `hooks/` 和 `mobile/` 编译到 `prebuilt/`，并改写运行时的文件监视存根。它需要 .NET SDK、Mono.Cecil、Harmony 程序集和本机的 RimWorld 1.7 安装（路径可以用环境变量覆盖）。
-- **已知缺口：** 创意工坊库是对照游戏程序集编译的，所用的响应文件没有入库（`prebuilt/workshop.rsp`），所以新克隆的仓库只能复用已提交的 `prebuilt/PortWorkshop.dll`。
+- **托管层：** `python scripts/build-portlayers.py` 把 `hooks/`、`mobile/` 和 `workshop/` 编译到 `prebuilt/`，并改写运行时的文件监视存根。它需要 .NET SDK、Mono.Cecil、Harmony 程序集和本机的 RimWorld 1.7 安装；首次运行需要联网拉取创意工坊的 NuGet 依赖（与 `host/build-ipa.sh` 相同的固定版本和包哈希；路径可以用环境变量覆盖，包缓存目录是 `WORKSHOP_PKG`）。产物与已提交的 DLL 逐字节相同。
+
 
 ## 仓库结构
 
