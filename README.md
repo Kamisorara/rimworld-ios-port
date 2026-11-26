@@ -85,7 +85,7 @@ iOS gives an ordinary app no executable memory, and this runtime needs it for JI
 
 ## Troubleshooting
 
-Port17 keeps its logs in *Files → On My iPad/iPhone → Port17 → Documents*:
+Port17 keeps its logs in *Files → On My iPad/iPhone → Port17 → Documents*. Since 0.4.48 only the last round is kept: at every launch the previous round moves into `Documents/prev-log/` (`round.txt` marks which round it was), and the launch after that discards it:
 
 | File | What it holds |
 |---|---|
@@ -94,6 +94,7 @@ Port17 keeps its logs in *Files → On My iPad/iPhone → Port17 → Documents*:
 | `engine-trace.log` | Engine timing marks, plus one line per memory warning and the session's memory peak |
 | `port17-status.txt` | One-line status of the last session: JIT arena, execution mode, and since 0.4.45 the memory footprint, the allowance left and its peak (`mem_*`) |
 | `port17-workshop.log` | Workshop sign-in, downloads and installs |
+| `prev-log/` (since 0.4.48) | The previous round: the same files as above plus `logs/`, moved aside at launch and dropped one launch later |
 
 When you report a problem, attach these files. For a black screen, start with `port17-ui.log` and `coreclr-stderr.log`.
 

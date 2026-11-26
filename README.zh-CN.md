@@ -83,7 +83,7 @@ iOS 不给普通应用可执行内存，而这个运行时的 JIT 代码需要�
 
 ## 排错
 
-Port17 把日志放在 *文件 → 我的 iPad/iPhone → Port17 → Documents*：
+Port17 把日志放在 *文件 → 我的 iPad/iPhone → Port17 → Documents*。自 0.4.48 起日志只保留一轮：每次启动时上一轮先挪进 `Documents/prev-log/`（`round.txt` 标记是哪一轮），再下一次启动时丢弃：
 
 | 文件 | 内容 |
 |---|---|
@@ -92,6 +92,7 @@ Port17 把日志放在 *文件 → 我的 iPad/iPhone → Port17 → Documents*�
 | `engine-trace.log` | 引擎的计时标记，另有每次内存告警一行和本次会话的内存峰值 |
 | `port17-status.txt` | 上一次会话的单行状态：JIT 竞技场、执行模式，自 0.4.45 起还有内存占用、剩余额度和峰值（`mem_*`） |
 | `port17-workshop.log` | 创意工坊的登录、下载和安装 |
+| `prev-log/`（自 0.4.48 起） | 上一轮的日志：与上表相同的文件外加 `logs/`，启动时挪进来，下次启动丢弃 |
 
 反馈问题时请附上这些文件。遇到黑屏，先看 `port17-ui.log` 和 `coreclr-stderr.log`。
 

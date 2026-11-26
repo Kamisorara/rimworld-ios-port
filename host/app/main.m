@@ -15,6 +15,7 @@
 #import "status.h"
 #import "launcher.h"
 #import "jit26.h"
+#import "logs.h"
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate>
 @property (strong, nonatomic) UIWindow *window;
@@ -248,6 +249,12 @@ static void apply_perf_config(void)
 int main(int argc, char *argv[])
 {
     @autoreleasepool {
+        // 0.4.48：日志只留一轮——先把上一轮挪进 Documents/prev-log（已有就丢），
+        // （声明在 logs.h；实现见 logs.m——本轮开始前轮转，main 里第一行日志之前。）
+        // 再开始本轮的第一行日志；此后本轮所有日志（宿主 + 托管）都从零追加。
+        int rotated = port17_logs_rotate();
+        boot_log([NSString stringWithFormat:@"日志轮转：上一轮 %d 项已挪进 Documents/prev-log（下次启动时丢弃）",
+            rotated]);
         boot_log(@"==== main 进入（新会话）====");
         NSString *errPath = [NSHomeDirectory()
             stringByAppendingPathComponent:@"Documents/coreclr-stderr.log"];
