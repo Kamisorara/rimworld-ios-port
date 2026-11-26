@@ -10,6 +10,8 @@
 | 构建 | Windows 本地写码 + GitHub Actions `macos-15` 编译，公开仓库 | Apple 目标必须 macOS 宿主（runtime 仓库 CI 注释原话："the iOS jobs run on macOS"）。公开仓库 macOS runner 免费不限量。 |
 | 分发 | 未签名 IPA + SideStore 自签侧载 | 无需 Apple 开发者账号；SideStore 签名自动带 `get-task-allow`（StikDebug 列表的准入条件）。 |
 | 仓库 | 本仓库独立于安卓仓库，托管层源码 M4 起共享 | M1–M3 用不到安卓仓库的托管层。 |
+| mod 在 iOS 上的三类拦路石与修法（2026-11-26 定，0.4.42 / 0.4.43 真机裁决） | ① **引用程序集进了包**（`BadImageFormatException: Could not load file or assembly 'System, Version=4.0.0.0…'. Reference assemblies cannot be loaded for execution`）：runtime 的 collect 步骤对不自建的库一律抓引用程序集，`runtime-out-hybrid/` 里的 `System.dll`（38,912 字节）、`System.Data.dll`（13,312 字节）就是，`cp "$RT_DIR"/*.dll` 把它们带进包。`host/build-ipa.sh` 6.06 用入仓的官方 facade（`prebuilt/System.dll`、`System.Data.dll`，Microsoft.NETCore.App.Runtime.ios-arm64 11.0.0）原位覆盖（与 6.05 的 mscorlib 同一类），再跑 `python3 scripts/check-facades.py "$APP" "$APP/workshop"`，查到即构建失败。② **全抛的存根程序集**（`PlatformNotSupportedException`，如 `System.IO.FileSystem.Watcher is not supported on this platform`）：整个程序集只会抛，用 `scripts/unstub-watcher` 做 IL 改写，`scripts/build-portlayers.py` 末步（`RT_DIR` 里有存根才跑）产出 `prebuilt/System.IO.FileSystem.Watcher.dll` 并跑 `smoke`，`build-ipa.sh` 6.07 覆盖进包。③ **单个恒抛的 API**：Harmony prefix / postfix 顶替，仅 iOS 生效（`Process.StartTime` → `mobile/WorkshopLoader.cs` 的 `Start`，`Entry.cs` 里排在 `OpenUrl.Start` 之后）。再遇到 mod 报这两类异常，先按这个顺序归队，再读对应轮次。 | 0.4.41 真机两套日志的根因与 0.4.42 / 0.4.43 真机裁决（七十八、七十九轮）。②不用 Harmony：它是原生 detour，mod 自己 JIT 出来的代码把存根那一行 throw 内联进去就绕开了（`InlineGuard` 管的就是这一类）；IL 改写与内联无关，还能离线反编译核对。①的根因是推断（出错那次的完整堆栈没留下），换上干净 facade 后没再出现，但**带中文名 mod 开新世界**那一步还没测。 |
+| 创意工坊的流水与凭据（2026-11-26 定，0.4.43） | `Documents/port17-workshop.log` 记开窗、用的是哪种登录、下载与安装的耗时（每次运行一行时间分隔；超 1 MB 只留尾部 128 KB；写不了就只进 stderr）；**不写账号名和 token**（日志会随导出和崩溃报告出门）。登录凭据存 app 私有目录 `Library/Application Support/Port17/steam/login`，不进导出，跨版本升级保留。诊断界面「导出」把它和 `port17-ui.log`、AppData 的 zip 一起送上分享面板。 | `workshop/Session.cs` 的注释立下的规矩；0.4.43 真机裁决③④：记住的登录跨 0.4.42→0.4.43 仍可用，流水 16 行把登录、订阅、下载、安装串齐。 |
 
 ## 里程碑
 
@@ -398,6 +400,8 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 
 **2026-11-25 状态修订**：#1 和 #2 已随触控线关闭，下面两行的旧“待测”文字保留为 0.4.16 时点快照。#4 的 0.4.30 离线实施与 CI runtime 编译已完成，无 mod 短启动真机通过（同日，`releases/0.4.30/日志`）；带 HarmonyMod/Mods 的真机裁决还没完成，通过前不得宣称 mod 兼容面已对齐。
 
+**2026-11-26 状态修订（0.4.43 时点）**：#6 创意工坊真机裁决通过——0.4.42 开窗、登录、下载、导入后在 mod 页启用并随存档运行；0.4.42 修掉 `Process.StartTime` 恒抛（SteamKit2 构造要读），0.4.43 起有 `Documents/port17-workshop.log`，记住的登录跨版本保留；按收口动作还剩合集 / 更新这一步和「打开页面」没测。#4 的 mod 兼容面：0.4.41–0.4.43 连修三处（引用程序集进包、`Process.StartTime`、`FileSystemWatcher` 存根），带 Harmony mod 的 15 个 mod 那套集能在真机进地图；但**带中文名 mod 开新世界**还没测，通过前仍不得宣称对齐。
+
 | # | 项 | 状态 | 影响 | 收口动作 |
 |---|---|---|---|---|
 | 1 | **Harmony detour 在 iOS 未实测**（M4 五步之第一步「成败手」） | **已过运行底座与首帧 OnGUI**：0.4.1–0.4.16 连修十六关（竞技场时序 / Android 后端劫持 / PortHooks 版本 / PortMobile 查找路径 / mscorlib 毒 facade / 宿主缺 0Harmony / MonoMod 平台探测 / tuple 与签名 exhelper / 静态 JIT shim / MonoMod 宿主件按 bundle 解析 / exhelper IL 的 leave 修正 / MonoMod 接入竞技场 / Core110 版本化 native-code 入口 / 跨平台线程 ID / IOS UIKit 输入桥 / NSObject→UITouch 修正）；0.4.14 真机确认 detour、patch、`touch layer on` 和 OnGUI 不再被 `gettid` 打断，0.4.16 修正初版 IOS 桥的首个触摸回退 | 成败手，一切触控裁决的前提 | 0.4.16 包裁决：出现 `ios touch bridge` / `first touch` / `engine input bridge ready` 且无 `raw touch conversion failed`，再测触控六件套 |
@@ -424,6 +428,7 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 | 11.0 CoreLib 与 10.0.12 行为差异 | `WaylithClr.*` 开关模拟面变大（Ludeon 改的是 10.0 运行时，标准 11.0 与标准 10.0 本身就有差异要一并模拟） | M3 逐开关核对；必要时评估 cherry-pick Apple mobile 支持回 release/10.0（工作量大，仅当差异不可收拾时） |
 | `--dynamiccodecompiled true` 的 iOS 构建微软 CI 不测 | 编译或运行时意外 | M1 就是为它而来；坏则逐个修 |
 | MoltenVK 与引擎用的 Vulkan 特性面不匹配 | 渲染故障 | M2 早期跑引擎最小渲染验证 |
+| `prebuilt/workshop.rsp` 没入库（`.gitignore` 的 `prebuilt/*.rsp` 连它一起忽略） | 新克隆只能用包里的 `PortWorkshop.dll`，改了 `workshop/*.cs` 也编不出新的；换机器即断 | 把 rsp 的生成并入 `scripts/build-portlayers.py`（与 `hooks.rsp` / `mobile.rsp` 同一处生成），或在 `.gitignore` 里放行它——待定 |
 
 ## 运行时 pin 升级规程
 

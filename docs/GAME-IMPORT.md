@@ -21,7 +21,7 @@
 - **Files 文件夹直拷**：`On My iPad/Port17/Documents` 直接放 zip（文件夹可见时）。
 
 导出：诊断界面「导出」按钮把存档+偏好（`Documents/AppData` 打包成
-`port17-saves-backup.zip`）和 `port17-ui.log` 送上分享面板（隔空投送/存储到文件/微信）。
+`port17-saves-backup.zip`）和 `port17-ui.log`、`port17-workshop.log`（0.4.43 起的创意工坊流水）送上分享面板（隔空投送/存储到文件/微信）。
 
 目录约定（两种玩法安装后的形态）：
 
@@ -38,7 +38,11 @@ Documents/
     runtime.env            可选：NAME=value 每行一个，在宿主内建环境变量之后设置（NAME= 单独出现=取消）
     runtime.properties     可选：key=value 每行一个，CoreCLR 属性（可覆盖内建默认）
     PortHooks.dll          M3 之后放这里（STARTUP_HOOKS 自动生效）
-  port17-ui.log 等          ← 宿主日志（在 Documents 根）
+  port17-ui.log            ← 宿主 / 启动器日志（在 Documents 根）
+  coreclr-stderr.log       ← 游戏与运行时的 stderr，只留最后一次运行
+  engine-trace.log         ← 引擎硬打点
+  port17-status.txt        ← 引擎状态卡片（jit_arena 等）
+  port17-workshop.log      ← 创意工坊流水（0.4.43 起）：开窗、登录方式、下载与安装耗时；不写账号名和 token
 ```
 
 zip 安装语义：`Documents/game` 已有而新 zip 又到 = **换新版**（旧 game 自动挪成
@@ -120,7 +124,7 @@ Assets/Data 加载，stdout 顺序落 port17-ui.log），然后出画面。
 RimWorld.dll 和 com.rlabrecque.steamworks.net.dll，幂等）→ `TPA 共 N（运行时 … + 游戏 …）`
 → `初始化 CoreCLR` → `CoreCLR 就绪` → 引擎 stdout 滚动 → 画面。
 
-黑屏/闪退时：`Documents/port17-ui.log` 与 `Documents/coreclr-stderr.log` 拷回给开发
+黑屏/闪退时：`Documents/port17-ui.log` 与 `Documents/coreclr-stderr.log` 拷回给开发（创意工坊的登录 / 下载问题另看 `port17-workshop.log`）
 （整个 Documents 目录即可）。宿主对 Documents/game 的程序集做**原地** AMD64→ARM64
 机器类型补写（纯 IL 的 2 字节标记修正，安卓 Setup.MarkArm64 同款）——介意的话重新拷
 一份覆盖回来即可复原。
