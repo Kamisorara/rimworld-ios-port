@@ -25,3 +25,13 @@ host/modrules/ModRules.txt
 
 # Local agent instructions must stay machine-local
 AGENTS.md
+
+# Machine-local evidence and tool state (AGENTS.md: keep on disk, never commit)
+.zcode/
+raw10/
+raw11/
+# Windows shell cache written by env-stripped processes (%SystemDrive% left unexpanded)
+%SystemDrive%/
+# Generated twins: build-portlayers.py's Version.cs, Python bytecode
+prebuilt/Version.cs
+__pycache__/
