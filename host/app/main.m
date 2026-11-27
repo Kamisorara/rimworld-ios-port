@@ -356,7 +356,7 @@ int main(int argc, char *argv[])
             if (arena != 1) {
                 boot_log(@"没有 JIT 竞技场——本版运行时在 iOS 27 上只能走 JIT 会话（解释器会话"
                          @"同样需要可执行内存，0.3.3 起非 JIT 从未通过）。请经 StikDebug + "
-                         @"rw17-jit26.js 拉起本 app；普通启动停在启动器，不硬闯引擎。");
+                         @"rw17-jit26.js 拉起本 app（脚本随包：启动器「JIT 脚本」或 文件 app → Port17 → stikdebug）；普通启动停在启动器，不硬闯引擎。");
                 append_log("⚠️ 本版需经 StikDebug + rw17-jit26.js 拉起（普通启动无竞技场，引擎不启动）");
             }
             else if (!setupDone) {

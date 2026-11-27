@@ -72,7 +72,7 @@ Port17 需要**你自己**那份 RimWorld（Steam → `steamapps/common/RimWorld
 
 iOS 不给普通应用可执行内存，而这个运行时的 JIT 代码需要它。所以每次启动都要经过一个调试会话，由它交给 Port17 一块可执行竞技场：
 
-1. **一次性准备：** 安装 StikDebug 并导入它的设备配对文件；安装一个能提供 JIT 的 VPN 应用（例如 LocalDevVPN），打开它，并让设备连上和电脑相同的 Wi-Fi；把 [`rw17-jit26.js`](probe/stikdebug/rw17-jit26.js) 隔空投送到设备并导入 StikDebug。
+1. **一次性准备：** 安装 StikDebug 并导入它的设备配对文件；安装一个能提供 JIT 的 VPN 应用（例如 LocalDevVPN），打开它，并让设备连上和电脑相同的 Wi-Fi；把 [`rw17-jit26.js`](probe/stikdebug/rw17-jit26.js) 导入 StikDebug——在 Port17 启动器点「JIT 脚本」，分享面板里选 StikDebug（或在 StikDebug 的导入入口从「文件 → 我的 iPad → Port17 → stikdebug」选它）。脚本随 IPA 一起打包，每次安装自动更新，不需要电脑。
 2. **每次启动：** 在 StikDebug 里以 **Port17** 为目标运行 `rw17-jit26`。Port17 会等待竞技场就绪（最多 120 秒），然后启动游戏；脚本显示 `detached` 后就可以关掉它的窗口。
 
 ### 5. 模组与存档

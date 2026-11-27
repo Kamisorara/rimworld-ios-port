@@ -108,6 +108,8 @@ dotnet run --project scripts/patch-platform -- <game文件夹>
 
 然后开 Port17：自动安装（解压约十几秒，日志可见 `安装：…`）→ 引擎模式。
 
+JIT 路线要的 StikDebug 脚本随 IPA 一起打包（`build-ipa.sh` 6.08 → `Port17Host.app/stikdebug/`，启动器启动时同步到 `Documents/stikdebug/`）：开 Port17 后在启动器点「JIT 脚本」，分享面板里选 StikDebug 导入；或在 StikDebug 的导入入口从「文件 → 我的 iPad → Port17 → stikdebug」选 `rw17-jit26.js`。不需要电脑隔空投送。
+
 ## 启动（引擎模式）
 
 **Documents/game 里放了 RimWorld.dll，app 一打开就直接进引擎**（引擎模式；zip 安装完

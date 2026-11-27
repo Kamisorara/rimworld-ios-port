@@ -552,12 +552,49 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
     return [UIButton buttonWithConfiguration:c primaryAction:[UIAction actionWithHandler:^(UIAction *a) { tap((UIButton *)a.sender); }]];
 }
 
+// 把随包的 StikDebug 脚本（bundle 的 stikdebug/*.js，build-ipa.sh 6.08）同步到 Documents/stikdebug/：
+// 文件 app 里可见（UIFileSharingEnabled），StikDebug 可从「文件」导入，也能长按分享给它；「JIT 脚本」
+// 按钮分享的就是这份副本。按内容比对——bundle 的那份是资源不是用户数据；升级安装不会覆盖 Documents，
+// 所以每次启动都同步，副本永远跟当前包一致。写不进只记日志，不阻断。
+static void sync_stikdebug_scripts(void)
+{
+    NSString *src = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"stikdebug"];
+    NSString *dst = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/stikdebug"];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSArray<NSString *> *names = [fm contentsOfDirectoryAtPath:src error:nil];
+    if (names.count == 0) {
+        boot_log(@"stikdebug：包里没有 stikdebug/*.js（build-ipa.sh 6.08 没跑？）");
+        return;
+    }
+    NSError *err = nil;
+    if (![fm createDirectoryAtPath:dst withIntermediateDirectories:YES attributes:nil error:&err]) {
+        boot_log([NSString stringWithFormat:@"stikdebug：建不了 %@（%@）", dst, err.localizedDescription]);
+        return;
+    }
+    NSUInteger copied = 0;
+    for (NSString *name in names) {
+        if (![name hasSuffix:@".js"])
+            continue;
+        NSString *to = [dst stringByAppendingPathComponent:name];
+        NSData *a = [NSData dataWithContentsOfFile:[src stringByAppendingPathComponent:name]];
+        if (a == nil || [a isEqualToData:[NSData dataWithContentsOfFile:to]])
+            continue;
+        if ([a writeToFile:to atomically:YES])
+            copied++;
+        else
+            boot_log([NSString stringWithFormat:@"stikdebug：写不了 %@", to]);
+    }
+    boot_log([NSString stringWithFormat:@"stikdebug：同步到 Documents/stikdebug/（%lu 个更新，共 %lu 个脚本）",
+              (unsigned long)copied, (unsigned long)names.count]);
+}
+
 @implementation LauncherVC
 
 - (void)viewDidLoad
 {
     [super viewDidLoad];
     boot_log(@"viewDidLoad（启动器）");
+    sync_stikdebug_scripts(); // 随包 StikDebug 脚本 → Documents/stikdebug/，按钮可点之前就位
     self.view.backgroundColor = UIColor.blackColor;
     self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
 
@@ -690,13 +727,14 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
     UIButton *exportBtn = launcher_button(@"导出", NO, ^(UIButton *b) { [self exportTapped:b]; });
     _diagBtn = launcher_button([LauncherVC diagHoldOn] ? @"下次进引擎" : @"下次诊断", NO, ^(UIButton *b) { [self diagTapped:b]; });
     UIButton *probeBtn = launcher_button(@".NET 探针", NO, ^(UIButton *b) { [self probeTapped:b]; });
+    UIButton *jitBtn = launcher_button(@"JIT 脚本", NO, ^(UIButton *b) { [self jitScriptTapped:b]; });
     UIButton *triBtn = launcher_button(@"三角形", NO, ^(UIButton *b) { [self triangleTapped:b]; });
     UIButton *kbBtn = launcher_button(@"键盘", NO, ^(UIButton *b) { [self keyboardTapped:b]; });
     UIButton *audioBtn = launcher_button(@"音频", NO, ^(UIButton *b) { [self audioTapped:b]; });
     UIButton *libsBtn = launcher_button(@"库", NO, ^(UIButton *b) { [self libsTapped:b]; });
     UIButton *logBtn = launcher_button(@"日志", NO, ^(UIButton *b) { [self logTapped:b]; });
 
-    UIStackView *row1 = [[UIStackView alloc] initWithArrangedSubviews:@[importBtn, exportBtn, _diagBtn, probeBtn]];
+    UIStackView *row1 = [[UIStackView alloc] initWithArrangedSubviews:@[importBtn, exportBtn, _diagBtn, probeBtn, jitBtn]];
     UIStackView *row2 = [[UIStackView alloc] initWithArrangedSubviews:@[triBtn, kbBtn, audioBtn, libsBtn, logBtn]];
     for (UIStackView *r in @[row1, row2])
     {
@@ -710,7 +748,8 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
     foot.text = @"游戏就绪时打开 app 自动进引擎；本界面只在无游戏 / 未改写 / 诊断保持时"
                 @"出现——导入导出与诊断入口。\n"
                 @"卡片展示上次会话与本次实况；「日志」随时看全文（port17-ui.log）。\n"
-                @"JIT 需经 StikDebug 拉起（rw17-jit26.js）；解释器路线装完直接开。";
+                @"JIT 需经 StikDebug 拉起：点「JIT 脚本」把 rw17-jit26.js 交给 StikDebug，"
+                "或 文件 → 我的 iPad → Port17 → stikdebug；解释器路线装完直接开。";
     foot.textAlignment = NSTextAlignmentCenter;
 
     // ---- 列布局（s2arm place() 的收窄版：居中窄列，屏窄让安全区，放不下可滚）----
@@ -1109,6 +1148,29 @@ static UIButton *launcher_button(NSString *title, BOOL primary, void (^tap)(UIBu
 {
     (void)controller;
     boot_log(@"导入：取消了（没选文件）");
+}
+
+// 「JIT 脚本」：把随包的 rw17-jit26.js 交给 StikDebug（分享面板里选 StikDebug 即导入；也可存储到
+// 文件 / 隔空投送）。优先分享 Documents/stikdebug/ 的副本（文件 app 可见的那份），同步没成时退回 bundle 原件。
+- (void)jitScriptTapped:(UIButton *)sender
+{
+    NSString *name = @"rw17-jit26.js";
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:
+                      [NSString stringWithFormat:@"Documents/stikdebug/%@", name]];
+    if (![NSFileManager.defaultManager fileExistsAtPath:path])
+        path = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:
+                [NSString stringWithFormat:@"stikdebug/%@", name]];
+    if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
+        boot_log(@"JIT 脚本：包里没有 rw17-jit26.js——这包出错了（build-ipa.sh 6.08）");
+        return;
+    }
+    boot_log(@"JIT 脚本：分享 rw17-jit26.js——分享面板里选 StikDebug 导入，或存储到文件");
+    UIActivityViewController *act =
+        [[UIActivityViewController alloc] initWithActivityItems:@[[NSURL fileURLWithPath:path]]
+                                           applicationActivities:nil];
+    act.popoverPresentationController.sourceView = sender; // iPad 必须：分享面板要锚点
+    act.popoverPresentationController.sourceRect = sender.bounds;
+    [self presentViewController:act animated:YES completion:nil];
 }
 
 - (void)exportTapped:(UIButton *)sender

@@ -74,7 +74,7 @@ The first launch rewrites those game files in place for iOS (about half a minute
 
 iOS gives an ordinary app no executable memory, and this runtime needs it for JIT code. Every launch therefore goes through a debug session that hands Port17 an executable arena:
 
-1. **Once:** install StikDebug and import its pairing file; install a VPN app that provides JIT (for example LocalDevVPN), switch it on and stay on the same Wi-Fi network; AirDrop [`rw17-jit26.js`](probe/stikdebug/rw17-jit26.js) to the device and import it into StikDebug.
+1. **Once:** install StikDebug and import its pairing file; install a VPN app that provides JIT (for example LocalDevVPN), switch it on and stay on the same Wi-Fi network; import [`rw17-jit26.js`](probe/stikdebug/rw17-jit26.js) into StikDebug straight from Port17's launcher — tap **JIT 脚本** and pick StikDebug in the share sheet (or, from StikDebug's import, choose Files → On My iPad → Port17 → stikdebug). The script ships inside the IPA and is refreshed on every install; no computer needed.
 2. **Every time:** in StikDebug run `rw17-jit26` with **Port17** as the target. Port17 waits for the arena (up to 120 seconds) and then starts the game; the script window can be closed once it reports `detached`.
 
 ### 5. Mods and saves

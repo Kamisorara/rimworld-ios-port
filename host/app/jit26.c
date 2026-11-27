@@ -83,7 +83,7 @@ __attribute__((noinline, optnone, naked)) static void jit26_detach(void)
 static bool jit26_wait_debugger(int wait_s)
 {
     char buf[128];
-    host_log("[jit26] 等待活调试器——去 StikDebug 运行 probe/stikdebug/rw17-jit26.js");
+    host_log("[jit26] 等待活调试器——去 StikDebug 运行 rw17-jit26.js（脚本随包：启动器「JIT 脚本」或 文件 app → Port17 → stikdebug）");
     for (int waited = 0; waited <= wait_s; waited++) {
         if (jit26_debugger_attached())
             return true;

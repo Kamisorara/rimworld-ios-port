@@ -74,6 +74,7 @@ StikDebug 带 JIT 拉起 app → 运行 rw17-jit26.js（应答模式，跑完即
 - 流程：`vAttach` → 循环 `{ c → 停 → m<pc>,4 验 a0013ed4 → P20=pc+4 → 按 x16 分支 }`。
 - 安全网：停机原因若为 SIGSEGV/SIGBUS/SIGILL（分离前任何阶段的 fault），打印信号 + pc 后停止盲目 `c`——诊断信息直接上屏，不再无限停/复。
 - 旧 `rw17-jit.js` 与 `port17-jit.js` 已删除（2026-11-28 清理，jit26 为唯一现行脚本；回退需从 git 历史取回脚本）。
+- 脚本随 IPA 打包（2026-11-28）：`host/build-ipa.sh` 6.08 把 `probe/stikdebug/*.js` 放进 `Port17Host.app/stikdebug/`（缺 `rw17-jit26.js` 即构建失败，第 8 步 `cmp` 核对与仓库逐字节相同并打印 sha256）；启动器 `viewDidLoad` 同步到 `Documents/stikdebug/`（文件 app 可见），「JIT 脚本」按钮一键分享给 StikDebug——不再需要隔空投送。设计：[2026-11-28-stikdebug-script-in-ipa-design.md](superpowers/specs/2026-11-28-stikdebug-script-in-ipa-design.md)。
 
 ### 步骤 2：runtime 补丁改造（`patches/dualjit-arena.patch`）
 

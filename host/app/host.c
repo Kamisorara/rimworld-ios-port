@@ -303,7 +303,7 @@ __attribute__((noinline, optnone, naked)) static void jit26_detach(void)
 static bool jit26_wait_debugger(int wait_s)
 {
     char buf[128];
-    host_log("[jit26] 等待活调试器——去 StikDebug 运行 probe/stikdebug/rw17-jit26.js");
+    host_log("[jit26] 等待活调试器——去 StikDebug 运行 rw17-jit26.js（脚本随包：启动器「JIT 脚本」或 文件 app → Port17 → stikdebug）");
     for (int waited = 0; waited <= wait_s; waited++) {
         if (jit26_debugger_attached())
             return true;
@@ -564,7 +564,7 @@ int run_probe(const char *bundle_dir)
 #if defined(PORT17_INTERP)
         host_log("提示：解释器路线（官方运行时包）——无需 StikDebug/JIT，装完直接打开");
 #else
-        host_log("提示：经 StikDebug 拉起本应用（带 JIT）并运行 probe/stikdebug/rw17-jit26.js（应答式脚本）");
+        host_log("提示：经 StikDebug 拉起本应用（带 JIT）并运行 rw17-jit26.js（应答式脚本（脚本随包：启动器「JIT 脚本」或 文件 app → Port17 → stikdebug））");
         host_log("提示：本进程自己完成 brk 握手 + RW 别名 + 分离 + 探针（最多等调试器 120 秒），通过后把竞技场交给 CoreCLR");
 #endif
         (void)rwx_ok; // 授权探测仅作诊断显示；竞技场获取在宿主侧完成，无需本地 RWX 授权

@@ -449,6 +449,17 @@ python3 "$ROOT/scripts/check-facades.py" "$APP" "$APP/workshop"
 	|| { echo "::error::prebuilt/System.IO.FileSystem.Watcher.dll 缺（本地跑 python scripts/build-portlayers.py）"; exit 1; }
 cp "$ROOT/prebuilt/System.IO.FileSystem.Watcher.dll" "$APP/System.IO.FileSystem.Watcher.dll"
 
+# 6.08) StikDebug 启动脚本随包：JIT 路线每次启动都要在 StikDebug 里跑 rw17-jit26.js，以前
+#       只能从电脑隔空投送。脚本进 bundle 的 stikdebug/（只读，永远跟包一致）；启动器启动时
+#       同步到 Documents/stikdebug/（文件 app 可见）并提供「JIT 脚本」分享按钮（launcher.m）。
+#       *.js 全带、不写死文件名；rw17-jit26.js 缺了就红——没有它 JIT 包在设备上拉不起来。
+STIK="$ROOT/probe/stikdebug"
+[ -f "$STIK/rw17-jit26.js" ] \
+	|| { echo "::error::probe/stikdebug/rw17-jit26.js 缺（JIT26 应答脚本，没有它包不可用）"; exit 1; }
+mkdir -p "$APP/stikdebug"
+cp "$STIK"/*.js "$APP/stikdebug/"
+ls -la "$APP/stikdebug"
+
 # 6.5) 出包自检：install_name 必须是 @rpath（默认值是构建机绝对路径，设备上 dyld 拒载而 CI 全绿）；
 #      所有自建 dylib 的依赖行里出现构建机路径的，自动 -change 成 @rpath/<basename>（同目录即能解析），
 #      改不动的直接失败，不让坏包出门。
@@ -502,6 +513,10 @@ echo "exhelper_macos_arm64.dylib: signed, LC_CODE_SIGNATURE last, verified"
 cd "$ROOT/build-m2"
 [ -f "Port17Host.app/NotoSansSC-Regular.otf" ] && [ "$(stat -f%z Port17Host.app/NotoSansSC-Regular.otf)" -gt 8000000 ] \
     || { echo "::error::bundle 里的 NotoSansSC-Regular.otf 缺或大小不对"; exit 1; }
+# 随包的 StikDebug 脚本必须在 bundle 里且与仓库文件逐字节相同；sha256 打进日志，PLAN.md 的落位记录拿它比对。
+[ -f Port17Host.app/stikdebug/rw17-jit26.js ] && cmp -s Port17Host.app/stikdebug/rw17-jit26.js "$ROOT/probe/stikdebug/rw17-jit26.js" \
+	|| { echo "::error::stikdebug/rw17-jit26.js 不在包里或与仓库文件不同"; exit 1; }
+echo "stikdebug/rw17-jit26.js sha256: $(shasum -a 256 Port17Host.app/stikdebug/rw17-jit26.js | cut -d' ' -f1)"
 mkdir Payload
 cp -R Port17Host.app Payload/
 zip -qry port17host-m2.ipa Payload
