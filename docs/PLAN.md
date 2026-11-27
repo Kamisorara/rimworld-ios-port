@@ -462,7 +462,7 @@ runtime 基线选型、CI 方案、分发路线（本文档）。
 |---|---|---|
 | 引擎主线程跑在系统默认栈（约 1MB，UIKit 硬约束） | 游戏主线程深递归（PC 版按 1.5MB 编）可能溢出 | M2 验收看装载/首屏；真溢出时 M3 评估（managed 侧减递归或 libcoreclr 侧处理） |
 | iOS 大版本升级破坏 StikDebug JIT | 玩家无法开 JIT，游戏不可玩 | 解释器变体兜底（性能存疑）；跟进 StikDebug 更新 |
-| 11.0 CoreLib 与 10.0.12 行为差异 | `WaylithClr.*` 开关模拟面变大（Ludeon 改的是 10.0 运行时，标准 11.0 与标准 10.0 本身就有差异要一并模拟） | M3 逐开关核对；必要时评估 cherry-pick Apple mobile 支持回 release/10.0（工作量大，仅当差异不可收拾时） |
+| 11.0 CoreLib 与 10.0.12 行为差异 | `WaylithClr.*` 开关模拟面变大（Ludeon 改的是 10.0 运行时，标准 11.0 与标准 10.0 本身就有差异要一并模拟） | 已立验证计划 `docs/WAYLITHCLR-VERIFY-PLAN.md`（V1 静态 / V2 探针，oracle=PC 版 Ludeon fork / V3 JIT 面 21-shape+InlineWatch；NET11-COMPARISON 第 5 节三处待实测一并落地）；必要时评估 cherry-pick Apple mobile 支持回 release/10.0（工作量大，仅当差异不可收拾时） |
 | `--dynamiccodecompiled true` 的 iOS 构建微软 CI 不测 | 编译或运行时意外 | M1 就是为它而来；坏则逐个修 |
 | MoltenVK 与引擎用的 Vulkan 特性面不匹配 | 渲染故障 | M2 早期跑引擎最小渲染验证 |
 | `prebuilt/workshop.rsp` 没入库（`.gitignore` 的 `prebuilt/*.rsp` 连它一起忽略） | 新克隆只能用包里的 `PortWorkshop.dll`，改了 `workshop/*.cs` 也编不出新的；换机器即断 | **已修（八十轮）**：rsp 由 `scripts/build-portlayers.py` 生成，NuGet 引用按 `build-ipa.sh` 同一份哈希取；重编产物与 0.4.43 包里的 `PortWorkshop.dll` 逐字节相同 |
