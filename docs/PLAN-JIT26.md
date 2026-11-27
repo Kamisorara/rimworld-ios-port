@@ -73,7 +73,7 @@ StikDebug 带 JIT 拉起 app → 运行 rw17-jit26.js（应答模式，跑完即
 - 结构照抄 playport-universal.js（本地参考：`D:\Data\Code\OpenSourceProjects\playport\app\PlayportJIT\playport-universal.js`），宿主 API 只用现脚本已在用的三个：`get_pid` / `send_command` / `log`。不依赖 playport 的 `prepare_memory_region`（那是 StikJIT 宿主函数，StikDebug 不保证有）；逐页扫写用 `M` 包，STS2 同款。
 - 流程：`vAttach` → 循环 `{ c → 停 → m<pc>,4 验 a0013ed4 → P20=pc+4 → 按 x16 分支 }`。
 - 安全网：停机原因若为 SIGSEGV/SIGBUS/SIGILL（分离前任何阶段的 fault），打印信号 + pc 后停止盲目 `c`——诊断信息直接上屏，不再无限停/复。
-- 旧 `rw17-jit.js` 保留不删（步骤 0 与回退用）。
+- 旧 `rw17-jit.js` 与 `port17-jit.js` 已删除（2026-11-28 清理，jit26 为唯一现行脚本；回退需从 git 历史取回脚本）。
 
 ### 步骤 2：runtime 补丁改造（`patches/dualjit-arena.patch`）
 
@@ -125,7 +125,7 @@ StikDebug 带 JIT 拉起 app → 运行 rw17-jit26.js（应答模式，跑完即
 | 文件 | 动作 |
 |---|---|
 | `probe/stikdebug/rw17-jit26.js` | 新增（应答模式脚本） |
-| `probe/stikdebug/rw17-jit.js` | 保留（步骤 0 / 回退用） |
+| `probe/stikdebug/rw17-jit.js`、`probe/stikdebug/port17-jit.js` | 已删除（2026-11-28 清理；回退从 git 历史取回） |
 | `patches/dualjit-arena.patch` | 改 doublemapping.cpp 段（扫描→brk、去握手头、加门与有界等待）；executableallocator / clrdefinitions 两段不动 |
 | `probe/app/host.c` | 删等待循环与扫描；改提示文案 |
 | `probe/app/main.m` | 不动（文案若引用旧流程顺手改） |
