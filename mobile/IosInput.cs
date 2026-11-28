@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+		using System.Runtime.InteropServices;
 using System.Threading;
 using HarmonyLib;
 using UnityEngine;
@@ -12,9 +13,9 @@ namespace PortMobile
 	/// layer normally drains the GLFW Android queue, so on the IOS backend those raw events would
 	/// bypass every gesture rule. Take the raw events over, feed them to Touch, and send the mouse
 	/// actions Touch decides on back through WindowBase's injection entry points.
-	/// The same for keys and text (the key wheel, the latches, the soft keyboard): the shim's GLFW event queue has
-	/// no reader under the IOS backend, so keys go through the platform's input injector, and the soft keyboard is the
-	/// engine's own text input (IOSWindow's WaylithTextInputView).
+/// The same for keys and text (the key wheel, the latches, the soft keyboard): the shim's GLFW event queue has
+	/// no reader under the IOS backend, so keys go through the platform's input injector, and the launcher's hidden
+	/// keyboard field moves into the engine's view (glfwIosEngineView): its commits come back through the touch queue.
 	/// </summary>
 	internal static class IosInput
 	{
@@ -40,19 +41,15 @@ namespace PortMobile
 
 		// ---- keys and the soft keyboard ----
 		private const int GlfwBackspace = 259;
-		private static bool keyboardHooked;
 		private static bool keyInjectionFailed;
 		private static object inputInjector;
-		private static MethodInfo injectorKeyDown, injectorKeyUp;
+		private static MethodInfo injectorKeyDown, injectorKeyUp, injectorTypeText;
 		private static Type physicalKeyType;
 		private static readonly Dictionary<int, object> physicalKeys = new Dictionary<int, object>();
 		private static readonly Dictionary<int, string> physicalKeyNames = new Dictionary<int, string>();
 		private static readonly HashSet<int> unknownKeys = new HashSet<int>();
-		private static PropertyInfo textInputProperty;
-		private static MethodInfo textInputStart, textInputStop;
-		private static object textInputOptions;
-		private static MethodInfo foundationToManaged;
 		private static int keysInjected, charsInjected;
+		[DllImport("glfw")] private static extern void glfwIosEngineView(IntPtr view);
 		private static Type uiTouchType;
 		private static ConstructorInfo uiTouchConstructor;
 		private static PropertyInfo uiTouchTypeProperty;
@@ -67,7 +64,6 @@ namespace PortMobile
 
 			harmony = source;
 			PatchRawTouches();
-			PatchKeyboard();
 			if (rawTouchHooked)
 			{
 				PatchNativeGestures("HandleScroll");
@@ -207,17 +203,16 @@ namespace PortMobile
 			return hasMouse;
 		}
 
-		/// <summary>The engine's key injector and text input, once the window is known; a failure here leaves the touch bridge alone.</summary>
-		private static void ResolveKeysAndKeyboard(Type platformType, object platform, Type windowBase, object window)
+		/// <summary>The engine's key injector, once the window is known; a failure here leaves the touch bridge alone.</summary>
+		private static void ResolveKeys(Type platformType, object platform)
 		{
 			try
 			{
 				PropertyInfo injectorProperty = FindProperty(platformType, "InputInjector");
 				inputInjector = injectorProperty?.GetValue(platform);
-				textInputProperty = FindProperty(windowBase, "TextInput");
-				if (inputInjector == null || textInputProperty == null)
+				if (inputInjector == null)
 				{
-					throw new MissingMemberException("IOSPlatform/WindowBase", "InputInjector/TextInput");
+					throw new MissingMemberException("IOSPlatform", "InputInjector");
 				}
 				foreach (MethodInfo method in inputInjector.GetType().GetMethods(AccessTools.all))
 				{
@@ -236,28 +231,42 @@ namespace PortMobile
 						injectorKeyUp = method;
 					}
 				}
-				if (injectorKeyDown == null || injectorKeyUp == null)
+				injectorTypeText = AccessTools.Method(inputInjector.GetType(), "TypeText");
+				if (injectorKeyDown == null || injectorKeyUp == null || injectorTypeText == null)
 				{
-					throw new MissingMemberException("IInputInjector", "KeyDown/KeyUp(PhysicalKey, TimeSpan?)");
+					throw new MissingMemberException("IInputInjector", "KeyDown/KeyUp(PhysicalKey, TimeSpan?)/TypeText(string)");
 				}
 				BuildPhysicalKeys();
-				Type textInputType = textInputProperty.PropertyType;
-				textInputStart = AccessTools.Method(textInputType, "Start");
-				textInputStop = AccessTools.Method(textInputType, "Stop");
-				if (textInputStart == null || textInputStop == null || textInputStart.GetParameters().Length != 1)
-				{
-					throw new MissingMemberException(textInputType.Name, "Start(TextInputOptions)/Stop()");
-				}
-				Type optionsType = textInputStart.GetParameters()[0].ParameterType;
-				textInputOptions = Activator.CreateInstance(optionsType);
-				PropertyInfo returnKey = optionsType.GetProperty("ReturnKey");
-				returnKey.SetValue(textInputOptions, Enum.Parse(returnKey.PropertyType, "Done"));
-				Console.WriteLine("[mobile] ios key bridge ready (" + physicalKeys.Count + " keys, text input " + textInputType.Name + ")");
+				Console.WriteLine("[mobile] ios key bridge ready (" + physicalKeys.Count + " keys, text " + injectorTypeText.Name + ")");
 			}
 			catch (Exception e)
 			{
 				keyInjectionFailed = true;
 				Console.WriteLine("[mobile] ios key bridge not ready: " + (e.InnerException?.Message ?? e.Message));
+			}
+		}
+
+		/// <summary>
+		/// The engine's own view takes the launcher's hidden keyboard field (a real UITextField: marked text, so a Chinese
+		/// keyboard's candidates work) and lends its safe area to the shim's cutout; from then on the keyboard is shown and
+		/// hidden by the shim exactly as on Android.
+		/// </summary>
+		private static void AttachEngineView(object window)
+		{
+			try
+			{
+				object view = AccessTools.Field(window.GetType(), "_view")?.GetValue(window);
+				PropertyInfo handle = view?.GetType().GetProperty("Handle");
+				if (view == null || handle == null)
+				{
+					throw new MissingMemberException(window.GetType().Name, "_view.Handle");
+				}
+				glfwIosEngineView((IntPtr)handle.GetValue(view));
+				Console.WriteLine("[mobile] ios keyboard: the field moved into the engine's view");
+			}
+			catch (Exception e)
+			{
+				Console.WriteLine("[mobile] ios keyboard: the engine's view not attached: " + (e.InnerException?.Message ?? e.Message));
 			}
 		}
 
@@ -318,85 +327,6 @@ namespace PortMobile
 			return null;
 		}
 
-		private static void PatchKeyboard()
-		{
-			if (keyboardHooked)
-			{
-				return;
-			}
-			try
-			{
-				Type owner = AccessTools.TypeByName("Waylith.Windowing.Backends.IOS.IOSWindow");
-				MethodInfo insert = AccessTools.Method(owner, "HandleInsertText");
-				MethodInfo delete = AccessTools.Method(owner, "HandleDeleteBackward");
-				if (insert == null || delete == null)
-				{
-					throw new MissingMethodException(owner?.FullName ?? "IOSWindow", "HandleInsertText/HandleDeleteBackward");
-				}
-				foreach (MethodInfo method in AccessTools.TypeByName("Waylith.Windowing.Shared.Apple.Interop.Foundation").GetMethods(AccessTools.all))
-				{
-					ParameterInfo[] parameters = method.GetParameters();
-					if (method.IsStatic && method.Name == "ToManaged" && parameters.Length == 1 && parameters[0].ParameterType.Name == "NSString")
-					{
-						foundationToManaged = method;
-					}
-				}
-				harmony.Patch(insert, prefix: new HarmonyMethod(typeof(IosInput), nameof(BeforeInsertText)));
-				harmony.Patch(delete, prefix: new HarmonyMethod(typeof(IosInput), nameof(BeforeDeleteBackward)));
-				keyboardHooked = true;
-				Console.WriteLine("[mobile] ios keyboard bridge: HandleInsertText/HandleDeleteBackward patched");
-			}
-			catch (Exception e)
-			{
-				Console.WriteLine("[mobile] ios keyboard bridge failed: " + e.Message);
-			}
-		}
-
-		/// <summary>
-		/// The keyboard's text. The return key is the port's editor action, as Android's Done is (a chat's field gets an
-		/// Enter, any other field lets the focus go and the keyboard is put away); the engine's own handling would
-		/// synthesize an Enter for every field. Other text is the engine's: it reports it, and the game's bridge queues it.
-		/// </summary>
-		private static bool BeforeInsertText(object nsText)
-		{
-			string text;
-			try
-			{
-				text = foundationToManaged?.Invoke(null, new[] { nsText }) as string;
-			}
-			catch (Exception)
-			{
-				return true;
-			}
-			if (string.IsNullOrEmpty(text))
-			{
-				return false;
-			}
-			if (text == "\n" || text == "\r")
-			{
-				Console.WriteLine("[mobile] ios keyboard: return (control " + GUIUtility.keyboardControl + ")");
-				Interface.EditorAction();
-				return false;
-			}
-			charsInjected += text.Length;
-			if (charsInjected <= 20 || charsInjected % 100 < text.Length)
-			{
-				Console.WriteLine("[mobile] ios keyboard: " + charsInjected + " chars so far");
-			}
-			return true;
-		}
-
-		/// <summary>
-		/// The keyboard's backspace: a Backspace key for the game. The engine's own delete works on surrounding text the
-		/// game never gives it, which deletes nothing here.
-		/// </summary>
-		private static bool BeforeDeleteBackward()
-		{
-			Key(GlfwBackspace, true);
-			Key(GlfwBackspace, false);
-			return false;
-		}
-
 		/// <summary>A key down or up for the game, by GLFW key code (what the key wheel and the latches carry).</summary>
 		public static void Key(int glfwKey, bool down)
 		{
@@ -436,31 +366,34 @@ namespace PortMobile
 		}
 
 		/// <summary>
-		/// The soft keyboard up or away for the game's text field: the engine's text input on the IOS backend (the
-		/// launcher's hidden field never gets to be the keyboard's responder while the engine's window is key).
-		/// </summary>
-		public static void Keyboard(bool show)
+		/// <summary>The soft keyboard's backspace (through the touch queue): a Backspace key for the game.</summary>
+		public static void Backspace()
 		{
-			if (!EngineReady() || keyInjectionFailed || textInputProperty == null)
+			Key(GlfwBackspace, true);
+			Key(GlfwBackspace, false);
+		}
+
+		/// <summary>A character the soft keyboard committed (a code point, through the touch queue), typed into the game.</summary>
+		public static void Char(int codepoint)
+		{
+			if (!EngineReady() || keyInjectionFailed || inputInjector == null || codepoint < 0 || codepoint > 0x10FFFF)
 			{
 				return;
 			}
 			try
 			{
-				object textInput = textInputProperty.GetValue(engineWindow);
-				if (show)
+				string text = char.ConvertFromUtf32(codepoint);
+				injectorTypeText.Invoke(inputInjector, new object[] { text });
+				charsInjected += text.Length;
+				if (charsInjected <= 20 || charsInjected % 100 < text.Length)
 				{
-					textInputStart.Invoke(textInput, new object[] { textInputOptions });
+					Console.WriteLine("[mobile] ios text bridge: " + charsInjected + " chars so far (control " + GUIUtility.keyboardControl + ")");
 				}
-				else
-				{
-					textInputStop.Invoke(textInput, null);
-				}
-				Console.WriteLine("[mobile] ios keyboard: " + (show ? "shown" : "hidden") + " (control " + GUIUtility.keyboardControl + ")");
 			}
 			catch (Exception e)
 			{
-				Console.WriteLine("[mobile] ios keyboard: " + (show ? "show" : "hide") + " failed: " + (e.InnerException?.Message ?? e.Message));
+				keyInjectionFailed = true;
+				Console.WriteLine("[mobile] ios text bridge failed: " + (e.InnerException?.Message ?? e.Message));
 			}
 		}
 
@@ -529,7 +462,8 @@ namespace PortMobile
 				injectionReady = true;
 				Console.WriteLine("[mobile] ios engine input bridge ready (window " + window.GetType().Name +
 					", scale " + windowScale.ToString("0.0") + ")");
-				ResolveKeysAndKeyboard(platformType, platform, windowBase, window);
+				ResolveKeys(platformType, platform);
+				AttachEngineView(window);
 			}
 			catch (Exception e)
 			{

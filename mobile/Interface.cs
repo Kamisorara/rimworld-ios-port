@@ -312,19 +312,13 @@ namespace PortMobile
 		}
 
 		/// <summary>
-		/// The soft keyboard up or away: the launcher's hidden field through the shim on Android; on the IOS backend the
-		/// engine's own text input (the launcher's field is never the keyboard's responder there).
+		/// <summary>
+		/// The soft keyboard up or away: the launcher's hidden field through the shim (on the IOS backend the field has been
+		/// moved into the engine's view, so the keyboard comes up in the key window there too).
 		/// </summary>
 		private static void ShowKeyboard(bool show)
 		{
-			if (OperatingSystem.IsIOS())
-			{
-				IosInput.Keyboard(show);
-			}
-			else
-			{
-				glfwAndroidShowKeyboard(show ? 1 : 0);
-			}
+			glfwAndroidShowKeyboard(show ? 1 : 0);
 		}
 
 		/// <summary>

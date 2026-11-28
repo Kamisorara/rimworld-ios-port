@@ -45,7 +45,7 @@ namespace PortMobile
 			public double time;
 		}
 
-		private const int Down = 1, Move = 2, Up = 3, Cancel = 4, EditorAction = 5;
+		private const int Down = 1, Move = 2, Up = 3, Cancel = 4, EditorAction = 5, Text = 6, Backspace = 7;
 		private const int Press = 1, Release = 0;
 		private const int Left = 0, Right = 1, Middle = 2;
 
@@ -953,6 +953,13 @@ namespace PortMobile
 						finger.pos = pos;
 						return true;
 					}
+					return false;
+				case Text:
+					// Not a finger either: a character the soft keyboard committed (iOS: the hidden field's delegate), typed into the game
+					IosInput.Char(id);
+					return false;
+				case Backspace:
+					IosInput.Backspace();
 					return false;
 				case EditorAction:
 					// Not a finger: the soft keyboard's Done (it comes the same way, in order with the fingers)

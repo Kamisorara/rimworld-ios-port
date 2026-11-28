@@ -204,6 +204,7 @@ static void record_touch(int type, int id, float x, float y)
 static CAMetalLayer* g_layer;        // the host view's layer, never NULL after attach (set on the main thread)
 static UIView* g_view;               // the host view (touch coordinates, safe area)
 static UIView* g_keyboardField;      // the hidden text field of the keyboard bridge (main thread only)
+static UIView* g_engineView;         // the engine's content view (IOS backend): the keyboard field's home, the safe area (main thread only)
 static int g_width, g_height;        // the window's own size in pixels (drawable pixels = view points * scale)
 static double g_scalePt = 2.0;       // points -> pixels (UIScreen.nativeScale, cached at attach)
 static int g_renderWidth, g_renderHeight; // the size the game renders at (smaller than the window's), 0 for its own
@@ -498,13 +499,20 @@ API void glfwIosChar(unsigned int codepoint, int mods)
     emit_event(3, codepoint, mods, 0, 0, 0);
 }
 
-// The soft keyboard's commit (main thread): every finger of the text as its own char event, the code
-// points already whole (main.m turns the NSString into UTF-32).
+// The soft keyboard's commit (main thread): with the managed touch layer on, every code point goes into the touch
+// queue (type 6) and the managed layer types it into the game; without it, each is its own char event (the code points
+// already whole: main.m turns the NSString into UTF-32).
 API void glfwIosTextCommit(const unsigned int* codepoints, int count)
 {
     for (int i = 0; i < count; i++)
-        push(EV_CHAR, (int)codepoints[i], 0, 0, 0, 0, 0);
+    {
+        if (g_touchManaged)
+            record_touch(6, (int)codepoints[i], 0.0f, 0.0f);
+        else
+            push(EV_CHAR, (int)codepoints[i], 0, 0, 0, 0, 0);
+    }
     log_line("keyboard committed %d chars", count);
+}
 }
 
 // The soft keyboard's action key (Done / the keyboard's own enter). With the managed touch layer on it
@@ -520,12 +528,33 @@ API void glfwIosEditorAction(void)
     push(EV_KEY, 257, 0, GLFW_RELEASE, 0, 0, 0);
 }
 
-// A backspace from the soft keyboard (the delegate sees it as an empty replacement): a press+release
-// pair of the GLFW key, and no character.
+// A backspace from the soft keyboard (the delegate sees it as an empty replacement): with the managed touch layer on
+// it goes into the touch queue (type 7); without it, a press+release pair of the GLFW key, and no character.
 API void glfwIosBackspace(void)
 {
+    if (g_touchManaged)
+    {
+        record_touch(7, -1, 0.0f, 0.0f);
+        return;
+    }
     push(EV_KEY, 259, 0, GLFW_PRESS, 0, 0, 0);
     push(EV_KEY, 259, 0, GLFW_RELEASE, 0, 0, 0);
+}
+
+// The engine's own view (the IOS backend's window content view; main thread). The hidden keyboard field moves into it,
+// so the keyboard comes up in the window that is key, and the safe area is read from the view that is on screen (the
+// launcher's view is detached once the engine owns the scene).
+API void glfwIosEngineView(void* view)
+{
+    g_engineView = (UIView*)view;
+    if (g_engineView && g_keyboardField && g_keyboardField.superview != g_engineView)
+    {
+        g_keyboardField.translatesAutoresizingMaskIntoConstraints = YES;
+        g_keyboardField.frame = CGRectMake(0.0, 0.0, 1.0, 1.0); // a corner, never under the keyboard
+        [g_engineView addSubview:g_keyboardField];
+    }
+    log_line("engine view attached (keyboard field %s)", g_keyboardField && g_keyboardField.superview == g_engineView ? "moved in" : "left where it is");
+}
 }
 
 // ---- the managed touch layer's API (PortMobile, P/Invoke "glfw"; the Android names) ----
@@ -573,8 +602,9 @@ API int glfwAndroidCutout(char* out, int size)
 {
     if (!out || size <= 0) return 0;
     out[0] = 0;
-    if (!g_view) return 0;
-    UIEdgeInsets safe = g_view.safeAreaInsets; // points
+    UIView* safeView = g_engineView ?: g_view;
+    if (!safeView) return 0;
+    UIEdgeInsets safe = safeView.safeAreaInsets; // points
     pthread_mutex_lock(&g_lock);
     int ew = engine_width_locked(), eh = engine_height_locked(); // the engine's pixels
     double sx = g_width > 0 ? (double)ew / g_width : 1.0;
@@ -643,7 +673,11 @@ API void glfwAndroidShowKeyboard(int show)
         if (!g_keyboardField) return;
         BOOL shown = g_keyboardField.isFirstResponder;
         if (show && !shown) [g_keyboardField becomeFirstResponder];
-        if (!show && shown) [g_keyboardField resignFirstResponder];
+        if (!show && shown)
+        {
+            [g_keyboardField resignFirstResponder];
+            if (g_engineView && g_engineView.canBecomeFirstResponder) [g_engineView becomeFirstResponder]; // the engine's keys again
+        }
         log_line("soft keyboard %s", show ? "shown" : "hidden");
     });
 }
