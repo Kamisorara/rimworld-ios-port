@@ -513,7 +513,6 @@ API void glfwIosTextCommit(const unsigned int* codepoints, int count)
     }
     log_line("keyboard committed %d chars", count);
 }
-}
 
 // The soft keyboard's action key (Done / the keyboard's own enter). With the managed touch layer on it
 // decides what it means (typing is finished); without it, it is the Enter key as on Android.
@@ -554,7 +553,6 @@ API void glfwIosEngineView(void* view)
         [g_engineView addSubview:g_keyboardField];
     }
     log_line("engine view attached (keyboard field %s)", g_keyboardField && g_keyboardField.superview == g_engineView ? "moved in" : "left where it is");
-}
 }
 
 // ---- the managed touch layer's API (PortMobile, P/Invoke "glfw"; the Android names) ----
