@@ -12,7 +12,8 @@ namespace PortMobile
 {
 	/// <summary>
 	/// Touch gestures. The Android GLFW (host/glfw) hands every finger event to this class and injects into the
-	/// engine's input only what this class asks for, so the game sees a mouse that does what a finger means:
+	/// engine's input only what this class asks for (on iOS the IosInput bridge hands the fingers over itself,
+	/// see Drain), so the game sees a mouse that does what a finger means:
 	///
 	/// on the map or the world (a touch the interface did not take)
 	///   tap            a left click
@@ -888,10 +889,18 @@ namespace PortMobile
 
 		// ---- the fingers ----
 
-		/// <summary>Takes the finger events the GLFW shim recorded since the last frame. True if anything moved.</summary>
+		/// <summary>
+		/// Takes the finger events the GLFW shim recorded since the last frame. True if anything moved.
+		/// On iOS the fingers never pass through the shim (IosInput applies them from UIKit's own callback, see
+		/// ApplyOutsideDrain): what they changed since the last Drain is kept in movedOutsideDrain, so that the
+		/// engine's mouse keeps following a finger that moves between two frames. Without it, the mouse stayed at
+		/// the press for the whole drag and the game's selection box was never valid while dragging (0.4.50).
+		/// </summary>
+		private static int movedOutsideDrain;
+
 		private static bool Drain()
 		{
-			bool changed = false;
+			bool changed = System.Threading.Interlocked.Exchange(ref movedOutsideDrain, 0) != 0;
 			int n;
 			fixed (TouchEvent* events = buffer)
 			{
@@ -949,6 +958,20 @@ namespace PortMobile
 					return true;
 			}
 			return false;
+		}
+
+		/// <summary>
+		/// Apply for callers that do not run inside Drain (the iOS touch bridge, from UIKit's callback): the
+		/// next Drain reports the change, exactly as if the event had come through the shim's queue.
+		/// </summary>
+		internal static bool ApplyOutsideDrain(int type, int id, Vector2 pos)
+		{
+			bool changed = Apply(type, id, pos);
+			if (changed)
+			{
+				System.Threading.Interlocked.Exchange(ref movedOutsideDrain, 1);
+			}
+			return changed;
 		}
 
 		/// <summary>

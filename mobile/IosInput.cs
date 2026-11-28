@@ -171,7 +171,8 @@ namespace PortMobile
 
 				foreach (var touch in queued)
 				{
-					Touch.Apply(touch.kind, touch.id, touch.pos);
+					// Outside Drain: the next frame must know the fingers moved, or its mouse stops following them.
+					Touch.ApplyOutsideDrain(touch.kind, touch.id, touch.pos);
 				}
 			}
 			catch (Exception e)
