@@ -608,23 +608,36 @@ API int glfwAndroidCutout(char* out, int size)
     UIView* safeView = safeWindow ?: g_engineView ?: g_view;
     if (!safeView) return 0;
     UIEdgeInsets safe = safeView.safeAreaInsets; // points
-    if (!g_safeAreaLogged)
-    {
-        g_safeAreaLogged = YES;
-        UIEdgeInsets vi = g_engineView ? g_engineView.safeAreaInsets : UIEdgeInsetsZero;
-        UIEdgeInsets la = g_view ? g_view.safeAreaInsets : UIEdgeInsetsZero;
-        log_line("safe area (pt l/t/r/b): chosen %.0f/%.0f/%.0f/%.0f (%s), view %.0f/%.0f/%.0f/%.0f, launcher %.0f/%.0f/%.0f/%.0f",
-                 safe.left, safe.top, safe.right, safe.bottom,
-                 safeWindow ? "window" : (g_engineView ? "engine view" : "launcher view"),
-                 vi.left, vi.top, vi.right, vi.bottom,
-                 la.left, la.top, la.right, la.bottom);
-    }
     pthread_mutex_lock(&g_lock);
     int ew = engine_width_locked(), eh = engine_height_locked(); // the engine's pixels
     double sx = g_width > 0 ? (double)ew / g_width : 1.0;
     double sy = g_height > 0 ? (double)eh / g_height : 1.0;
     pthread_mutex_unlock(&g_lock);
     double px = g_scalePt * sx, py = g_scalePt * sy; // points -> engine pixels
+    if (ew <= 0 || eh <= 0)
+    {
+        // Engine mode: the launcher's resize path (window_pixels_from_view) never runs, so the
+        // shim's g_width stays 0 (0.4.54: every rect was skipped and the game read no hole).
+        // The window the insets came from knows its own size: bounds in points x native scale.
+        CGSize b = safeView.bounds.size;
+        CGFloat dens = safeView.window ? safeView.window.screen.nativeScale : 1.0;
+        ew = (int)(b.width * dens + 0.5);
+        eh = (int)(b.height * dens + 0.5);
+        px = py = dens;
+        if (ew <= 0 || eh <= 0) return 0;
+    }
+    if (!g_safeAreaLogged)
+    {
+        g_safeAreaLogged = YES;
+        UIEdgeInsets vi = g_engineView ? g_engineView.safeAreaInsets : UIEdgeInsetsZero;
+        UIEdgeInsets la = g_view ? g_view.safeAreaInsets : UIEdgeInsetsZero;
+        log_line("safe area (pt l/t/r/b): chosen %.0f/%.0f/%.0f/%.0f (%s), view %.0f/%.0f/%.0f/%.0f, launcher %.0f/%.0f/%.0f/%.0f, engine %dx%d px (x %.2f)",
+                 safe.left, safe.top, safe.right, safe.bottom,
+                 safeWindow ? "window" : (g_engineView ? "engine view" : "launcher view"),
+                 vi.left, vi.top, vi.right, vi.bottom,
+                 la.left, la.top, la.right, la.bottom,
+                 ew, eh, px);
+    }
     double top = safe.top * py, bottom = safe.bottom * py, left = safe.left * px, right = safe.right * px;
     int length = 0;
     #define CUTOUT_RECT(l, t, r, b) \
