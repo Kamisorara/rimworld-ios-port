@@ -620,7 +620,12 @@ API int glfwAndroidCutout(char* out, int size)
         // shim's g_width stays 0 (0.4.54: every rect was skipped and the game read no hole).
         // The window the insets came from knows its own size: bounds in points x native scale.
         CGSize b = safeView.bounds.size;
-        CGFloat dens = safeView.window ? safeView.window.screen.nativeScale : 1.0;
+        // A UIWindow has no parent window (.window is nil on modern iOS, 0.4.55 read x 1.00), so the
+        // screen comes from the window itself; the main screen covers every other oddity.
+        UIScreen* cutoutScreen = [safeView isKindOfClass:[UIWindow class]] ? ((UIWindow*)safeView).screen : safeView.window.screen;
+        CGFloat dens = cutoutScreen.nativeScale;
+        if (dens <= 0) dens = UIScreen.mainScreen.nativeScale;
+        if (dens <= 0) return 0;
         ew = (int)(b.width * dens + 0.5);
         eh = (int)(b.height * dens + 0.5);
         px = py = dens;
