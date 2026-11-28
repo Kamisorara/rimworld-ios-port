@@ -66,7 +66,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.4.49</string>
+	<string>0.4.50</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
@@ -82,17 +82,20 @@
 	</array>
 	<key>UIRequiresFullScreen</key>
 	<true/>
+	<!-- 仅横屏，左右随传感器翻转（对齐安卓 AndroidManifest 的 screenOrientation="sensorLandscape"）；
+	     竖屏会破坏游戏 UI，不允许。这个键就是 iOS 侧唯一的闸门：引擎 iOS 后端 Waylith.Windowing 的
+	     IOSWindow.SupportedInterfaceOrientations() 把引擎的 AllowedOrientations 与 UIApplication
+	     supportedInterfaceOrientationsForWindow:（引擎 delegate 不覆盖，UIKit 落回本键）求交集，
+	     交集为空时以本键为准——引擎想允许什么都不会越出本键。竖着拿设备启动时系统直接以横屏拉起。 -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
-		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<!-- iPad 全向（UIRequiresFullScreen 在，四向是 Apple 对 iPad 的标准要求） -->
+	<!-- iPad 同样仅横屏：Apple 要求 iPad 四向的是支持分屏/侧拉的多任务 app，UIRequiresFullScreen=true
+	     才允许限方向；本包走 SideStore 侧载，不过 App Store 审核。 -->
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>

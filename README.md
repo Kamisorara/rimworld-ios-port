@@ -21,6 +21,7 @@ Tested on an iPad (M4, iOS 27).
 | Game | Boots to the menu, generates new worlds, runs colony maps, saves and loads — the base game plus the DLCs you own |
 | Speed | .NET code is JIT-compiled on the device (see [How it works](#how-it-works)) |
 | Controls | Touch: tap, double tap, long-press for right-click, two-finger zoom, tap assist, inertial scrolling, on-screen left/right mouse buttons and a key wheel (a ring of keyboard keys) |
+| Screen | Landscape only: the two landscape orientations flip with the device; portrait is not supported (it breaks the game's UI), and launching while holding the device upright still comes up in landscape |
 | Language | The game's own languages; a Simplified Chinese font and an emoji fallback font are bundled so that CJK text renders |
 | Mods | Load with the game, Harmony mods included; import a mod as a `.zip` or a folder; a community load-order rule set is shipped |
 | Steam Workshop | Sign in with your Steam account (QR code or password), browse your subscriptions, download and install mods |
