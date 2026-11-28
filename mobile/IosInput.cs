@@ -15,7 +15,8 @@ namespace PortMobile
 	/// actions Touch decides on back through WindowBase's injection entry points.
 /// The same for keys and text (the key wheel, the latches, the soft keyboard): the shim's GLFW event queue has
 	/// no reader under the IOS backend, so keys go through the platform's input injector, and the launcher's hidden
-	/// keyboard field moves into the engine's view (glfwIosEngineView): its commits come back through the touch queue.
+	/// keyboard field moves into the engine's view (glfwIosEngineView): its commits come back through the touch queue; the
+/// engine's deleteBackward is patched into a Backspace key (the original reads IME state the port never feeds).
 	/// </summary>
 	internal static class IosInput
 	{
@@ -71,6 +72,7 @@ namespace PortMobile
 				PatchNativeGestures("HandleRotate");
 				PatchNativeGestures("HandleSmartZoom");
 			}
+			PatchDeleteBackward();
 			RefreshEngineWindow();
 		}
 
@@ -116,6 +118,41 @@ namespace PortMobile
 		private static bool Skip()
 		{
 			return !touchHookFailed && !injectionFailed && injectionReady;
+		}
+
+		/// <summary>
+		/// The engine's deleteBackward reads IME state (SurroundingText and friends) the port never feeds, so the
+		/// soft keyboard's backspace is swallowed (0.4.53: letters arrived, deletion never did). Patch it into a
+		/// Backspace key for the game — the 0.4.52 prefix of the same method proved the injection reaches it. While
+		/// the bridge is not up, let the original run instead of eating the deletion.
+		/// </summary>
+		private static void PatchDeleteBackward()
+		{
+			try
+			{
+				Type owner = AccessTools.TypeByName("Waylith.Windowing.Backends.IOS.IOSWindow");
+				MethodInfo method = AccessTools.Method(owner, "HandleDeleteBackward");
+				if (method == null)
+				{
+					throw new MissingMethodException(owner?.FullName ?? "IOSWindow", "HandleDeleteBackward");
+				}
+				harmony.Patch(method, prefix: new HarmonyMethod(typeof(IosInput), nameof(BeforeDeleteBackward)));
+				Console.WriteLine("[mobile] ios text bridge: deleteBackward patched (a Backspace key for the game)");
+			}
+			catch (Exception e)
+			{
+				Console.WriteLine("[mobile] ios text bridge: deleteBackward left to the engine (" + e.Message + ")");
+			}
+		}
+
+		private static bool BeforeDeleteBackward()
+		{
+			if (!EngineReady() || keyInjectionFailed || inputInjector == null)
+			{
+				return true; // the bridge is not up; let the engine try
+			}
+			Backspace();
+			return false;
 		}
 
 		/// <summary>Returns false for finger-only sets, whose engine handling is now Touch's injected mouse.</summary>
@@ -262,7 +299,7 @@ namespace PortMobile
 					throw new MissingMemberException(window.GetType().Name, "_view.Handle");
 				}
 				glfwIosEngineView((IntPtr)handle.GetValue(view));
-				Console.WriteLine("[mobile] ios keyboard: the field moved into the engine's view");
+				Console.WriteLine("[mobile] ios keyboard: the engine's view handed to the shim (its log tells whether a field moved)");
 			}
 			catch (Exception e)
 			{

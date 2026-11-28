@@ -600,9 +600,25 @@ API int glfwAndroidCutout(char* out, int size)
 {
     if (!out || size <= 0) return 0;
     out[0] = 0;
-    UIView* safeView = g_engineView ?: g_view;
+    // The system injects the safe area at the window; the engine's bare view read 0 all session on
+    // iPhone 17 (0.4.53), so ask the window first, then the view, then the launcher's detached one.
+    // The first poll logs all three once (pt, l/t/r/b), so a device log shows which source carried them.
+    static BOOL g_safeAreaLogged = NO;
+    UIWindow* safeWindow = g_engineView.window;
+    UIView* safeView = safeWindow ?: g_engineView ?: g_view;
     if (!safeView) return 0;
     UIEdgeInsets safe = safeView.safeAreaInsets; // points
+    if (!g_safeAreaLogged)
+    {
+        g_safeAreaLogged = YES;
+        UIEdgeInsets vi = g_engineView ? g_engineView.safeAreaInsets : UIEdgeInsetsZero;
+        UIEdgeInsets la = g_view ? g_view.safeAreaInsets : UIEdgeInsetsZero;
+        log_line("safe area (pt l/t/r/b): chosen %.0f/%.0f/%.0f/%.0f (%s), view %.0f/%.0f/%.0f/%.0f, launcher %.0f/%.0f/%.0f/%.0f",
+                 safe.left, safe.top, safe.right, safe.bottom,
+                 safeWindow ? "window" : (g_engineView ? "engine view" : "launcher view"),
+                 vi.left, vi.top, vi.right, vi.bottom,
+                 la.left, la.top, la.right, la.bottom);
+    }
     pthread_mutex_lock(&g_lock);
     int ew = engine_width_locked(), eh = engine_height_locked(); // the engine's pixels
     double sx = g_width > 0 ? (double)ew / g_width : 1.0;
