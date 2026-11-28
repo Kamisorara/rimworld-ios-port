@@ -41,7 +41,7 @@ namespace PortMobile
 	internal static class Interface
 	{
 		[System.Runtime.InteropServices.DllImport("glfw")] private static extern void glfwAndroidShowKeyboard(int show);
-		[System.Runtime.InteropServices.DllImport("glfw")] private static extern void glfwAndroidInjectKey(int key, int action, int mods);
+		// Keys go through Touch.InjectKey: the shim's queue on Android, the engine's injector on the IOS backend.
 		[System.Runtime.InteropServices.DllImport("glfw")] private static extern void glfwAndroidKeyboardForced(int forced);
 
 		private const int GlfwKeyEnter = 257, GlfwPress = 1, GlfwRelease = 0;
@@ -60,8 +60,8 @@ namespace PortMobile
 			if (Touch.Verbose) Console.WriteLine("[mobile] the keyboard's Done (control " + GUIUtility.keyboardControl + ", " + name + ")");
 			if (name != null && EnterFields.Contains(name))
 			{
-				glfwAndroidInjectKey(GlfwKeyEnter, GlfwPress, 0);
-				glfwAndroidInjectKey(GlfwKeyEnter, GlfwRelease, 0);
+				Touch.InjectKey(GlfwKeyEnter, GlfwPress, 0);
+				Touch.InjectKey(GlfwKeyEnter, GlfwRelease, 0);
 				return;
 			}
 			PutAway();
@@ -286,7 +286,7 @@ namespace PortMobile
 				{
 					KeyboardForced(!InputMode.Keyboard);
 				}
-				glfwAndroidShowKeyboard(wanted ? 1 : 0);
+				ShowKeyboard(wanted);
 			}
 		}
 
@@ -312,6 +312,22 @@ namespace PortMobile
 		}
 
 		/// <summary>
+		/// The soft keyboard up or away: the launcher's hidden field through the shim on Android; on the IOS backend the
+		/// engine's own text input (the launcher's field is never the keyboard's responder there).
+		/// </summary>
+		private static void ShowKeyboard(bool show)
+		{
+			if (OperatingSystem.IsIOS())
+			{
+				IosInput.Keyboard(show);
+			}
+			else
+			{
+				glfwAndroidShowKeyboard(show ? 1 : 0);
+			}
+		}
+
+		/// <summary>
 		/// A hardware keyboard came or went (InputMode): a soft keyboard that is up for a field is asked for again the new
 		/// way (without one forced up, with one left to the input method, which usually puts it away).
 		/// </summary>
@@ -320,7 +336,7 @@ namespace PortMobile
 			KeyboardForced(!keyboard);
 			if (keyboardShown)
 			{
-				glfwAndroidShowKeyboard(0);
+				ShowKeyboard(false);
 				keyboardShown = false;
 			}
 		}

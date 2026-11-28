@@ -37,7 +37,7 @@ namespace PortMobile
 	/// </summary>
 	internal static class KeyWheel
 	{
-		[DllImport("glfw")] private static extern void glfwAndroidInjectKey(int key, int action, int mods);
+		// Keys go through Touch.InjectKey: the shim's queue on Android, the engine's injector on the IOS backend.
 
 		private const int Press = 1, Release = 0;
 		private const int HubId = 73195801, SlotIdBase = 73195810;
@@ -507,12 +507,12 @@ namespace PortMobile
 			{
 				if ((mods & modifier.Mod) != 0 && (down & modifier.Mod) == 0)
 				{
-					glfwAndroidInjectKey(modifier.Glfw, Press, down);
+					Touch.InjectKey(modifier.Glfw, Press, down);
 					held.Add(modifier.Glfw);
 					down |= modifier.Mod;
 				}
 			}
-			glfwAndroidInjectKey(key, Press, down);
+			Touch.InjectKey(key, Press, down);
 			held.Add(key);
 			heldFrame = Time.frameCount;
 			traced = false;
@@ -527,8 +527,8 @@ namespace PortMobile
 				return;
 			}
 			int mods = LatchedKey.Mods;
-			glfwAndroidInjectKey(glfw, Press, mods);
-			glfwAndroidInjectKey(glfw, Release, mods);
+			Touch.InjectKey(glfw, Press, mods);
+			Touch.InjectKey(glfw, Release, mods);
 		}
 
 		/// <summary>The keys of the last key up again, the other way round.</summary>
@@ -536,7 +536,7 @@ namespace PortMobile
 		{
 			for (int i = held.Count - 1; i >= 0; i--)
 			{
-				glfwAndroidInjectKey(held[i], Release, 0);
+				Touch.InjectKey(held[i], Release, 0);
 			}
 			held.Clear();
 		}

@@ -20,7 +20,7 @@ namespace PortMobile
 	/// </summary>
 	internal sealed class LatchedKey
 	{
-		[DllImport("glfw")] private static extern void glfwAndroidInjectKey(int key, int action, int mods);
+		// Keys go through Touch.InjectKey: the shim's queue on Android, the engine's injector on the IOS backend.
 
 		private const int Press = 1, Release = 0;
 
@@ -66,7 +66,7 @@ namespace PortMobile
 		public void Set(bool value)
 		{
 			on = value;
-			glfwAndroidInjectKey(Glfw, value ? Press : Release, 0);
+			Touch.InjectKey(Glfw, value ? Press : Release, 0);
 			injectedFrame = Time.frameCount;
 			Console.WriteLine("[mobile] " + Name + " " + (value ? "held" : "let go"));
 		}

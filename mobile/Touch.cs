@@ -54,6 +54,7 @@ namespace PortMobile
 		[DllImport("glfw")] private static extern void glfwAndroidInjectCursor(double x, double y);
 		[DllImport("glfw")] private static extern void glfwAndroidInjectButton(int button, int action, int mods);
 		[DllImport("glfw")] private static extern void glfwAndroidInjectScroll(double dx, double dy);
+		[DllImport("glfw")] private static extern void glfwAndroidInjectKey(int key, int action, int mods);
 		[DllImport("glfw")] private static extern float glfwAndroidGetDensity();
 
 		private sealed class Finger
@@ -333,6 +334,23 @@ namespace PortMobile
 			if (button == Left) leftDown = down;
 			else if (button == Right) rightDown = down;
 			else middleDown = down;
+		}
+
+		/// <summary>
+		/// A key for the game down or up (GLFW key code and mods), for the key wheel and the latches: the shim's queue on
+		/// Android, the engine's injector on the IOS backend (where the engine reads the modifiers from the latched keys it
+		/// sees held, so the mods are not passed on).
+		/// </summary>
+		internal static void InjectKey(int key, int action, int mods)
+		{
+			if (OperatingSystem.IsIOS())
+			{
+				IosInput.Key(key, action == Press);
+			}
+			else
+			{
+				glfwAndroidInjectKey(key, action, mods);
+			}
 		}
 
 		/// <summary>Prefix of Selector.HandleMapClicks and WorldSelector.HandleWorldClicks: the press reached the map (or the world), whatever its click count.</summary>
